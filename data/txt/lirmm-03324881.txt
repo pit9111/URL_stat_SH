@@ -1,0 +1,1797 @@
+Workflow Provenance in the Lifecycle of Scientific
+Machine Learning
+Renan Souza, Leonardo G Azevedo, Vítor Lourenço, Elton Soares, Raphael
+
+Thiago, Rafael Brandão, Daniel Civitarese, Emilio Vital Brazil, Marcio
+
+Moreno, Patrick Valduriez, et al.
+
+To cite this version:
+
+Renan Souza, Leonardo G Azevedo, Vítor Lourenço, Elton Soares, Raphael Thiago, et al.. Workflow
+Provenance in the Lifecycle of Scientific Machine Learning. Concurrency and Computation: Practice
+and Experience, 2022, 34 (14), pp.e6544. ￿10.1002/cpe.6544￿. ￿lirmm-03324881￿
+
+HAL Id: lirmm-03324881
+
+https://hal-lirmm.ccsd.cnrs.fr/lirmm-03324881
+
+Submitted on 24 Aug 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Workﬂow Provenance in the Lifecycle of
+Scientiﬁc Machine Learning
+
+1
+
+Renan Souza1,*, Leonardo G. Azevedo1, V´ıtor Lourenc¸o1, Elton Soares1, Raphael Thiago1,
+Rafael Brand ˜ao1, Daniel Civitarese1, Emilio Vital Brazil1, Marcio Moreno1,
+
+Patrick Valduriez3, Marta Mattoso2, Renato Cerqueira1, Marco A. S. Netto1
+
+1IBM Research
+2Federal University of Rio de Janeiro, Brazil
+3Inria, Univ. Montpellier, CNRS & LIRMM, France
+
+Abstract
+
+Machine Learning (ML) has already fundamentally changed several businesses. More recently, it has also been profoundly
+impacting the computational science and engineering domains, like geoscience, climate science, and health science. In
+these domains, users need to perform comprehensive data analyses combining scientiﬁc data and ML models to provide
+for critical requirements, such as reproducibility, model explainability, and experiment data understanding. However, scientiﬁc
+ML is multidisciplinary, heterogeneous, and affected by the physical constraints of the domain, making such analyses even
+more challenging. In this work, we leverage workﬂow provenance techniques to build a holistic view to support the lifecycle
+of scientiﬁc ML. We contribute with (i) characterization of the lifecycle and taxonomy for data analyses; (ii) design decisions
+to build this view, with a W3C PROV compliant data representation and a reference system architecture; and (iii) lessons
+learned after an evaluation in an Oil & Gas case using an HPC cluster with 393 nodes and 946 GPUs. The experiments show
+that the decisions enable queries that integrate domain semantics with ML models while keeping low overhead (<1%), high
+scalability, and an order of magnitude of query acceleration under certain workloads against without our representation.
+
+Scientiﬁc Machine Learning, Machine Learning Lifecycle, Artiﬁcial Intelligence, Data Science, Provenance, Lineage,
+
+Reproducibility, Explainability, Scientiﬁc Workﬂow, Data lake, e-Science, Design Principles, Taxonomy
+
+Index Terms
+
+(cid:70)
+
+1 INTRODUCTION
+Machine Learning (ML) has been fundamentally transforming several industries and businesses in numerous ways. More
+recently, it has also been impacting computational science and engineering domains, such as geoscience, climate science,
+material science, and health science. Scientiﬁc ML, i.e., ML applied to these domains, is characterized by the combination
+of data-driven techniques with domain-speciﬁc data and knowledge to obtain models of physical phenomena [1], [2], [3],
+[4], [5]. Obtaining models in scientiﬁc ML works similarly to conducting traditional large-scale computational experiments
+[6], which involve a team of scientists and engineers that formulate hypotheses, design the experiment and predeﬁne
+parameters and input datasets, analyze the experiment data, do observations, and calibrate initial assumptions in a cycle
+until they are satisﬁed with the results. Scientiﬁc ML is naturally large-scale because multiple people collaborate in a
+project, using their multidisciplinary domain-speciﬁc knowledge to design and perform data-intensive tasks to curate
+(i.e., understand, clean, enrich with observations) datasets and prepare for learning algorithms. They then plan and
+execute compute-intensive tasks for computational simulations or training ML models affected by the scientiﬁc domain’s
+constraints. They utilize specialized scientiﬁc software tools running either on their desktops, on cloud clusters (e.g.,
+Docker-based), or large HPC machines.
+
+Other works propose an ML lifecycle [7], [8]. Although they might apply for scientiﬁc ML, in our view, there are still gaps
+in these lifecycle proposals to properly address scientiﬁc ML characteristics, particularly the need for deeper integration
+with scientiﬁc domain data and specialized knowledge on a domain. Our proposed model for the lifecycle of scientiﬁc ML
+has three phases (explained in detail later in this paper): data curation — to curate raw data; learning data preparation — to
+prepare the curated data for learning; and the learning itself — aware of the constraints of a scientiﬁc domain. In each of
+these phases, there may be multiple workﬂows. Each workﬂow is a set of chained data transformations consuming and
+
+This is an authors’ preprint of a paper published at Concurrency Computation: Practice and Experience. Please cite it as follows:
+Souza, R, Azevedo, L. G., Lourenc¸o, V., et al. Workﬂow provenance in the lifecycle of scientiﬁc machine learning. Concurrency Computat Pract
+Exper. 2021;e6544. https://doi.org/10.1002/cpe.6544
+*Correspondence: Renan Souza - contact@renansouza.org
+
+2
+
+producing datasets, and a workﬂow may consume the datasets produced by another workﬂow. For instance, there may
+be multiple workﬂows only in the learning data preparation phase to transform curated data into learning datasets. These
+datasets may then be consumed by multiple workﬂows in the learning phase, transforming the datasets into different ML
+models. Therefore, we propose modeling these workﬂows as multiple interconnected workﬂows [9]. From now on, we
+refer to workﬂows as these multiple interconnected workﬂows in all phases of the lifecycle of scientiﬁc ML.
+
+Our primary goal in this paper is to support this lifecycle by enabling scientists and engineers to perform comprehen-
+sive, i.e., end-to-end data analyses that integrate the data consumed and generated in these workﬂows, from raw domain
+data to learned models. The importance of these data analyses is that they are enablers to meet critical requirements in ML,
+such as model reproducibility and explainability, and experiment data understanding.
+
+The main problem to achieve this goal is to deal, in an integrated and comprehensive way, with the high heterogeneity
+of different contexts (e.g., data, software, environments, persona) involved in this lifecycle. For example, the analyses need
+to be aware of the (hyper)parametrization of different data transformations in various workﬂows, how the transformations
+affect the experiment results (e.g., quality of the ML models), and the relationships between parameters, results, and
+domain-speciﬁc data and knowledge. For instance, one may ask: “what happened to the model performance when the
+parameters varied from X to Y when the datasets had a speciﬁc characteristic in the domain?”. To allow for such analyses,
+tracking how the data are transformed throughout the workﬂows in an integrated and holistic way is necessary. Not
+having such holistic integration is critical for several reasons. To exemplify, it compromises experiment reproducibility
+from a scientiﬁc perspective. From a business perspective, stakeholders may be less likely to apply an ML model, even
+with the best performance, if they do not understand the transformations that led to the best model)[10].
+
+Provenance (also referred to as lineage) data management techniques help reproduce, trace, assess, understand, and
+explain data, models, and their transformation processes [11], [12], [13]. The provenance research community has evolved
+signiﬁcantly in recent years to provide for several strategic capabilities, including experiment reproducibility [14], user
+steering (i.e., runtime monitoring, interactive data analysis, runtime ﬁne-tuning) [15], raw data analysis [16], and our
+previous work, which helps data integration for multiple workﬂows generating data in a data lake [9]. Furthermore,
+other works contribute to support provenance tracking speciﬁcally for ML workﬂows [17], [18], [19], [8], [7], including
+reproducible models and explainability [20]. These related works are essential building blocks to be leveraged towards
+supporting the lifecycle.
+
+Nevertheless, scientists and engineers still face difﬁculties in performing comprehensive data analyses that would help
+them meet those critical requirements in ML. Tracking provenance in those workﬂows could be used as a tool to provide
+for a holistic view, hence enabling the data analyses. However, the problem caused by the high heterogeneity in the
+lifecycle arises several challenges. For example, the workﬂows are highly heterogeneous and with distributed execution
+control: there may not be one single Workﬂow Management System (WMS) orchestrating all workﬂows; instead, there
+may be multiple WMSs, scripts, programs, and ML and data processing frameworks without a single uniﬁed execution
+orchestrator. Further, these workﬂows manage domain- and ML-speciﬁc data and knowledge stored in various distributed
+data stores and run on various execution environments. Hence, strategies to track data in multiple data stores are needed.
+Also, another complicating factor is that efﬁciency is a common requirement, especially in HPC executions. Thus the
+systems supporting the lifecycle need to scale and not add signiﬁcant tracking overhead. Designing a system to efﬁciently
+track provenance in such heterogeneous scenarios has been recently acknowledged as a research challenge by leading data
+management researchers [21].
+
+In this paper, our focus is to support the lifecycle of scientiﬁc ML by proposing an approach for comprehensive data
+
+analyses, addressing the problem of high heterogeneity of different contexts. Particularly, we contribute with:
+
+(i) A comprehensive characterization of the lifecycle, from raw domain data to learned models passing through the
+processes that manipulate these data, and a taxonomy (detailing e.g., data, execution timing, and training timing
+classes) positioning the role of provenance analysis to support the lifecycle (Sec. 2);
+
+(ii) Data design decisions to build and query a provenance-based holistic data view to integrate data, processed by work-
+ﬂows in the lifecycle, aware of the heterogeneous dimensions and enable comprehensive analyses; and architecture
+decisions that guide how to build a provenance system to efﬁciently track and integrate data in distributed executions
+(Sec. 3);
+
+(iii) PROV-ML, a new provenance data representation for scientiﬁc ML leveraging W3C PROV[22] and MLS[23] (Sec. 4);
+(iv) Lessons learned after applying the design decisions in a system’s implementation and evaluating it in a real case
+in the Oil & Gas (O&G) industry in a testbed with 3 environments, including an HPC cluster with 393 computing
+nodes and 946 GPUs. We found that the decisions enabled comprehensive queries with rich semantics about the
+application domain and ML while maintaining low tracking overhead (<1%), near-linear scalability, and efﬁcient
+query performance (over an order of magnitude compared with a provenance representation without PROV-ML for
+certain workloads) (Sec. 5)
+
+Finally, we present the related work in Section 6, and conclude in Section 7.
+
+The major extensions related to our work published on IEEE WORKS@SC19 [24] are as follows: (i) We detail the
+explanations of the decisions that drive the data and architectural design of a system to support data analyses in the
+lifecycle. These details better highlight the lessons learned so that other researchers and practitioners can learn from them;
+(ii) We reﬁne and extend PROV-ML to better represent subparts of the learning process and to make the model clearer by
+using more accurate names for the concepts, reﬁning descriptions, and changing a few structures of the representation;
+
+(iii) We include a new set of experiments, which demonstrate that PROV-ML can yield query acceleration allowing better
+experience while using the system for data analyses; and (iv) We discuss how the proposed approach can be customized
+to different applications and domains.
+
+3
+
+2 CHARACTERIZING THE LIFECYCLE OF SCIENTIFIC ML
+Existing works describe an ML lifecycle [7], [8], but such descriptions focus on business domains and do not address the
+high heterogeneity problem of the lifecycle of scientiﬁc ML. Since our main goal is to support this lifecycle by enabling
+scientists and engineers to perform comprehensive data analyses, we begin with a proposal of a model for this lifecycle
+and a thorough characterization. This is the ﬁrst work that proposes a lifecycle focused on scientiﬁc ML to the best of our
+knowledge. We ﬁrst characterize the personas and describe the lifecycle (Sec. 2.1), then we present our motivating use case
+(Sec. 2.2), and ﬁnally, we characterize the data analyses using provenance (Sec. 2.3).
+
+2.1 The Lifecycle of Scientiﬁc ML
+
+Multidisciplinary personas, with different skills in the domain and ML techniques, participate in the lifecycle phases. In
+our previous work, we presented a spectrum of expertise and personas in scientiﬁc ML [24], depicted in Figure 1 and
+brieﬂy summarized here. The spectrum ranges from only scientiﬁc-domain (fully white on the left) to ML only (fully black
+on the right), with the following personas: (i) Domain scientists, who have in-depth knowledge of the domain data and use
+specialized tools to interpret, visualize, and clean the scientiﬁc data; (ii) Computational scientists and engineers, who have high
+computational skills, often with abilities to develop parallel scripts and execute them in HPC clusters; (iii) ML scientists and
+engineers, who have in-depth knowledge of statistics, ML algorithms, and software engineering. In an orthogonal sense,
+Provenance specialists design the provenance schema for applications and guide other users to add provenance capture
+hooks to the workﬂows.
+
+Fig. 1: Spectrum of expertise and personas in the lifecycle.
+
+Our proposed model of the lifecycle of scientiﬁc ML is to divide it into three phases: data curation, learning data
+
+preparation, and learning (Figure 2 — dashed arrows are data ﬂows and solid arrows are interactions between phases).
+
+Fig. 2: The Lifecycle of Scientiﬁc ML.
+
+Data curation. It is the most complex phase of the lifecycle, mainly because of the nature of the scientiﬁc data. Much manual
+and highly specialized work are performed by the users (primarily domain scientists) to achieve automated knowledge
+extraction from scientiﬁc data promoted by ML. There is a signiﬁcant gap between raw scientiﬁc data and useful data
+for consumption (e.g., data to serve as input to train ML models). Datasets can be huge, typically containing geospatial-
+temporal data stored in scientiﬁc formats, like HDF5, NetCDF, SEG-Y. Specialized formats in scientiﬁc domains may require
+industry-speciﬁc software and domain-speciﬁc knowledge to inspect, visualize, and understand the data. In addition, users
+can use metadata and textual reports to annotate the data with extra domain-speciﬁc knowledge, without which would
+be nearly impossible to make the data useful for ML algorithms. Considering the heterogeneous nature of the data, “it is
+unreasonable to assume that data lives in a single source” (e.g., a single ﬁle system or DBMS) [10]. For instance, raw ﬁles
+can be stored in ﬁle systems or cloud stores, domain-speciﬁc annotations can be stored in a Knowledge Base System (e.g.,
+Triple Store) with domain ontologies, and curated data can be stored in a NoSQL DBMS. Then, computational scientists and
+engineers develop data-intensive scripts to clean, ﬁlter, and validate the data. Each of these steps inside the data curation
+phase is highly interactive, manual, and may execute independently. In other words, users may run different scripts to
+perform these phases, several times, in an ad-hoc way, in any order, and on different machines. These phases occur in a
+cycle, which stops when the users consider the data “curated”. In the context of ML, it is ready to be transformed into
+learning data.
+
+Main ExpertiseDomainMLRepresentative PersonaDomain ScientistComputational Scientist or EngineerML Scientist or EngineerPrimary ActivityData CurationML Model ValidationML ManagementML Model TrainingML Model DesignRaw Domain DataCurated Domain DataLearning DataModelsCleanValidateFilterUnderstandData CurationData Transformation PipelineLearning Data PreparationEvaluateTrainLearningData LayerAnnotateSelectValidateValidate4
+
+Learning data preparation. Model trainers select relevant parts of the curated data to be used for learning. For instance,
+if the ML task is to classify geological structures [5], seismic images will need to be correlated with seismic interpretation,
+creating labeled samples. After selecting the data, model designers develop scripts, typically using domain-speciﬁc libraries
+to manipulate the raw scientiﬁc data, to transform (e.g.,image cropping, quantization, scaling) the data into learning
+datasets. Due to data complexity, frequently, data need to be manually inspected before it can be used as input for the
+learning phase.
+
+Learning. The learning contemplates training, validation, and evaluation. In this phase, model trainers select the input
+learning datasets, optionally they choose validation datasets, and choose learning parameters (e.g., in deep learning they
+can choose ranges of epochs and learning rates) that will be optimized. Trainers can use their domain knowledge to discard
+learning datasets that will unlikely provide good results. The learning process is compute-intensive, typically executed in
+an HPC machine. One single learning process often generates multiple learned models, among which one is chosen as the
+“best” depending on evaluation metrics (e.g., MSE, accuracy, or any other user-deﬁned metric). Moreover, trainers need
+to monitor the learning process by, e.g., inspecting how the evaluation metrics are evolving while the learning process
+iterates. They can wait until completion or interrupt the learning process, change parameters, iteratively re-submit the
+learning until satisﬁed with results.
+
+2.2 Motivating Use Case: The Lifecycle of a Deep Learning Classiﬁer in Geoscience
+
+We explore a motivating use case in the O&G industry to illustrate the classes of data analyses driven by data integration
+via provenance capture. Finding new reservoirs is a demanding task in the O&G industry and involves a broad spectrum
+of actions, such as the interpretation of seismic surveys. These surveys are indirect measures of the earth subsurface that
+can be organized into slices (images). They cover hundreds of square kilometers and help to interpret the geology by
+identifying geological structures, like salt bodies, and ﬁnd possible hydrocarbons accumulations. Processing seismic data
+imposes complex chained data transformations and can suffer from many problems, like noise and shadows (regions with
+low signal). Trying to automate such activity is of high interest in academia and industry and deep learning is a promising
+machine learning technique for this [5]. However, the geological structures vary geographically, from point to point in
+the subsurface, imposing signiﬁcant challenges to the ML algorithms. Thus, it requires specialized knowledge to prepare,
+clean, and understand the data processed in the workﬂows.
+
+To cope with this, often different teams in an interdisciplinary group composed of geoscientists, computational scientists,
+engineers, statisticians, and others decompose the problem into parts so that each can address different facets of the
+problem. Nonetheless, each team has a preferred way to automate tasks and store data, and a team consumes data
+generated by another. Despite decomposing the problem into parts makes the problem feasible, it creates a new problem:
+how to analyze the data in an integrated way [9], [24], [5]. Therefore, a uniﬁed view over those multiple parts is required
+so users with various personas can use it to analyze the data. Table 1 shows seven exemplary data analyses (via queries)
+that integrate the phases of the lifecycle.
+
+TABLE 1: Examples of provenance queries in the lifecycle of scientiﬁc ML.
+
+ID Description
+
+Q1
+
+Q2
+
+Q3
+
+Q4
+
+Q5
+
+Given a trained model, what are the geographic coordinates, oil basin and ﬁeld, and the number of seismic slices of the seismic in the
+training dataset?
+Given a trained model, what is the tile size, the noise ﬁlter threshold, and the ranges of seismic slices that were selected to generate the
+training set used to adjust this model?
+Given a training set, what are the values for all hyperparameters and the evaluation measure values associated with the trained model
+with least loss?
+What are the average, min, and max execution times of each batch iteration inside each epoch of the deep neural network training,
+given a training dataset?
+What is the execution time on average per batch iteration, per epoch, and what are the evaluation metrics of the trained models that
+used the training dataset generated for a given range of seismic slices?
+
+Q6 Given the training dataset used in Q5, what was the seismic data ﬁle used, along with its number of slices, related oil basin, and ﬁeld?
+Considering only the learning workﬂows that used the learning dataset associated to a given range of seismic slices, list the minimum
+batch loss per model obtained in the learning stage, also listing the model’s hyperparameters and evaluation measurements jointly with
+the hyperparameters and measurements for associated model obtained in the validation stage, ordered by the best learned models.
+
+Q7
+
+Although this use case is in the O&G industry, we observe a similar demand in several other domains. For instance,
+designing ML algorithms to handle problems in other industries, such as health, high-energy physics, bioinformatics, and
+manufacturing [1], [2], [3], [4], [5]. In these areas, the development of ML models typically requires complex computational
+experiments designed as multiple workﬂows, executed on different HPC clusters, and also involve collaboration among
+various experts. Therefore, being able to analyze the experiment data associated with the ML models through all lifecycle
+phases is essential.
+
+2.3 A Taxonomy of Data Analyses in the Lifecycle of Scientiﬁc ML using Provenance
+
+Provenance data in workﬂows contain a structured record of the data derivation paths within chained data transformations
+and their parameterizations [16], [15]. Provenance data are usually represented as a directed graph where vertices are
+
+instances of entities (data) or activities (the data transformations) or agents (e.g., users); and, edges are instances of
+relationships between vertices [22]. Comprehensive data analysis using provenance has been used as an enabler for several
+key capabilities:
+
+5
+
+• Experiment reproducibility [11], [25], [12]
+• AI explainability [20], [26], [9];
+• Experiment ﬁne-tuning and what-if analyses [15];
+• Uncertainty quantiﬁcation [27], [28];
+• Hypothesis testing [6]; and
+• Real-time monitoring, and interactive data analysis. [29]
+
+Based on a literature analysis [30], [11], [10], [31], [25] and on our own experience to leverage provenance to support
+workﬂows for scientiﬁc ML [9], [24], [32], [33], we propose here a taxonomy (Fig. 3) to classify workﬂow provenance
+analysis in support of ML, by considering three classes: data, execution timing, and training timing. Next, we characterize the
+data involved in the lifecycle.
+Data class includes domain-speciﬁc, machine learning, and execution Provenance data may be augmented with these data,
+increasing the scope of the analysis.
+
+Domain-speciﬁc data are the main data processed in the data curation phase (Sec. 2.1). Approaches to add domain data
+into provenance analysis include, e.g., raw data extraction [34] and utilization of domain-speciﬁc knowledge databases
+associated to provenance databases [9]. For raw data extraction, quantities of interest are extracted from raw data ﬁles. For
+domain databases, domain scientists may provide relevant information and metadata about the raw data and store them
+in knowledge graphs.
+
+Machine learning data include learning data and generated learned models, which are more related to the learning data
+preparation (e.g., Q1) and learning (e.g., Q2, Q3, Q7) phases (Fig. 2). These queries exemplify that the parametrization
+within the data transformations and relevant metadata of the generated data is important for provenance analysis.
+
+Execution data. Besides model performance metrics (e.g., accuracy), users need to assess workﬂow execution time and
+resource consumption. They need to inspect if a critical block in their workﬂow (e.g., one demanding high parallelism) is
+taking longer than usual or if other parts are consuming more memory than expected. For this, provenance systems can
+capture system performance metrics and timestamps (e.g., Q4). Metadata, such as data store metadata (e.g., host address),
+HPC cluster name, and nodes in use, can be captured and associated with the provenance of the data transformations for
+extended analysis.
+
+Hybrid. These data can be combined. In Q5 and Q7, the analysis queries data processed in workﬂows in the learning
+data preparation and learning phases, whereas Q6 uses the same dataset to analyze the raw ﬁles curated in the data
+curation phase.
+Execution timing refers to if the analysis is done online, i.e., while at least a workﬂow is running, or ofﬂine.
+
+Ofﬂine analysis. The typical use of ofﬂine provenance analysis is to support reproducibility and historical data under-
+standing, e.g., understand the curation of raw ﬁles and relate with the ML models. For example, the queries Q1–Q7 can be
+executed ofﬂine.
+
+Online analysis. Users can use online provenance analysis to monitor, debug or inspect the data transformations while
+they are still running (e.g., see the status, see how the intermediate results are evolving as the input parameters vary).
+The problem of adding low provenance data capture overhead is more challenging for provenance systems that allow for
+online analysis [9]. Queries Q3–Q5 and Q7 exemplify queries that can be executed online, e.g., while a training process is
+running.
+Training timing refers to whether the analysis performs intra-training—i.e., to inspect one training process, e.g., a training
+job running on an HPC cluster, or inter-training—i.e., analyses comprehending results of several training processes.
+
+Intra-training. In an ofﬂine intra-training analysis, users are interested in understanding how well-trained models
+generated in a given training process perform. The queries Q1–Q7 can be executed either online or ofﬂine, but Q3 and Q4
+are more likely to be performed as online intra-training analysis.
+
+Inter-training. This analysis refers to comprehensive queries to understand multiple training processes, e.g., how each of
+them performed, which learning datasets were used, how the training processes were parameterized. It supports activities
+like Model Validation, Management, Training, and Design. Usually, they are used ofﬂine, but may also be performed online.
+Queries Q1–Q7 ﬁt this class when analyzing multiple trained models generated in different training processes.
+
+Fig. 3: A taxonomy for workﬂow provenance analysis of the lifecycle of scientiﬁc ML.
+
+Further characterization. Other classes worth mentioning for provenance analysis are: data store—data are distributed onto
+multiple stores, like ﬁle systems, cloud stores (e.g., IBM Cloud Object Storage, AWS S3), Relational or NoSQL DBMSs
+
+Workflow Provenance Analysis in the Lifecycle of Scientific MLExecution TimingOnlineOfflineDataMachine LearningDomain-specificExecution PerformanceTraining TimingInter-trainingIntra-trainingExecution EnvironmentHPC clusterCloud clusterStandalone machineData StoreFile SystemDBMSObject StoreExecution SoftwareWorkflow MSBig Data FrameworkML FrameworkScript[9]; execution environment—where the workﬂows execute, such as HPC clusters, Kubernetes clusters, Standalone server;
+execution orchestration software—each workﬂow may be executed as a standalone script, or as a workﬂow in a WMS, or a
+composition of microservice calls, or as a pipeline in a data processing (e.g., Spark) and ML frameworks (e.g., Tensorﬂow);
+provenance data granularity—provenance of ﬁles (i.e., references to ﬁles consumed and generated in a script), functions calls
+(arguments and outputs), blocks of code, and stack traces [30]; and provenance analysis direction—forward or backward:
+generally, forward queries analyze from raw scientiﬁc ﬁles or learning datasets to trained models (e.g., Q3–Q5, Q7), whereas
+backward queries analyze from trained models to learning datasets or raw ﬁles (e.g., Q1, Q2, Q6).
+
+6
+
+3 PROVENANCE IN THE LIFECYCLE OF SCIENTIFIC ML
+This section presents the fundamental design decisions for effective and efﬁcient management of workﬂow provenance data
+in the lifecycle of scientiﬁc ML to provide for comprehensive data analyses. Although some of these decisions, individually,
+have been presented in related works [35], [9], [36], [34], together they compose the building blocks of our approach and
+we assemble them as one uniﬁed set and describe how they support the lifecycle. They are organized as: (i) Data Design
+(Sec. 3.1), which contains the decisions and key concepts that drive the contents of our holistic data view, whose a resulting
+artifact is PROV-ML, a new provenance data representation; and, (ii) System Design (Sec. 3.2), which contain the decisions
+that determine how the provenance data are captured in a scalable and portable manner, whose resulting artifact is a
+reference system architecture.
+
+3.1 Data Design
+
+D1: Data Integration with a Holistic Data View. The primary design decision is that to be able to manage effectively
+(i.e., capture, integrate, store, and query) provenance data in the interconnected workﬂows in all lifecycle phases, a
+provenance system must implement techniques to provide for an integrated, uniﬁed, and holistic data view. Also, it
+has to be aware of the contexts of the data transformations in the multiple workﬂows that consume and generate these
+data, their (hyper)parameterization, and output values, where these transformations run, where the generated data are
+stored, who are the involved personas, and how they interact with the workﬂows. This design decision builds on a multi
+workﬂow data view concept proposed in our previous work [9]. It extends it to support the lifecycle comprehensively,
+with specializations to address ML-speciﬁc data and knowledge related to domain-speciﬁc data and knowledge. Let us
+call this data view as the Provenance-based Holistic Data View of the Lifecycle of Scientiﬁc ML (MLHolView). The contents and
+the granularity of the MLHolView are driven by the relevant queries for a project, and the view can be materialized as the
+database that integrates data from several sources, while the workﬂows run [9].
+D2: Context-awareness using Knowledge Graphs: Domain, ML, and Hybrid environments and Data stores. Extending
+provenance with domain-speciﬁc data for data analysis has been explored before [37], [34], [15]. However, in scientiﬁc
+ML, it is required to go a step further into the details of domain-speciﬁc knowledge, including how key domain concepts
+relate to each other. Thus, it is important to relate the data in the workﬂows with as much knowledge as possible available
+about the project’s key concepts. To be able to integrate with domain-speciﬁc knowledge databases, one needs to design
+the workﬂows aware that ﬁles (or data in other data stores, like DBMSs or object stores) are associated with concepts
+deﬁned elsewhere. Then the provenance system needs to provide the proper links between the ﬁle and the domain-speciﬁc
+concepts.
+
+Similarly, the MLHolView needs ML-speciﬁc concepts and relationships. Although modeling ML-speciﬁc concepts could
+be seen as modeling data for a speciﬁc domain (in this case, ML would be the domain), ML, by itself, is a distinguished
+domain, which crosses many industries and scientiﬁc domains. Thus, the MLHolView should have a built-in ML-speciﬁc
+schema, tightly coupled with the rest of the provenance data schema, to provide ML-speciﬁc context to support the
+comprehensive analyses. In certain cases, such specialized schema modeling might be even helpful to accelerate queries
+that require them [38].
+
+In addition to the domain- and ML-speciﬁc context awareness, since the workﬂows can be executed within hetero-
+geneous frameworks, scripts, or WMSs and on heterogeneous environments, the MLHolView needs to be aware of such
+hybrid (i.e., heterogeneous) execution by containing the track of the execution environment and software, and associated
+metadata. These data and their relationships, with pointers to domain-speciﬁc knowledge graphs and large data stored
+in other stores, are all materialized using provenance data in the knowledge graph that forms the MLHolView. Figure 4
+illustrates the MLHolView and its awareness of data coming from the ML phases and the dimensions of heterogeneity
+(illustrated as layers) it addresses: software, data, data stores, and infrastructure (execution environment). The ﬁgure also
+shows the kind of provenance analysis (top-left) and the key capabilities the MLHolView enables (top-right) (Sec. 2.3).
+D3: Provenance of Multiple Workﬂows on Data Lakes meets ML Provenance Following W3C Standards. To be able to
+implement the context-awareness for the domain, ML, and hybrid environments , the MLHolView needs a comprehensive
+data representation. Data lake provenance builds on workﬂow provenance to enable the awareness of the location of each
+data item generated by chained data transformations in a data lake, even if there are multiple data items dispersed in
+hybrid environments and data stores [9], [39], making it a good alternative to address such heterogeneity of data, store,
+and environments. However, it is not enough to support the lifecycle, as it requires provenance of ML-speciﬁc data and
+learning processes.
+
+7
+
+Fig. 4: The Provenance-based Holistic Data View of the Lifecycle of Scientiﬁc ML.
+
+The provenance data community has signiﬁcantly evolved in recent years, oftentimes leveraging the PROV [22] family
+of documents, a W3C recommendation, making it a de facto standard that provides the building blocks, in terms of
+data representation, for any provenance-based approach, allowing for compatibility among different solutions [40]. The
+PROV-Wf [41] workﬂow provenance data representation and its derivatives [16] have also been used and evolved by
+several initiatives [29], [15], [42], [43]. Our previous work builds on W3C PROV and PROV-Wf to propose PROVLake, a
+ﬁrst provenance data representation for workﬂows on data lakes [9]. Concerning ML-speciﬁc data modeling, there is a
+W3C community group developing a data representation with speciﬁc ML vocabulary, the W3C ML Schema (MLS) [23].
+Therefore, this data design decision proposes that the data representation for the MLHolView should be comprehensive,
+with detailed semantics about the workﬂows, where they execute, the data they process, and where they are stored,
+combining and extending a data lake provenance representation with ML-speciﬁc data representation, following standards
+and reusing existing representations, such as W3C PROV, PROV-Wf, PROVLake, and MLS.
+D4: Keeping Prospection and Retrospection Related but Separated. Davidson and Freire explain that prospective prove-
+nance captures the speciﬁcation of a workﬂow, i.e., the recipe of which data transformations will be processed and their
+inputs and outputs. In contrast, retrospective provenance captures the data that was consumed and produced, along with a
+detailed execution log about the computational tasks and execution environment [25]. The prospective provenance provides
+the abstraction layer to specify provenance analyses, often giving semantics to the retrospective provenance data generated
+during the workﬂows’ execution. Also, there are cases that the provenance analysis uses only one kind of provenance data.
+Therefore managing both kinds of provenance data, and more importantly, with a strong connection between each related
+kind, is essential for the MLHolView, which should be reﬂected in the provenance data modeling.
+D5: Designing a Focused Conceptual Data Schema. To provide the specialized semantics needed by the MLHolView, we
+propose a conceptual data schema focusing on the key concepts identiﬁed by the characterization in Section 2. The concepts
+are driven by the lifecycle phases and the data they manipulate: the phases are illustrated with a gray background and the
+and four main kinds of data are illustrated in white background in the UML class diagram in Figure 5.
+
+Fig. 5: Conceptual data schema of the key concepts of the lifecycle and their supporting graphs.
+
+On the four data concept classes, each instance represents one dataset, i.e., a set of data elements that combined
+form one meaningful set of data for a given application. As with any dataset, we may have a data schema that varies
+depending on the application; it may be further decomposed into several interrelated sub-datasets (or subconcepts for a
+given application), and there may be related metadata such as where it is physically stored and data sizes. Concerning
+the three phases’ classes, each can be further decomposed into workﬂows with associated execution data. A Learning
+instance can be qualiﬁed into training, validation, and evaluation. With respect to relationships, each Data Curation
+instance consumes a Raw Domain Data instance and generates a Curated Domain Data instance. Then, each Curated
+Domain Data instance may be consumed by one or more Data Preparation instances, which in turn may generate
+one or multiple Curated Domain Data instances (i.e., a n:m relationship). For instance, a learning algorithm may require
+the preparation of well log data and seismic data, jointly, and thus two sets of Curated Domain Data would need to
+be related to the Data Preparation instance. Finally, each Data Preparation instance generates a Learning Data
+instance to be be consumed by one Learning process that generates one Model instance. Typically, during a learning
+phase, there are multiple Learning instances, each generating a Model instance.
+
+Learning Data PreparationLearningData CurationRaw Domain DataProvenance-based Holistic Data View of the LifecycleofScientificMLCurated Domain DataLearning DataModelsData LayerHPC File SystemObject StorageKey Value DBMSGraph DBMSDocument DBMSRDBMSData Stores LayerPrivate CloudPublic CloudScientists’ DesktopsHPC ClustersInfrastructure LayerBig Data Processing FrameworksWorkflow Management SystemsScriptsML FrameworksScientific SoftwareSoftware LayerOn-premiseProvenance AnalysisProvenance CaptureüData: Domain, ML, ExecutionüExecution timing:Online/OfflineüTraining timing:Inter/Intra-trainingüAI explainabilityüModel reproducibilityüExperiment fine-tuningüUncertainty quantificationüHypothesis testingüReal-time data analysisCurated Domain DataData PreparationLearning DataLearningModel**1*11*1Data CurationRaw Domain Data1111Used Domain Data8
+
+3.2 System Architecture Design
+
+S1: Portable and Distributed Capture Control. As discussed, the workﬂows execute in highly distributed, heterogeneous
+environments processing data in heterogeneous data stores, executing within heterogeneous software and on hetero-
+geneous environments. To address this distributed execution control, the provenance system should be portable with
+distributed capture control so that there may be multiple provenance data capturers spread out across the multiple
+workﬂows executing. To address the heterogeneity of how workﬂows are executed, the provenance system cannot be tightly
+coupled with a speciﬁc workﬂow tool, but rather it should be pluggable to any of these aforementioned heterogeneous
+ways of executing workﬂows. The distributed captured data are ultimately integrated into the uniﬁed MLHolView.
+S2: Specialized Microservices in a Distributed Architecture. In addition to the distributed capture control, designing a
+provenance system using a microservices architecture allows for the ﬂexibility needed for large-scale deployments in hybrid
+environments. The provenance system can be decomposed into smaller, stateless microservices with specialized functions
+and, more importantly, it enables that components of the provenance system architecture are deployed wherever best
+ﬁts for the workﬂow having provenance being captured. For instance, provenance capture components can be deployed
+geographically near (or inside) the machine where the workﬂow runs, to reduce latency caused by communication costs,
+and other heavy-weight provenance-speciﬁc processes (e.g., creating the linkages, inserting in the DBMS) and the DBMS
+itself can be deployed elsewhere, to reduce concurrency with the running workﬂows. A real deployment exploring the
+ﬂexibility to place the architectural components to reduce communication costs and concurrency is shown in Section 5.1.
+S3: Strategies for a Scalable Capture. Since many of these workﬂows require HPC, the provenance capture system should
+not add signiﬁcant performance penalties to the running workﬂows, requiring designing strategies for a scalable data
+capture. In addition to reducing concurrency, as described in S2, which is one of these strategies, other strategies to reduce
+performance overhead are as follows. During capture, the provenance persistence requests coming from the running
+workﬂows to the provenance system should be asynchronous and do not need to wait for complete processing, avoiding
+adding periods of waiting in the running workﬂow. Also, batches of data capture requests from the running workﬂows can
+be queued in the local memory of the host processing the workﬂow and sent to the provenance system at once, avoiding
+keeping open multiple communication channels between the running workﬂow and the provenance system. These batches
+are then received in the provenance system, which should process each request in the batch in a parallel manner, to
+reduce the time between the provenance capture in the workﬂow and the data to be readily available for queries in the
+MLHolView. Moreover, during capture, the provenance system responsible for creating the data linkages should avoid
+doing read operations to the underlying DBMS, but should only do appends to the data in the DBMS. This is because
+the read operations on the DBMS inevitably have to be waited for the query response, thus potentially increasing latency
+in the provenance capture. Finally, the only component that is in direct contact with a running workﬂow should be a
+lightweight provenance capture library shielding the workﬂows from possible slowness from other components. The key
+for such a lightweight library is to signiﬁcantly reduce provenance-speciﬁc code in a workﬂow, consequently reducing
+provenance-speciﬁc calls during execution, and strictly follow the insert-only policy, so that no queries to the DBMS are
+made by the library, avoiding waits. Such provenance-speciﬁc descriptions, essential for the speciﬁcation of the workﬂows,
+are stored as prospective provenance data externally to the actual workﬂow. The provenance library (in the client-side of
+the system) does not need these speciﬁcations, which are essential for the server-side of the system, so the linkages that
+form the MLHolView can be provided. A side-effect of reducing provenance-calls in a workﬂow is that it also reduces the
+changes needed to be done, making it look as similar as possible to the original workﬂows without the hooks [9], [32].
+S4: Easing Data Linkage with Unique Data Identiﬁers. The concept of using unique identiﬁers is useful for keeping
+track of data in provenance systems [39], [44]. Existing approaches keep track of data ﬁles consumed and produced in the
+workﬂows, and here we extend this concept to keep track of every data value that participates in the MLHolView, even
+scalar values. Thus, every attribute-value pair that are consumed or produced in any data transformation participating
+in any workﬂow receives a unique identiﬁer. So, whenever an attribute-value generated by one data transformation is
+consumed by another, the provenance system can reuse the value keeping track of the paths between transformations and,
+thus, keeping the workﬂows interconnected.
+S5: Workﬂow Design and Adding the Provenance Capture Hooks. To enable the context-awareness (D2), the ﬁrst step is to
+design the workﬂows with context awareness. For this, for each workﬂow in those multiple workﬂows for a given project,
+one needs to specify its data transformations with input datasets, parameters, and expected outputs. Each computational
+process (data transformations) and the datasets they transform are qualiﬁed according to the MLHolView’s conceptual
+data schema (D5). When specifying data references, the physical location where the data reference is expected to be stored
+should be provided, as well as metadata about the execution environment where the workﬂow will execute. Finally, the
+relationships between the workﬂows and the data in the distributed data stores need to be speciﬁed. Such speciﬁcation
+can be maintained in conﬁguration ﬁles, which will inform the provenance capture system to enable it to create the
+linkages to provide the context-aware integration of domain, ML, and hybrid environments and stores using provenance.
+After the speciﬁcation, hooks can be added to the workﬂows before and after each data transformation, informing the
+key concept (following the MLHolView’s conceptual data schema) in each data transformation and data reference. A data
+transformation execution is encapsulated by a provenance capture task, which typically occurs in a function call, a program
+execution, a web service call, or an iteration in an iterative workﬂow.
+Reference System Architecture. Based on these system design decisions, our proposed reference architecture is illustrated
+
+9
+
+in Figure 6 and is described as follows. There are M environments (e.g., HPC clusters, Kubernetes clusters) and N
+workﬂows in all phases of the lifecycle, distributed on these environments. Each workﬂow may use heterogeneous data
+stores and may be implemented as a standalone script, or as a workﬂow in a WMS, or a composition of microservice calls,
+or as a pipeline in a data processing or ML framework. Provenance capture hooks, through a lightweight ProvLib, are
+added to capture provenance data at each data transformation in each of these workﬂows. At the beginning and end of each
+(potentially parallel) data transformation executions for each (potentially parallel) workﬂow, a provenance capture event
+is emitted from the ProvLib. Thus a provenance capture event has the granularity of a data transformation execution,
+with their corresponding input data (at the beginning) and output data (at the end). These events are asynchronously sent
+to a Message Broker, such as Apache Kafka, or any lightweight repository that persists these events in a queue. Then,
+the ProvConsumer, which is a lightweight service that runs on the background, consumes from this queue and sends the
+requests to the ProvManager, which is aware of the prospective provenance data and can create the context-aware linkages
+using W3C PROV-based relationships and the reuse of unique identiﬁers (D4), and sends the data to the MLHolView,
+which is managed by a DBMS, typically a knowledge graph DBMS. The (Message Broker, ProvConsumer) pair is
+instantiated at each environment to reduce communication costs between the ProvLib. The ProvManager is a RESTful,
+stateless service and can receive provenance capture requests in any order. Thus it uses a lightweight Key Value DBMS
+(e.g., Redis) to manage state when needed (e.g., to create a link with a just received request with another request sent
+before). During the execution of these workﬂows, users or applications may submit provenance analysis through a Query
+API that communicates with the Prov query component, which is a RESTful service responsible for implementing query
+building strategies using the query language of the MLHolView’s DBMS and returning the results to the requesting client.
+
+Fig. 6: Reference system architecture to manage workﬂow provenance in the lifecycle of scientiﬁc ML.
+
+Analyzing Design Decisions Based on Existing Approaches. To the best of our knowledge, the design decisions D2
+(integrating domain, ML, and hybrid environments and stores in a knowledge graph) and D3 (combining multi workﬂow,
+data lake, and ML provenance schemas) are new for general provenance management approaches. Regarding the decision
+D1 (holistic data view), existing approaches [29], [34] also propose provenance as a view over datasets, but cannot cope
+with data being generated by multiple workﬂows, such as the ones in the ML lifecycle; also, there is no ML-speciﬁc schema
+in their views. The decision D4 (prospective and retrospective provenance separation) is traditionally followed by most
+general provenance approaches, but it is not used in the existing approaches for ML provenance [45], [46], [23]. The system
+design decision S1 (portable and distributed control) is not often adopted by existing approaches [17], [26], as typically they
+propose “all-in-one” ML data management systems that require the workﬂows to be executed within such a platform and
+thus cannot address highly heterogeneous environments, parallel software, and data stores. The approaches that follow a
+more portable system design decision either cannot deal with multiple workﬂows [34] or does not follow the decisions D2
+and D3 [39]. The other system design decisions S2–S5 can be found in existing provenance-based approaches, nevertheless
+since they do not follow the data design decisions we are proposing, particularly D2 and D3, they can only partially
+support the lifecycle of scientiﬁc ML. In summary, we only found approaches that partially follow some of these decisions,
+which is not enough to answer complex end-to-end queries that integrate all lifecycle phases.
+
+4 PROV-ML: A PROVENANCE DATA REPRESENTATION FOR THE LIFECYCLE OF SCIENTIFIC ML
+In this section, we propose PROV-ML, the ﬁrst generic provenance data representation for the lifecycle of scientiﬁc ML
+to the best of our knowledge. PROV-ML extends PROVLake [47], [9] as its underlying metamodel and employs elements
+of W3C ML Schema (MLS) [23]. PROVLake is an extension of the W3C PROV data representation, specializing PROV
+for multiple workﬂows that process data in data lakes (see D3). However, as with other workﬂow provenance data
+representations, PROVLake alone lacks ML-speciﬁc semantics. PROV-ML bridges this gap between workﬂows and ML
+concepts by building on PROVLake and MLS representations. PROV-ML is depicted in Figure 7, where the light-color
+classes represent prospective provenance, and dark-color, retrospective. PROV-ML provides rich semantics and details
+based on the conceptual data model of the lifecycle’s fundamental concepts (D5), especially the ones in the learning phase.
+The colors in the ﬁgure map to these concepts: the blue-shaded classes account for the Learning Data; the gray-shaded,
+for the Learning; and the yellow-shaded, for the Model. The stereotypes indicated in the ﬁgure represent the classes
+inherited from PROVLake, which has subclasses that extend W3C PROV classes. This is how W3C PROV recommends
+how it should be extended1. All classes illustrated in the ﬁgure are individually described in Table 2. We brieﬂy discuss the
+
+1. https://www.w3.org/TR/prov-dm/#section-prov-extended-mechanisms
+
+ProvConsumerMessage BrokerProvLibWorkflowkProvLibWorkflow1…ProvConsumerMessage BrokerProvLibWorkflowNProvLibWorkflowk+1…Environment 1Environment MProvManagerMLHolView KV DBProvQueryProvServerProvenance AnalysisUIQuery APIPROV-ML classes here, and further details on the classes and on how PROVLake classes are extended from PROV classes
+are available online [47].
+
+10
+
+Fig. 7: PROV-ML: a W3C PROV- and W3C ML Schema-compliant provenance data representation for scientiﬁc ML.
+
+In PROV-ML, the Study class introduces a series of experiments, portrayed by the LearningExperiment class, which
+deﬁnes one of the three major phases in the lifecycle, the Learning phase. A learning experiment comprises a set of learning
+stages, represented by the BaseLearningStage class, which are the primary data transformation within the Learning
+phase and with whom the agent (Persona class) is associated. The BaseLearningStage is as an abstract class from
+which LearningStage and LearningStageSection classes inherit. Also, it relates the ML algorithm, evoked through
+Algorithm class, used in the stage might be deﬁned in the context of a speciﬁc ML task (e.g., classiﬁcation, regression),
+
+<<Attribute>>LearningTask<<AttributeValue>>LearningTaskValue<<Attribute>>LearningDataSetReference<<Attribute>>DatasetCharacteristic<<DataTransformationExecution>>BaseLearningExecution<<AttributeValue>>DatasetCharacteristicValue<<AttributeValue>>LearningDataset<<Attribute>>Algorithm<<Program>>Software<<Attribute>>LearningHyperparameter<<AttributeValue>>LearningHyperparameterValue<<Program>>Implementation<<Entity>>ImplementationCharacteristicValue<<DataTransformation>>BaseLearningStage<<Attribute>>ModelProspection<<DataSchema>>ModelSchema<<Attribute>>ModelHyperparameter<<Attribute>>EvaluationMeasure<<Attribute>>EvaluationSpecification<<Attribute>>EvaluationProcedure<<AttributeValue>>ModelHyperparameterValue<<DataReference>>Model<<AttributeValue>>ModelEvaluation<<DataStoreInstance>>DataStoreInstanceTrainingValidationEvaluationLearningStageLearningStageSectionLearningStageExecutionLearningStageSectionExecutionTrainingExecutionValidationExecutionEvaluationExecution<<Agent.>>PersonaColor MappingLearning DataLearningModel<<Attribute>>FeatureSet<<DataTransformation>>FeatureExtraction<<DataTransformationExecution>>FeatureExtractionExecution<<AttributeValue>>FeatureSetData<<Attribute>>FeatureSetCharacteristic<<Project>>Study<<Workflow>>LearningExperiment<<WorkflowExecution>>LearningProcessExecutionusedusedhadMemberhadMemberhadMemberhadMemberwasDerivedFromwasDerivedFromisGeneratedBywasAssociatedWithwasAssociatedWithwasAssociatedWithwasInformedByhadMemberhadMemberwasInformedBywasInformedBywasInformedBywasAssociatedWithusedhadMemberwasGeneratedBywasDerivedFromusedwasGeneratedBywasGeneratedBywasDerivedFromhadMemberwasDerivedFromwasDerivedFromhadMemberhadMemberwasGeneratedBywasGeneratedByhadMemberhadMemberwasGeneratedBywasDerivedFromhadMemberwasAttributedTowasDerivedFromusedusedhadMemberusedwasDerivedFromwasDerivedFromhadMemberusedusedwasDerivedFromrepresented in the LearningTask class. This approach favors both the learning stage and learning stage section to conserve
+the relationships among other classes while grant them to have special characteristics discussed in the following. A learning
+stage varies regarding its type, i.e., Training, Validation, and Evaluation classes. The provision of a speciﬁc class
+for the learning stage allows the explicit representation of the relationship between the Learning Data Preparation phase,
+through its Learning Data, and the Learning phase of an ML lifecycle. The LearningStageSection class introduces
+the sectioning semantics that grant capabilities of referencing subparts of the learning stage and the data, respectively. An
+example of sectioning elements relevance is the ability to reference a speciﬁc epoch within a training stage, or mentioning
+a set of batches within a speciﬁc epoch. The Learning Data appears in the model over the LearningDataSetReference
+class. Another data transformation speciﬁed in PROV-ML is the Feature Extraction class, which represents the process
+that transforms the learning dataset into a set of features, represented by FeatureSet class. This modeling favors the ML
+experiment to be reproducible since it relates the dataset with the feature extraction process and the resulting feature set.
+
+11
+
+Class
+Study
+LearningExperiment
+
+LearningProcessExecution
+
+LearningTask and Learning-
+TaskValue
+BaseLearningStage and Base-
+LearningStageExecution
+Persona
+LearningStage and Learn-
+ingStageExecution
+LearningStageSection and
+LearningSectionExecution
+LearningDatasetReference
+and LearningDataset
+DatasetCharacteristic
+DatasetCharacteristcValue
+FeatureExtraction and Fea-
+tureExtractionExecution
+FeatureSet and FeatureSet-
+Data
+FeatureSetCharacteristic
+Software
+Algorithm
+
+and
+
+Implementation
+
+TABLE 2: PROV-ML data representation classes.
+
+Description
+Investigation (e.g., research hypothesis) leading ML workﬂow deﬁnitions.
+The set of analyses (e.g., research questions) that drives the ML workﬂow.
+An ML workﬂow execution. This is equivalent to mls:Run and was renamed to explicitly preserve the aspects of
+retrospective provenance, which are not explicitly handled in MLS.
+Deﬁnes the goal of a learning process, i.e., the ML task (e.g., LearningTask: Classiﬁcation; LearningTaskValue:
+Seismic Stratigraphic Classiﬁcation).
+Abstract classes of LearningStage and LearningStageSection, and their execution counterparts. It is used to
+conserve the relationships among other classes while granting them to have special characteristics.
+The personas associated with the learning process.
+Deﬁnes a stage in the learning process (Training or Validation or Evaluation) and its execution.
+
+Introduces the sectioning semantics, i.e., capabilities for provenance of subparts of the learning stage and correspond-
+ing data.
+Deﬁnes the dataset to be used by a LearningStage or LearningStageSection. In the last case, it is a section of
+a LearningDatasetReference. LearningDataset is the dataset used in the execution.
+Deﬁnes metadata about the LearningDatasetReference (e.g., #instances), and DatasetCharacteristcValue
+relates with a LearningDataset (e.g., #instances =8).
+
+Deﬁnes the prospective and retrospective feature retrieval process, respectively.
+
+the
+
+feature
+
+features
+
+and
+Deﬁnes
+LearningDatasetReference.
+Deﬁnes the set of metadata that describes the FeatureSet (e.g., number of features, features’ type).
+Deﬁnes a collection of ML techniques’ implementations (e.g., Scikit-Learn).
+ML technique with no associated technology, software or implementation (e.g., k-means clustering technique).
+Deﬁnes the retrospective aspect of an Algorithm, i.e., an ML technique’s implementation in a software (e.g., Scikit-
+Learn’s k-means implementation).
+
+generate
+
+FeatureExtraction
+
+should
+
+values
+
+over
+
+a
+
+ImplementationCharacteristicValueDeﬁnes the implementation’s set of metadata (properties and values),e.g., version, git hash.
+LearningHyperparameter
+
+LearningHyperparameterValue
+
+and
+
+ModelSchema
+ModelProspection
+Model
+ModelHyperparameter and
+ModelHyperparameterValue
+DataStoreInstance
+EvaluationMeasure
+ModelEvaluation
+EvaluationSpeciﬁcation and
+EvaluationProcedure
+
+and
+
+Deﬁnes the prior parameter of an Algorithm used by a LearningStage or LearningStageSection.
+Deﬁnes the parameter values of an execution (e.g., the k value in a k-means clustering technique, range of epochs in
+a neural network training).
+The scope of the resulting model.
+The resulting model a LearningStage or a LearningStageSection should generate, and the generated value
+(e.g., the trained model after the training stage).
+Hyperparameters a LearningStage or a LearningStageSection generate, and their values corresponding to
+the resulting model (e.g., the epoch which the resulting model was generated).
+Storage of the resulting model.
+A measure a LearningStage or a LearningStageSection should evaluate and the generated value (e.g., the
+precision of classiﬁer model).
+
+Classes directly inherited from MLS, with their semantics preserved.
+
+Further fundamental aspects regarding the Learning phase are the outputs and the parametrization used to produce
+these outputs. Like so, The ModelSchema class describes the characteristic of the models produced in a learning stage
+or learning stage section, such as the number of layers of a neural network or the number of trees in a random forest.
+The ModelProspection class represents the prospected ML models, i.e., the reference for the ML models learned during
+a learning stage or learning stage section of a training stage. In addition to the data produced in the Learning phase is
+the EvaluationMeasure class. This class, combined with EvaluationProcedure and EvaluationSpecification
+classes, provide the representation of evaluation mechanisms of the produced ML models during any stage of learning,
+speciﬁcally: an evaluation measure deﬁnes an overall metric used to evaluate a learning stage (e.g., accuracy, F1-score,
+area under the curve); an evaluation speciﬁcation deﬁnes the set of evaluation measures used in the evaluation of
+learned models; and, an evaluation procedure serves as the model evaluation framework, i.e., it details the evaluation
+process and used methods. On the parametrization aspect, PROV-ML afford two classes LearningHyperparameter and
+ModelHyperparameter. The ﬁrst hyperparameter-related class represents the hyperparameter used in a learning stage
+or learning stage section (e.g., max training epochs, weights initialization). The second class is used in the representation
+of the models’ hyperparameters (e.g., network weights). Finally, PROV-ML addresses the retrospective counterpart of the
+
+12
+
+classes mentioned above. The classes ending in Execution and Value are the derivative retrospective analogous of data
+transformations and the attributes, respectively.
+
+Comparing with the paper[24] being extended here, we make the following improvements in PROV-ML. We change the
+representation of learning stage types (i.e., training, evaluation, and validation) from an enumeration to a hierarchy to make
+explicit relationships speciﬁc to learning phases. Also, towards better deﬁning the stages within a learning experiment,
+we introduce the Learning Stage Section (LearningStageSection and LearningStageSectionExecution which
+is crucial to represent the speciﬁc characteristics sub-parts of a learning process, when it is required. Combining these
+representations, we enable the representation of speciﬁc events as sub-sections in a learning stage. For instance, in
+the training stage we now may represent mini-batch iterations, which is a common sub-section to enhance stochastic
+optimization [48], and thereafter make references to the mini-batch representations. Likewise, we introduce the Persona
+class, subclass of PROV Agent, and associate it with BaseLearningStage and BaseLearningExecution. Further, we
+reﬁned the names of elements related to hyperparameters and model besides description adjustments due to learning stage
+section creation.
+
+5 SYSTEM IMPLEMENTATION AND EXPERIMENTAL EVALUATION
+In this section, we provide experimental validation of the design decisions to build and query the MLHolView to support
+the lifecycle of scientiﬁc ML in a real case study in the O&G industry. First, we explain how we implement and deploy the
+system used in the evaluation (Sec. 5.1). Then, we show a running example of which data are captured during execution of
+the workﬂows to answer the exemplary queries Q1–Q7 (Sec. 5.2). After, we present performance and scalability analyses
+of the system (Sec. 5.3). Then, we discuss the beneﬁts of PROV-ML both in terms of easing queries and query performance
+(Sec. 5.4). Finally, we discuss how our approach can be customized (Sec. 5.5) and conclude with lessons learned after this
+evaluation (Sec. 5.6).
+
+5.1 Implementation and Deployment
+
+ProvLake [47] is a provenance system capable of capturing, integrating, and querying data across distributed services, pro-
+grams, scripts, and data stores used by multiple computational workﬂows using provenance data management techniques
+[9], [24]. In this section, we explain how we implement the design decisions to enable ProvLake to build the MLHolView
+and how it is deployed to support the lifecycle in our case study.
+ProvLake Architecture. ProvLake architecture is an implementation of the reference architecture (Fig. 6). Details about this
+architecture can be found in our previous work [24]. Here we give a summary, highlighting how its components are mapped
+to the reference architecture proposed in this paper. The ProvLake Library (PLLib) [49] maps to the ProvLib. ProvTracker
+implements simple queue management to receive the provenance capture events coming from the lib and also implements
+a queue consumer, thus working both as the message broker and the provenance consumer in the reference architecture.
+ProvManager maps like the reference architecture and the PolyProvQueryEngine is the component for building the
+provenance queries and sending them to the DBMS managing the MLHolView. As described in the decision S5, the
+workﬂows are speciﬁed using prospective provenance data stored as conﬁguration ﬁles. Data transformations that are
+speciﬁc and standard in ML workﬂows, e.g., training, validation, and evaluation are deﬁned beforehand following the
+conceptual data schema for the key concepts (D5) and the PROV-ML (Sec. 4) for attributes, such as hyperparameters and
+model evaluation attributes. ProvTracker uses the speciﬁed prospective provenance data to provide for the tracking by
+creating the relationships of retrospective provenance data being continuously sent by PLLib added to the workﬂows.
+ProvTracker gives unique identiﬁers (S4) to every data value captured and when there are data references (e.g., references
+to ﬁles or identiﬁers in a database table or any analogous data reference), it creates a knowledge graph relationship between
+the data value and the data store [9]. ProvManager transforms the captured data into RDF triples (the data model of the
+DBMS in use by ProvLake in this implementation) following the PROV-ML ontology (when capturing data in the learning
+phase) and PROVLake ontology (when capturing data in the previous phases of the lifecycle).
+ProvLake Deployment in the Case Study. The deployment of our case study also follows the system design decisions (Sec.
+3.2). It uses two clusters: a Kubernetes cloud cluster for data curation and learning data preparation workﬂows, and the
+other is a large HPC cluster with CPUs and GPUs for the workﬂows in the learning phase. PLLib is the only component
+in direct contact with the users’ workﬂows running in the clusters (S3). This deployment is illustrated in detail in our
+previous paper [24].
+Hardware Setup. The experiments use three environments. An HPC cluster for learning workﬂows, which has 393 Intel
+and Power8 nodes, each with 24 to 48 CPU cores, 256 to 512 GB RAM, interconnected via InﬁniBand, sharing about 3.45 PB
+in a GPFS, and using in total 946 GPUs (NVIDIA Tesla K40 and K80, each with 2880 and 4992 CUDA cores respectively); a
+Kubernetes cloud cluster for data processing, which has 4 nodes, each with 16 GB RAM and 8 cores; and a server machine
+Intel Core i7-7700T CPU 2.40 GHz, 8 GB DDR4 RAM, 128 GB SSD Liteon.
+Software Setup. ProvManager, PolyProvQueryEngine, and Prov DBMS are deployed on a virtual Kubernetes cluster with
+two nodes with 4 vCores, 16 GB RAM each, virtualized on top of the data processing cluster. ProvManager’s queue is set to
+50, and ProvTracker threads are set to 120. The workﬂow scripts of our use case are implemented in Python using different
+libraries to manipulate raw seismic ﬁles and for designing and training the ML algorithms (PyTorch V1.1) that execute in
+
+the HPC cluster. For the query performance tests, we deployed three different DBMSs on the server machine: Apache Jena
+TDB 3.12, Allegro 6.6.0, and Blazegraph 2.1.5.
+
+13
+
+5.2 Use Case Validation
+
+In this section, we investigate whether our approach supports the lifecycle by enabling users to perform comprehensive, i.e.,
+end-to-end analyses that integrate the data consumed and generated in the workﬂows, from raw domain data to learned
+models. More speciﬁcally, we investigate if the proposed data design decisions (Sec. 3.1) can be applied to answer queries
+that do such integration of the data. We explore the O&G use case described in Section 2 and validate if the data tracked by
+ProvLake, inserted in the MLHolView implementing the PROV-ML data, can answer the queries Q1–Q7. Fig. 8 shows the
+phases of the lifecycle in this use case. Next, we describe the workﬂows of the use case and how ProvLake tracks the data.
+
+Fig. 8: Summarized example of provenance tracking in an O&G use case. Details on the captured data, contents, stores,
+and the dataﬂow used to answer the queries Q1–Q7 are in Table 4.
+
+In the data curation phase, ProvLake tracks provenance while data-intensive scripts run. When processing raw ﬁles,
+essential data that will help answer the queries are extracted, associated with the ﬁle’s URI, and stored in the provenance
+database. One example of such data is the embedded geographic coordinates in raw SEG-Y seismic ﬁles. Additionally,
+geoscientists add relevant information, based on their specialized knowledge, as input to some of those scripts to be loaded
+into a domain-speciﬁc knowledge graph database, external to the provenance database, but also tracked by ProvLake
+through links between the workﬂows and the domain knowledge in the graph. Relevant information includes associated
+oil ﬁelds, basins, oil wells, and pieces of text from PDF documents with survey information related to the geological data
+acquisition process. These annotations are stored in triple stores in a domain-speciﬁc database, externally to the provenance
+database.
+
+The learning data preparation phase includes several data transformations in a pipeline that converts the curated and
+annotated scientiﬁc data into training, validation, and evaluation datasets. Each transformation contains parameters that
+specify, for instance, noise ﬁlter thresholds, input shape, or the selected seismic lines (inlines, or crosslines) of the seismic
+cube that constitutes the training dataset. Each value of these parameters, the name of the transformation, the execution
+data, and the references to input and output data are captured and represented in ProvLake’s provenance data graph.
+
+The entire process is interconnected, where each phase produces data and passes it forward for the consumption of the
+next one. Essentially, ProvLake tracks and maintains such interconnections in a provenance data graph composed of RDF
+triples. Such structures describe chained data transformations in the multiple workﬂows that constitute the inner phases
+of the major ones of the lifecycle run. RDF resources represent the data in Fig. 8, i.e., instances that extend prov:Entity
+and PROV-ML specializations. Each of these instances receives a URI, which works as a global identiﬁer throughout the
+lifecycle D4. Examples of RDF resources are learned models produced in the learning phase, a model’s hyperparameters,
+evaluation metrics, and references (ﬁle path) to actual model ﬁles stored in the ﬁle system. Provenance data graphs also
+associate execution data with learned models. Execution data may include ﬁle system metadata, a cluster’s hostname and
+node names used in the HPC jobs, job ids in the cluster scheduler, or start and end timestamps of each block of provenance
+capture events.
+
+ProvLake can keep track of data distributed in multiple stores. Such ability helps to maintain data relationships between
+raw ﬁles in the ﬁle system and structured knowledge stored in another database. Auxiliary data, such as polygons in the
+seismic cube, are stored in the Document DBMS. The system similarly tracks data references and related to the raw
+ﬁles. Other data, such as implementation details, software name, and version, are captured and stored in the provenance
+database, following the PROV-ML, but, for simplicity, we do not show them in the ﬁgure. Finally, since the system tracks
+every data and their relationships while the workﬂows execute, ProvLake enables answering online, ofﬂine, intra- and
+
+Data CurationTriple StoreFile SystemTraining, validation and test data setsCurated and  Annotated Seismic DataTrained models/data/netherlands.sgyGeoscientist's AnnotationsFile SystemDoc. DBMSStructured Domain KnowledgeURI: <http://ibm.com/netherlands.sgy>-associated oil field-associated oil basin-associated PDF files (e.g., survey info)-nearby oil wellsLearning Data PreparationLearningFiltering, Cleaning, Raw Data Extraction,Auxiliary Data CreationTraining, Validation, TestTraining Hyperparameters-batch_size: 60-max_epochs: 300-learning_rates: [0.01, 0.001]Model Hyperparameters-learning_rate: 0.01-epoch: 188Data Reference Tracking-in: /input/{train,test,valid}.hdf5-out: /models/model188.hdf5Execution Data-cluster name, host nodes-Job id-start time, end timeEvaluation Measure-confusion_matrix: [[m]]-loss: 2.2e-3-mean_iou: 7.22e-1Training, Validation, Test Data Creation PipelinesData Transformations' Parameters-curated and annotated data references-seismic slice ranges-noise threshold:  0.30-tile size: 40Data Reference Tracking-in: curated and annotated data references-out: /input/{train,test,valid}.hdf5DataWorkflowsData capturedLifecycle StepFile SystemRaw Data Extraction-file reference: /data/netherlands.sgy-filesize: 1.25 GB-inline range: [100, 750]-crossline range: [300, 1250]-geox1, geoy1: (6054167, 60735564)Data Reference Tracking-file references in the file systems-document identifiers in Doc. DBMS-instance URIs in the Triple Store-DBMSs and file systems' metadata, location, and access information14
+
+inter-training provenance queries to analyze ML data, domain-speciﬁc data, and execution data throughout the phases of
+the lifecycle, exempliﬁed by the queries Q1–Q7.
+
+To submit queries, the user sends a GET or POST request to one of PolyProvQueryEngine’s endpoints. Then, PolyProv-
+QueryEngine sends requests to ProvManager. Most of the queries are answered with simple graph traversals using standard
+SPARQL features. For instance, to answer Q1, the user provides a learned model URI (generated in the learning phase),
+and the query should traverse in the provenance data graph backward until the raw seismic ﬁle’s URI (processed in the
+data curation phase). One can get the geographic coordinates and number of seismic slices by querying the extracted data
+related to the seismic ﬁle. In turn, to obtain the oil basin and oil ﬁeld information, the query retrieves data from the resource,
+in the Triple Store, which represents structured knowledge about the seismic ﬁle. For Q2 and Q6, one can execute a similar
+graph traversal. Other queries require analytical operators, such as Q3, which requires ﬁnding the learned model with
+least (using min() native SPARQL operator) loss and returning its hyperparameters. Q4 and Q5 make use of execution
+data to provide basic statistics (min(), max(), avg() operators) about the execution time of training iterations and
+Q7 retrieves the models, their hyperparameters, their evaluation measures, and minimum batch loss per model generated
+when a speciﬁc learning dataset was used.
+
+5.3 Performance Analysis on Capturing Data during Learning Workﬂows
+
+In our use case for training an autonomous identiﬁer of geological structures (c.f. Sec 2), the learning phase generates a
+large amount of provenance data at a high frequency to stress ProvLake services. In the deep learning model training,
+there are two provenance capture calls (for the beginning and end) at each batch iteration in each learning epoch. In this
+test, each learning workﬂow executes about 35 iterations for each learning epoch and up to 300 epochs, generating about
+15,000 provenance capture events per workﬂow run. ProvTracker runs on one node in the learning cluster with 24 CPU
+cores, whereas the learning workﬂows run in parallel and distributed on up to 8 nodes, each with 28 Intel CPU cores and 6
+GPUs (K80). While running the workﬂows, PLLib captures data at runtime and sends them to ProvTracker, which in turn
+sends them to ProvManager service deployed externally on the virtual Kubernetes cluster, which ﬁnally stores them in the
+Prov DBMS. A provenance capture overhead analysis of ProvLake using synthetic workloads to highly stress the system
+and comparison with a competing system has been presented in a previous work [9]. Here, we evaluate the system design
+decisions that focus on providing distributed capture control and scalable architecture (S1–S3). We test different settings for
+provenance analysis and then test the scalability using real ML workloads in both cases. We measure the overall execution
+time of the learning workﬂow script, repeating each test at least 10 times and we plot the boxplots of the repetitions and
+the numeric values used in-text refer to the medians.
+Varying Provenance Capture Settings. The PLLib allows customizing provenance capture settings, such as the queue size
+and whether the provenance capture events should be persisted to the local disk, rather than sending to ProvTracker. Then,
+if disk only is not speciﬁed, when the scripts execute, provenance data are captured and sent to ProvTracker.
+
+For a baseline, we ﬁrst execute the training without any provenance capture, then we vary the queue size in PLLib (i.e.,
+amount of provenance capture requests accumulated in PLLib), diskless vs. diskful (i.e., saving or not provenance data in
+a log ﬁle on disk), and online vs. ofﬂine (i.e., storing or not provenance data in the DBMS, available for online provenance
+queries during the execution). As for the training datasets, we use a curated and labeled real seismic dataset using a speciﬁc
+range of seismic slices (corresponding to a regional section of a seismic cube) deﬁned by the model trainer. The results are
+in Fig. 9 (a), where the fastest result is for Queue Size = 50, Diskless, Online (Setting D). Comparing with the setting with
+no provenance capture, the added execution overhead, in this case, is only 8.6 seconds on top of 21.3 minutes, i.e., 0.67%,
+which is considered negligible. Although these workﬂows execute in parallel in a total of around 21.3 minutes, in this
+experiment, there are 8 workﬂows concurrently running using 228 CPUs and 48 GPUs. It is only a snapshot of the whole
+lifecycle, whereas in practice, this set of 8 (or more) workﬂows needs to be executed hundreds of times as users adjust the
+experiment setting and assess the model performance. They only stop when they are satisﬁed with the results, which may
+take weeks of experimentation. Also, this is a critical part of the lifecycle, responsible for stressing the provenance capture
+system while training in an HPC cluster.
+
+To analyze the queue size, we compare Settings A–C with D–F, and we see larger queues provide faster provenance
+capture since there is less but larger communication with ProvTracker service. For instance, Setting A is about 7% slower
+than D. Persistence latency (i.e., time taken between data capture in the running workﬂow and the actual persistence
+in the database) is not the focus of this experiment, as we are interested in understanding whether our approach adds
+signiﬁcant capture overhead, which is what impacts the running user workﬂow performance. However, we brieﬂy discuss
+it here as very large queues can introduce higher persistence latency and may impact the user experience, especially for
+monitoring. This latency may occur for many reasons, including network trafﬁc, from the running workﬂow to the DBMS
+passing through the provenance system, and queue throttling at the DBMS receiving the persistence events, as DBMSs
+typically also implement queuing mechanisms. In the settings with queue size 50 (D–F), a persistence latency of less than
+5 seconds was empirically observed, which is considered good enough for training monitoring. To analyze diskless vs.
+diskful settings, we compare Setting A with B and C; and D with E and F. Diskless is faster than diskful, as the latter
+introduces more I/O operations at runtime. However, comparing only the medians, the difference is negligible (less than
+0.1%). Thus, because of a higher fault tolerance provided by a diskful setting, it may be useful to append provenance data
+onto a ﬁle on disk, locally in the cluster where the workﬂow runs. Similarly, comparing the medians, we observe that the
+
+15
+
+Fig. 9: Performance analysis results. Figure 9 (a) shows the variation of provencance capture settings, where Setting D adds
+0.67% overhead. Figure 9 (b) shows the scalability results, a near-linear scalability with up to 48 GPUs and 228 CPUs.
+
+(a)
+
+(b)
+
+difference between online vs. ofﬂine (e.g., setting B vs. C or E vs. F) is also small, about 1%. Therefore, despite (D) being the
+fastest setting, (E) may be preferred because its performance is nearly the same as (D), and it has the advantage of backup
+storage for provenance data, which is quite important as provenance is used for reproducibility.
+
+Scalability Analysis. In this experiment, we want to conﬁrm if the execution strategies on an HPC cluster are keeping
+the overhead low in a real ML workload, running multiple learning workﬂows in parallel. We run a weak scalability test
+by increasing the number of processing units while increasing the data size. We use the fastest setting of the previous
+experiment (i.e., D) and the same seismic cube. To set up the training datasets, the trainer selects up to 8 different sets of
+seismic slices, where each set has the same length (i.e., nearly the same data size). Thus, for x ∈ {1, 2, 4, 8}, there are x
+workﬂows running on x nodes in parallel, summing 28x Intel CPU cores, 6x GPUs, 4992 ∗ 6x CUDA GPU cores, using
+in total an input dataset with size x ∗ datasize, where datasize is the size of a dataset formed by 1 set of seismic slices.
+The results are in Fig.9 (b), where we illustrate the linear scalability as a horizontal line passing through the median of the
+smallest setting (x = 1). Ideally, the medians should be near this line. If they are not, it means that ProvTracker is taking
+too long to answer, caused by high stress in the system due to too many provenance capture requests, adding latency to the
+training. However, we see that even in the largest setting (i.e., x = 8), the execution time remains close to the linear curve.
+The boxes remain within a small margin of 0.2 min (or 0.9% of the x = 1 median) between 21.4 and 21.6 min, meaning
+that the system delivers a constant and predictable behavior even at larger scales. We note though that the variance grows
+with the scale, caused by the larger number of parallel tasks. Therefore, we conclude that at least for this scale (up to 48
+K80 GPUs), the provenance capture system delivers good scalability.
+
+5.4 Query Comparisons With and Without PROV-ML
+
+In this experiment, we analyze the beneﬁts of PROV-ML, both qualitatively and quantitatively. We begin with a qualitative
+comparison of queries that use PROV-ML, highlighting its expressiveness and the complexity of building queries that use
+or not PROV-ML. Then, we further provide a quantitative analysis to investigate whether using PROV-ML can help to
+accelerate queries and, if it can, how much it helps. Among the queries Q1–Q7, we select three to compare in detail: Q1,
+Q5, Q7, and the reason for this choice is that they increase in complexity and how much they make use of the concepts
+modeled speciﬁcally in the PROV-ML ontology (i.e., emphasis on the learning phase, c.f. Sec. 4). Q1 is the simplest query
+and makes the least use of PROV-ML speciﬁc concepts, Q7 is the most complex query with the heaviest use of PROV-ML,
+and Q5 is in between these two. We write the selected queries both with and without the PROV-ML ontology (written in
+OWL) using SPARQL 1.1. The query complexity stems from the number of clauses to ﬁlter, patterns to match in the graph
+traversal, aggregations and sorting, and amount of triples that satisfy the patterns to match; and the number of clauses that
+make use of the PROV-ML ontology deﬁnes how much each query makes use of the PROV-ML ontology.
+Qualitative comparison. Since Q7 is the most complex query and makes heavy use of PROV-ML, it helps us to illustrate
+whether PROV-ML eases query building, especially when there is heavy use of Learning phase concepts. Excerpts of Q7 in
+SPARQL with and without PROV-ML are available in the Listings 1 and 2, respectively. Comparing both, since PROV-ML
+has specialized concepts for the Learning phase, it requires fewer clauses to be matched to express the same concept. For
+instance, to match triples in the training stage only, with PROV-ML, we just write one clause (Lst. 1#L2), whereas without
+PROV-ML we need to write four clauses to qualify the data transformation needed for the query (Lst. 2#L1–6). This is
+because there are other stages (evaluation, validation), and since without PROV-ML there are no speciﬁc types for each
+stage, we need to qualify the variable ?training to determine the correct stage. Without PROV-ML, the only resource we
+have to do this is to tag the data transformations that are related to training. In PROVLake ontology, tagging of workﬂows,
+data transformations, and attributes is possible with the property provlake:tag, but since naming, schema deﬁnitions,
+and tagging are available only in the prospective part, we need three more clauses: one to relate the retrospective instance
+with its prospective instance (Lst. 2#L4), other to give the type of the prospective instance (#L6), and a third clause to
+qualify the data transformation as “Training” using the tag property (#L7). A similar fact happens for the epoch iteration
+part of the query (Lst. 1#L3–6 and Lst. 2#L8–12) and also for the model reference (Lst. 1#L16–19 and Lst. 2#L26–33) and
+
+No ProvQSize 1DisklessOnlineQSize 1DiskfulOnlineQSize 1DiskfulOfflineQSize 50DisklessOnlineQSize 50DiskfulOnlineQSize 50DiskfulOffline21.021.221.421.621.822.0Execution Time (min)(A)(B)(C)(D)(E)(F)x=1x=2x=4x=821.021.221.421.621.822.0Execution Time (min)Linear16
+
+for model evaluation (Lst. 1#L20–24 and Lst. 2#L34–42). However, the model hyperparameters part of Q7 differs from the
+others because Q7 requires the name of the hyperparameters, in addition to the values, and names are stored within the
+prospective portion of the data. In this case, Q7 demands a relationship between prospective and retrospective, regardless
+it is with PROV-ML or not. The only difference between with and without PROV-ML for such cases is that with PROV-ML,
+we do not need tags to qualify the attributes of interest (Lst. 2#L24, as we can specify hyperparameters using the specialized
+type (Lst. 1#L14). As a result, in these cases, only one extra clause is needed.
+
+Therefore, we found that when the parts of the query do not demand prospective provenance data, one needs to write
+three extra clauses when not using PROV-ML (a clause to relate the retrospective with prospective, another to give the
+prospective instance type, and a third clause to qualify this instance, often using tags or labels). However, when the query
+demands prospective provenance data, one needs only an extra clause (to qualify the instance), because the relationship
+and types will be required regardless it uses PROV-ML or not. These observations are in Table 3. We veriﬁed the same
+behavior in the queries Q1 and Q5.
+
+TABLE 3: Qualitative comparison of Q7 in terms of number of clauses with and without PROV-ML.
+
+Q7 Query part
+Training stage
+Epoch iteration
+Model hyperparameters
+Model
+Model evaluation
+
+#Clauses w/ PROV-ML
+1
+2
+6
+2
+3
+
+#Clauses w/o PROV-ML
+4
+5
+7
+5
+6
+
+Thus, we conclude that PROV-ML’s ability to qualify speciﬁc ML data transformations and attributes using direct types
+eases query building, as it reduces the number of clauses required to express ML-speciﬁc concepts compared to a data
+representation that does not use PROV-ML. A reduction of one to three clauses per query part was observed in all queries.
+Quantitative comparison. We discussed in Section 3.1 that certain data design decisions might accelerate queries that make
+use of the deﬁned concepts, and it is known that design choices when modeling an ontology may impact the performance
+of queries. Also, a recent work that evaluated schema optimization to speed up queries in knowledge graphs [38], showed
+that this is still a relevant topic to be investigated. Therefore, in addition to the qualitative gains discussed previously, we
+conduct a quantitative evaluation experiment to verify how much (if any) PROV-ML impacts query performance.
+
+We generate 2 synthetic datasets that mimic the real use case evaluated in Sections 5.2 and 5.3. With the synthetic dataset,
+we can control experiment variables, such as the numbers of parallel learning workﬂows, hyperparameters, epochs, and
+batches per epoch, as well as the model evaluation metrics. We can also generate one dataset that uses PROV-ML and
+another that does not. If using only the real data for this experiment, it would be much harder to reproduce and control
+these conditions, whereas with these two synthetic datasets, it is more cost effective and feasible to switch between
+with and without PROV-ML, rather than having to implement, deploy, and run the real learning workﬂows without
+PROV-ML. Both datasets are as follows: 8 parallel learning workﬂows, each with the 3 stages (training, validation, and
+evaluation), 300 epochs,and 200 batches per epoch (i.e., 60,000 batches), where each batch is associated with batch losses
+and hyperparameters, and each epoch uses hyperparameters and generates models and model evaluations. In total, each
+dataset has 10,168,890 triples.
+
+The performance impact depends on the number of clauses to be matched in the query and on the number of triples
+matched by the Triple Store DBMS. However, the performance depends on the underlying DBMS that manages the
+MLHolView, since the DBMS might implement efﬁcient indexing mechanisms, parallelism techniques, or data transforma-
+tion strategies. Therefore, for this experiment, we analyze the three queries (Q1, Q5, Q7). Q1 does a simple graph traversal
+with simple pattern matching. Q5 does more complex graph traversals and needs to calculate aggregates (average of
+time difference per batch, per epoch), but for training stages only. Q7 also does complex traversals and needs to calculate
+aggregates (minimum batch loss per epoch), but for three stages (training, validation, and evaluation), in addition to listing
+hyperparameters and model performance. Since the choice of the underlying DBMS may impact the results, we analyze
+three different DBMSs: AllegroGraph, Blazegraph, and Jena TDB running on the same hardware and same conditions, with
+their default settings (no special ﬁne-tuning are performed in any DBMS). We analyze the query execution time, which is
+measured in the requesting client subtracting the timestamp obtained immediately after the response has arrived in the
+client from the timestamp obtained immediately before sending the request. Results are in Figure 10, where we plot the
+medians of the query execution time over a hundred repetitions or when the conﬁdence interval of the medians was below
+5%. The numeric values reported in-text also refer to the median of the repetitions, we do not remove outliers, the height
+of the conﬁdence intervals are the error bars, and Q7 results are in log scale.
+
+1 -- Training stage
+2 ? t r a i n i n g a provml : T r a i n i n g E x e c u t i o n .
+3 -- Epoch iteration (Training section)
+4 ? e p o c h e x e c t r a i n i n g
+5
+
+prov : wasInformedBy ? t r a i n i n g ;
+a provml : T r a i n i n g S e c t i o n E x e c u t i o n .
+
+6
+7 -- Model hyperparameters
+8 ? epoch training hyperparam
+9
+
+10
+
+11
+
+12
+
+prov : wasGeneratedBy ? e p o c h e x e c t r a i n i n g ;
+a provml : ModelHyperparameterValue ;
+prov : value ? epoch training hyperparam v ;
+prov : wasDerivedFrom ?
+epoch training hpram psp .
+
+13 ? epoch training hpram psp
+14
+
+a provml : LearningHyperparameterSetting ;
+r d f s : l a b e l ? epoch training hyperparam name .
+
+15
+16 -- Model
+17 ? m o d e l
+18
+
+t r a i n i n g
+
+prov : wasGeneratedBy ? e p o c h e x e c t r a i n i n g ;
+a provml : Model .
+19
+20 -- Model evaluation
+t r a i n i n g e v a l
+21 ? m o d e l
+22
+
+prov : wasGeneratedBy ? e p o c h e x e c t r a i n i n g ;
+a provml : ModelEvaluation ;
+prov : value ? m o d e l
+
+t r a i n i n g e v a l v a l u e .
+
+23
+
+24
+
+Listing 1: Excerpt of Q7 with PROV-ML.
+
+17
+
+1 -- Training stage
+2 ? t r a i n i n g a
+3
+
+4
+5 ? t r a i n i n g p r o s p
+6
+
+provlake : DataTransformationExecution ;
+prov : wasInfluencedBy ? t r a i n i n g p r o s p ;
+
+a provlake : DataTransformation ;
+provlake : t a g ” T r a i n i n g ” .
+
+7
+8 -- Epoch iteration (Training Section)
+9 ? e p o c h e x e c t r a i n i n g
+10
+
+prov : wasInformedBy ? t r a i n i n g ;
+a provlake : DataTransformationExecution ;
+prov : wasInfluencedBy e p o c h e x e c t r a i n i n g p s p
+.
+
+13 ? e p o c h e x e c t r a i n i n g p s p
+14
+
+a provlake : DataTransformation ;
+r d f s : l a b e l ”Epoch Exe cutio n ” .
+
+15
+16 -- Model hyperparameters
+17 ? epoch training hyperparam
+18
+
+prov : wasGeneratedBy ? e p o c h e x e c t r a i n i n g ;
+a provlake : A t t r i b u t e V a l u e ;
+prov : value ? epoch training hyperparam v ;
+prov : wasDerivedFrom ?
+epoch training hpram psp .
+
+22 ? epoch training hpram psp
+a provlake : A t t r i b u t e ;
+23
+provlake : t a g ” Hyperparameter ” ;
+r d f s : l a b e l ? epoch training hyperparam name .
+
+24
+
+a provlake : A t t r i b u t e V a l u e .
+prov : wasGeneratedBy ? e p o c h e x e c t r a i n i n g ;
+prov : wasDerivedFrom ? model
+
+training prosp .
+
+25
+26 -- Model
+27 ? m o d e l
+28
+
+t r a i n i n g
+
+30
+31 ? mod el
+32
+
+training prosp
+a provlake : A t t r i b u t e ;
+provlake : t a g ”Model” .
+
+33
+34 -- Model evaluation
+t r a i n i n g e v a l
+35 ? m o d e l
+36
+
+prov : wasGeneratedBy ? e p o c h e x e c t r a i n i n g ;
+a provlake : A t t r i b u t e V a l u e ;
+prov : value ? m o d e l
+prov : wasDerivedFrom ? m o d e l
+.
+
+t r a i n i n g e v a l v a l u e ;
+
+t r a i n i n g e v a l p s p
+
+40 ? m o d e l
+41
+
+t r a i n i n g e v a l p s p
+
+a provlake : A t t r i b u t e V a l u e ;
+provlake : t a g ”Model E v a l u a t i o n ” .
+
+11
+
+12
+
+19
+
+20
+
+21
+
+29
+
+37
+
+38
+
+39
+
+42
+
+Listing 2: The same excerpt of Q7, without PROV-ML.
+
+Fig. 10: Execution time comparison of queries using PROV-ML vs. queries without PROV-ML. Q7 is in log scale.
+
+The results show that for Q1, PROV-ML does not signiﬁcantly impact query performance since the queries using PROV-
+ML are only 1.17x and 1.05x slower in AllegroGraph and BlazeGraph, respectively; and the difference for Jena is within the
+error bars, i.e., no statistically signiﬁcant difference. However, Q1 is only the simplest query, with trivial graph traversals
+and little use of PROV-ML speciﬁc concepts, and with query times up to a hundred milliseconds (very fast queries). The
+DBMSs are likely spending more time doing data transfers than actually computing the query, which would explain the
+higher error bars for Q1 than for Q5 and Q7, for which the error bars are so small (<1%) that can barely be seen in the
+plot. Nevertheless, Q5 and Q7 show a different behavior, particularly for the DBMSs AllegroGraph and BlazeGraph. In
+Q5, the queries with PROV-ML are 1.22x, 2.9x, and 2x faster in Jena, AllegroGraph, and BlazeGraph, respectively. In Q7,
+they are 3x faster in AllegroGraph and 16.6x (an order of magnitude) faster in BlazeGraph, whereas in Jena, the results are
+nearly the same. Since Q5 and Q7 need to aggregate over 60,000 batches per learning stage, and Q7 has over three learning
+stages, these queries are considerably more complex than Q1, make much heavier use of PROV-ML speciﬁc concepts, and
+require complex operations in the DBMS. We analyze the system statistics while these two queries execute, and we observe
+
+JenaAllegroGraphBlazeGraph0.000.020.040.060.080.10Query Execution Time (s)Q1JenaAllegroGraphBlazeGraph0246810Query Execution Time (s)Q5JenaAllegroGraphBlazeGraph101102103Log Query Execution Time (s)Q7With PROV-MLWithout PROV-MLfull CPU utilization. With these queries, we can see that those clauses that are reduced because of PROV-ML types make
+a difference in the query performance, with signiﬁcant gains in AllegroGraph and BlazeGraph. In Jena, there were gains
+(more clearly seen in Q5), but they were not as relevant as in the other two DBMSs. Therefore, we conclude that PROV-ML
+not only has qualitative advantages, such as expressiveness for ML-speciﬁc concepts and reduced complexity to write
+queries, but it can also help the performance of the queries, as it shows acceleration in almost all cases, particularly an
+order of magnitude faster for complex queries in certain workloads.
+
+18
+
+5.5 Utilization and Customizing the Approach to other Applications and Domains
+
+Our approach is driven by queries, meaning that depending on the classes of queries (Sec. 2.3) the users involved in
+the lifecycle of the ML models want to execute over the MLHolView (D1), they will know what to capture in their
+workﬂows. Then, they can declaratively design each workﬂow in the lifecycle by specifying the data transformations
+they want to make explicit, along with the input and output data of each transformation. In our current implementation,
+this speciﬁcation is done using conﬁguration ﬁles. To enable runtime data capture and integration in their workﬂows,
+users import a lightweight library (PLLib) and add the data capture calls into the workﬂow codes (see S1, S5). The PLLib
+is publicly available on GitHub [49], with examples for data transformation instrumentation. During the speciﬁcation,
+users also inform which data transformations are for training, validation, and evaluation, and which attributes of the
+transformation are hyperparameters and evaluation metrics. Such speciﬁcation is used by ProvManager to create the
+nodes, their properties, and their relationships in the knowledge graph MLHolView using PROV-ML (D2, D3). Also, in
+this speciﬁcation, users inform (and add metadata about) the data stores being used by the workﬂows and the execution
+environments. Users can always revisit the set of queries they want to execute to either improve the queries (e.g., adding
+new ﬁelds in the projection or new ﬁlters) or add new queries, then they revisit the workﬂows speciﬁcation and check if
+the hooks they add will capture the data they need for the queries.
+
+In addition, as we observe in Section 5.2, by leveraging a domain-speciﬁc knowledge graph (D2), our approach can
+provide queries with rich semantics about the domain data. To enable this, during the speciﬁcation phase, users inform
+which data transformations and attributes are known concepts in the domain (i.e., have been previously designed in a
+domain ontology), so that during the capture, ProvLake will create the relationships between the captured provenance
+data with the domain-speciﬁc concepts in the knowledge graph. This is an optional step, although it improves the overall
+users’ understanding of the data ﬂowing in the lifecycle, as the users typically are familiarized with the domain. For each
+application and domain, there is a speciﬁc ontology and knowledge graph with concepts and instances that make sense
+to that application or domain. The process of building a domain-speciﬁc ontology is out of the scope of this work. Our
+approach focuses on creating the relationships, in the MLHolView, between the heterogeneous workﬂow data and the
+domain-speciﬁc knowledge graph.
+
+5.6 Lessons Learned
+
+We draw a set of lessons learned after the practical experience of implementing the data and system design decisions to
+support the lifecycle in a real deployment in an O&G industry case that uses heterogeneous environments, i.e., a Kubernetes
+cluster and a large HPC cluster with CPUs and GPUs. The key ﬁndings for the success of the experiments are the following:
+(i) Characterizing the lifecycle and identifying the main classes for data analysis using provenance allowed the
+understanding of the different needs in scientiﬁc ML (Sec. 2). Particularly, it helped to understand the different
+personas driving the provenance capture to answer key online and ofﬂine, intra- and inter-training provenance queries.
+The queries were capable of analyzing ML data, domain-speciﬁc data, and execution data, throughout the data curation,
+data preparation, and learning phases of the lifecycle in an integrated way. We observed that the data curation phase is the
+most complex. One needs to address it carefully to take advantage of domain-speciﬁc knowledge, which highly beneﬁts
+trainers in the learning phase.
+
+(ii) Employing provenance tracking and a data representation that allows data integration of multiple workﬂows
+helped to address the highly heterogeneous nature of the lifecycle. To accomplish such integration, it was key to promote
+a holistic view of the lifecycle, end-to-end, which we called MLHolView, as described in the data design decision D1, which
+enabled the comprehensive data analyses (e.g., Q1–Q7), thus supporting the lifecycle, which is our main motivation.
+Due to the highly heterogeneous nature, the context-awareness using domain-speciﬁc and ML data and knowledge
+materialized in a knowledge graph leveraging provenance-based relationships (D2) enabled tracking, persisting, and
+querying interconnections between heterogeneous data with details about localization and data access. Furthermore, it
+enabled queries with rich semantics about the application domain and ML, exploring new data relationships that would
+not be possible without such context awareness.
+
+(iii) Designing a conceptual data schema focused on the key concepts enabled the design and implementation of
+the system facilitating query building, and the ML-specialized schema modeling. The key concepts are described in
+D5. It enabled query acceleration and facilitated query building for queries that make heavy use of ML-speciﬁc concepts
+compared with a schema that does not have such specializations. Yet, the focused schema was the basis for PROV-ML
+(Sec. 4), which served as the underlying schema for the provenance system. PROV-ML combines the provenance of data
+lakes to address integration, embracing the heterogeneity nature, with concepts for ML (D3). PROV-ML leverages W3C
+
+contributions for provenance, W3C PROV [22], and for ML, ML Schema [23]. We hope other systems with similar purposes
+can adopt such representation.
+
+(iv) The system design decisions enabled data capture and integration in a highly heterogeneous and distributed
+setting adding negligible overhead. Particularly, S1 and S2 provided the portability and ﬂexibility needed in such
+deployments. The scalable strategies (S3) allowed the system to do this while incurring low overhead as well, even in
+HPC workloads.
+
+19
+
+6 RELATED WORK
+The interest in workﬂow provenance management has increased in the recent years, driven by a major effort by the
+provenance community [50], [51], [52], [53], [54], [55], [31], [56], [57], [35], [58], [59], [60], [61], [62] , particularly to explore
+possibilities of optimizing workﬂows with the data captured by provenance tools and as a response to the urgent need
+for reproducible science, which is critical in scientiﬁc ML [63]. To exemplify, Thavasimani et al. [14] investigate provenance
+traces recorded during workﬂow executions to observe differences in results with minor workﬂow conﬁguration differ-
+ences. Other works have advanced provenance tracking techniques on heterogeneous data, stores, and environments [39],
+[36], [64], [65] and others have explored the intersection of provenance and blockchain [66], [67].
+
+On the intersection between ML and provenance, other works have explored provenance to support ML workﬂows [17],
+[26], [68], [18], [19], [69] and Deelman et al. [70] characterized provenance analysis to leverage ML in support of scientiﬁc
+workﬂows. On reproducible ML models, another aspect that has been explored is the use of provenance as an essential
+tool to help create explainable artiﬁcial intelligence [20], [63]. In addition, some works addressed the gap between the
+experiments of an ML workﬂow execution and a standard representation to provide reproducible experiments [45], [46],
+[23]. Esteves et al. [45] provide a machine-readable vocabulary and a common schema for reproducibility of ML experiments
+in various frameworks and workﬂow systems. Publio et al. [46] present a new ML data representation based on MEX
+vocabulary [45] to improve processes on ML workﬂows, despite not having a clear separation between prospective and
+retrospective provenance. Samuel [71] propose ProvBook, for reproducibility of ML experiments using Jupyter notebooks
+applying FAIR data principles. Moreno et al. proposed MLWfM [72] to provide data concepts for ML and domain-speciﬁc
+awareness, but without provenance concepts and a data representation. Brandao et al. [73] proposed a knowledge-based
+workﬂow management approach aiming at broadening user collaboration over ML experiments. It provided a semantic
+structure for computational workﬂows allowing rich querying at different levels of provenance.
+
+These works are important building blocks to support the lifecycle of scientiﬁc ML using provenance management
+techniques. Nevertheless, they still lack a holistic view capable of comprehensively integrating the data in the whole
+lifecycle, end-to-end, from raw domain data to learned models. Without such a holistic view, the ML-speciﬁc concepts
+cannot integrate with the speciﬁc concepts about the scientiﬁc domain, jeopardizing the comprehensive end-to-end analyses
+that require richer semantics about the domain integrated with rich semantics about ML.
+
+7 CONCLUSIONS
+In this work, we aimed at enabling scientists and engineers to perform comprehensive data analyses in the lifecycle
+of scientiﬁc ML. We proposed workﬂow provenance techniques to address the problem of dealing, in an integrated and
+comprehensive way, with the high heterogeneity of different contexts (e.g., data, software, environments, persona) involved
+in the lifecycle, to enable such analyses. We proposed modeling the workﬂows in all phases of this lifecycle as multiple
+interconnected workﬂows. A holistic view of the data processed in these workﬂows should be built as the workﬂows
+execute. In this way, the collaborating teams can use it as their primary source of data analyses that integrate that from raw
+data to learned ML models. We called it as Provenance-based Holistic Data View of the Lifecycle of Scientiﬁc ML (MLHolView).
+It is materialized as a knowledge graph with provenance-based relationships. It is aware of the contexts of the data
+transformations in the workﬂows, their (hyper)parameterizations and model metrics, which computational environments
+they run and data stores they use, the involved personas, and how they interact with the workﬂows.
+
+To be able to build this view, aware of these many dimensions of heterogeneity, we ﬁrst characterized the lifecycle
+and proposed a taxonomy for the classes of data analyses (e.g., data, execution timing, and training timing). Then, we
+proposed design principles for the effective and efﬁcient management of provenance data from these workﬂows. From
+this understanding and design principles, we derived the PROV-ML data representation, promoting such a holistic view
+of data in workﬂows in the lifecycle, which is the ﬁrst one to the best of our knowledge.
+
+We also proposed system design principles and a reference system architecture to provide the view with efﬁcient
+provenance capture adding signiﬁcant data capture overhead (<1%). It allows for portable and ﬂexible deployments
+required because of the heterogeneous executions. We obtained these results after implementing the design principles
+and the PROV-ML in the ProvLake system and deploying it in a real case in the O&G industry. Altogether, based on
+our studies, our major ﬁnding is that the design principles enabled comprehensive queries, with rich semantics about the
+domain and ML, by exploring the data view while maintaining high scalability even in HPC workloads. Finally, ongoing
+work is towards applying our approach in the ﬁnance industry, to integrate workﬂows in cloud and HPC clusters to train
+ML models for credit risk assessment. The preliminary results indicate that our approach can be customized with the effort
+described in Section 5.5.
+
+20
+
+REFERENCES
+
+J. Hesthaven and G. Karniadakis. Scientiﬁc machine learning workshop. [Online]. Available: https://icerm.brown.edu/events/ht19-1-sml
+
+[1]
+[2] Y. Gil, S. A. Pierce, H. Babaie, A. Banerjee, K. Borne, G. Bust, M. Cheatham, I. Ebert-Uphoff, C. Gomes, M. Hill, J. Horel, L. Hsu, J. Kinter,
+C. Knoblock, D. Krum, V. Kumar, P. Lermusiaux, Y. Liu, C. North, V. Pankratius, S. Peters, B. Plale, A. Pope, S. Ravela, J. Restrepo, A. Ridley,
+H. Samet, and S. Shekhar, “Intelligent systems for geosciences: an essential research agenda,” CACM, 2018.
+
+[3] M. Raissi, P. Perdikaris, and G. Karniadakis, “Physics-informed neural networks: a deep learning framework for solving forward and inverse
+
+problems involving nonlinear partial differential equations,” J. Comp. Physics, 2019.
+
+[4] E. Rodrigues, I. Oliveira, R. Cunha, and M. Netto, “DeepDownscale: a deep learning strategy for high-resolution weather forecast,” in IEEE
+
+eScience, 2018.
+
+[5] D. S. Chevitarese, D. Szwarcman, E. V. Brazil, and B. Zadrozny, “Efﬁcient classiﬁcation of seismic textures,” in IJCNN, 2018.
+[6] M. Mattoso, C. Werner, G. Travassos, V. Braganholo, E. Ogasawara, D. de Oliveira, S. Cruz, W. Martinho, and L. Murta, “Towards supporting
+
+the life cycle of large-scale scientiﬁc experiments,” IJBPIM, 2010.
+
+[7] H. Miao, A. Li, L. S. Davis, and A. Deshpande, “Modelhub: Deep learning lifecycle management,” in ICDE, 2017.
+[8]
+
+S. Schelter, J.-H. Boese, J. Kirschnick, T. Klein, and S. Seufert, “Automatically tracking metadata and provenance of machine learning
+experiments,” in MLS@NIPS, 2017.
+
+[9] R. Souza, L. Azevedo, R. Thiago, E. Soares, M. Nery, M. A. S. Netto, E. V. Brazil, R. Cerqueira, P. Valduriez, and M. Mattoso, “Efﬁcient
+
+runtime capture of multiworkﬂow data using provenance,” in IEEE eScience, 2019.
+
+[10] N. Polyzotis, S. Roy, S. Whang, and M. Zinkevich, “Data lifecycle challenges in production machine learning: a survey,” SIGMOD Rec., 2018.
+[11] M. Herschel, R. Diestelk¨amper, and H. B. Lahmar, “A survey on provenance: What for? what form? what from?” VLDB, 2017.
+[12] L. Moreau, B. Lud¨ascher, I. Altintas, R. S. Barga, S. Bowers, S. Callahan, G. Chin JR., B. Clifford, S. Cohen, S. Cohen-Boulakia, S. Davidson,
+E. Deelman, L. Digiampietri, I. Foster, J. Freire, J. Frew, J. Futrelle, T. Gibson, Y. Gil, C. Goble, J. Golbeck, P. Groth, D. A. Holland, S. Jiang,
+J. Kim, D. Koop, A. Krenek, T. McPhillips, G. Mehta, S. Miles, D. Metzger, S. Munroe, J. Myers, B. Plale, N. Podhorszki, V. Ratnakar, E. Santos,
+C. Scheidegger, K. Schuchardt, M. Seltzer, Y. L. Simmhan, C. Silva, P. Slaughter, E. Stephan, R. Stevens, D. Turi, H. Vo, M. Wilde, J. Zhao, and
+Y. Zhao, “Special issue: The ﬁrst provenance challenge,” CCPE, 2008.
+
+[13] P. Buneman and W.-C. Tan, “Data provenance: What next?” SIGMOD Rec., 2019.
+[14] P. Thavasimani and P. Missier, “Facilitating reproducible research by investigating computational metadata,” in IEEE Big Data, 2016.
+[15] R. Souza, V. Silva, J. J. Camata, A. Coutinho, P. Valduriez, and M. Mattoso, “Keeping track of user steering actions in dynamic workﬂows,”
+
+FGCS, 2019.
+
+[16] V. Sousa, D. Oliveira, P. Valduriez, and M. Mattoso, “Analyzing related raw data ﬁles through dataﬂows,” CCPE, 2016.
+[17] H. Miao, A. Li, L. S. Davis, and A. Deshpande, “Towards uniﬁed data and lifecycle management for deep learning,” in ICDE, 2017.
+[18] M. Zaharia, A. Chen, A. Davidson, A. Ghodsi, S. Hong, A. Konwinski, S. Murching, T. Nykodym, P. Ogilvie, M. Parkhe, F. Xie, and C. Zumar,
+
+“Accelerating the machine learning lifecycle with MLﬂow,” in IEEE Data Eng. Bulletin, 2018.
+
+[19] D. Pina, L. Kunstmann, A. Paes, D. Oliveira, and M. Mattoso, “An´alise de hiperparˆametros em aplicac¸ ˜oes de aprendizado profundo por meio
+
+de dados de proveniˆencia,” in SBBD, 2019.
+
+[20] C. Lucero, B. Coronado, O. Hui, and D. S. Lange, “Exploring explainable artiﬁcial intelligence and autonomy through provenance,”
+
+XAI@IJCAI, 2018.
+
+[21] M. Balazinska, S. Chaudhuri, A. Ailamaki, J. Freire, S. Krishnamurthy, and M. Stonebraker, “The next 5 years: what opportunities should the
+
+database community seize to maximize its impact?” in SIGMOD, 2020.
+
+[22] P. Groth and L. Moreau.
+
+(2020) W3C PROV: an overview of
+
+the prov family of documents.
+
+[Online]. Available: https:
+
+//www.w3.org/TR/prov-overview
+
+[23] A. Lawrynowicz, P. Panov, J. Vanschoren, and D. Esteves. Mls: Machine learning schema community group. [Online]. Available:
+
+https://www.w3.org/community/ml-schema/
+
+[24] R. Souza, L. Azevedo, V. Lourenc¸o, E. Soares, R. Thiago, R. Brand˜ao, D. Civitarese, E. Brazil, M. Moreno, P. Valduriez, M. Mattoso,
+R. Cerqueira, and M. A. S. Netto, “Provenance data in the machine learning lifecycle in computational science and engineering,” in
+WORKS@Supercomputing, 2019.
+
+[25] S. B. Davidson and J. Freire, “Provenance and scientiﬁc workﬂows: challenges and opportunities,” in SIGMOD, 2008.
+[26] Z. Miao, Q. Zeng, B. Glavic, and S. Roy, “Going beyond provenance: explaining query answers with pattern-based counterbalances,” in
+
+SIGMOD, 2019.
+
+[27] R. F. Silva, R. Filgueira, I. Pietri, M. Jiang, R. Sakellariou, and E. Deelman, “A characterization of workﬂow management systems for
+
+extreme-scale applications,” FGCS, 2017.
+
+[28] G. Guerra, F. A. Rochinha, R. Elias, D. De Oliveira, E. Ogasawara, J. F. Dias, M. Mattoso, and A. L. Coutinho, “Uncertainty quantiﬁcation in
+
+computational predictive models for ﬂuid dynamics using a workﬂow management engine,” Int. J. Uncertain. Quantif., 2012.
+
+[29] R. Souza, V. Silva, A. L. Coutinho, P. Valduriez, and M. Mattoso, “Data reduction in scientiﬁc workﬂows using provenance monitoring and
+
+user steering,” FGCS, 2017.
+
+[30] J. Pimentel, J. Freire, L. Murta, and V. Braganholo, “A survey on collecting, managing, and analyzing provenance from scripts,” ACM Surv.,
+
+2019.
+
+[31] L. F. Sikos and D. Philp, “Provenance-aware knowledge representation: a survey of data models and contextualized knowledge graphs,”
+
+Data Sci. Eng, 2020.
+
+[32] R. M. Thiago, R. Souza, L. Azevedo, E. F. D. S. Soares, R. Santos, W. Dos Santos, M. De Bayser, M. C. Cardoso, M. F. Moreno, and R. Cerqueira,
+
+“Managing data lineage of o&g machine learning models: the sweet spot for shale use case,” in EAGE Digital, 2020.
+
+[33] R. Souza, A. Codas, J. A. Nogueira Junior, M. P. Quinones, L. Azevedo, R. Thiago, E. Soares, M. Cardoso, and L. Martins, “Supporting the
+
+training of physics informed neural networks for seismic inversion using provenance,” in AAPG, 2020.
+
+[34] V. Silva, D. Oliveira, P. Valduriez, and M. Mattoso, “DfAnalyzer: runtime dataﬂow analysis of scientiﬁc applications using provenance,”
+
+VLDB, 2018.
+
+[35] C. Goble, S. Cohen-Boulakia, S. Soiland-Reyes, D. Garijo, Y. Gil, M. R. Crusoe, K. Peters, and D. Schober, “FAIR computational workﬂows,”
+
+Data Intelligence, 2019.
+
+[36] D. Hu, D. Feng, Y. Xie, G. Xu, X. Gu, and D. Long, “Efﬁcient provenance management via clustering and hybrid storage in big data
+
+environments,” IEEE Trans. on Big Data, 2019.
+
+[37] D. Oliveira, V. Silva, and M. Mattoso, “How much domain data should be in provenance databases?” in TaPP, 2015.
+[38] C. Lei, R. Alotaibi, A. Quamar, V. Efthymiou, and F. ¨Ozcan, “Property graph schema optimization for domain-speciﬁc knowledge graphs,”
+
+arXiv, 2020.
+
+[39] I. Suriarachchi and B. Plale, “Crossing analytics systems: A case for integrated provenance in data lakes,” in IEEE eScience, 2016.
+[40] P. Missier, B. Lud¨ascher, S. Bowers, S. Dey, A. Sarkar, B. Shrestha, I. Altintas, M. K. Anand, and C. Goble, “Linking multiple workﬂow
+
+provenance traces for interoperable collaborative science,” in WORKS@Supercomputing, 2010.
+
+[41] F. Costa, V. Silva, D. Oliveira, K. Oca ˜na, E. Ogasawara, J. Dias, and M. Mattoso, “Capturing and querying workﬂow runtime provenance
+
+with prov: a practical approach,” in EDBT/ICDT workshops, 2013.
+
+[42] R. Souza and M. Mattoso, “Provenance of dynamic adaptations in user-steered dataﬂows,” in IPAW, 2018.
+
+21
+
+[43] R. Souza, V. Silva, A. A. B. Lima, D. Oliveira, P. Valduriez, and M. Mattoso, “Distributed in-memory data management for workﬂow
+
+executions,” PeerJCS, 2021.
+
+[44] D. Koop, E. Santos, B. Bauer, M. Troyer, J. Freire, and C. T. Silva, “Bridging workﬂow and data provenance using strong links,” in SSDBM,
+
+2010.
+
+[45] D. Esteves, D. Moussallem, C. B. Neto, T. Soru, R. Usbeck, M. Ackermann, and J. Lehmann, “Mex vocabulary: a lightweight interchange
+
+format for machine learning experiments,” in ICSS. ACM, 2015, pp. 169–176.
+
+[46] G. C. Publio, D. Esteves, A. Ławrynowicz, P. Panov, L. Soldatova, T. Soru, J. Vanschoren, and H. Zafar, “ML Schema: exposing the semantics
+
+of machine learning with schemas and ontologies,” in ICML, 2018.
+[47] IBM. Provlake website. [Online]. Available: https://ibm.biz/provlake
+[48] M. Li, T. Zhang, Y. Chen, and A. J. Smola, “Efﬁcient mini-batch training for stochastic optimization,” in Proceedings of the 20th ACM SIGKDD
+International Conference on Knowledge Discovery and Data Mining, ser. KDD ’14. New York, NY, USA: Association for Computing Machinery,
+2014, p. 661–670. [Online]. Available: https://doi.org/10.1145/2623330.2623612
+
+[49] IBM. Provlakelib github repository. [Online]. Available: https://github.com/IBM/multi-data-lineage-capture-py
+[50] P. Thavasimani, J. Cała, and P. Missier, “Exploiting execution provenance to explain difference between two data-intensive computations,”
+
+in IEEE eScience, 2018.
+
+[51] P. Missier, J. Bryans, C. Gamble, and V. Curcin, “Abstracting prov provenance graphs: A validity-preserving approach,” FGCS, 2020.
+[52] R. Lourenc¸o, J. Freire, and D. Shasha, “Bugdoc: algorithms to debug computational processes,” in SIGMOD, 2020.
+[53] C. Rajmohan, P. Lohia, H. Gupta, S. Brahma, M. Hernandez, and S. Mehta, “On efﬁciently processing workﬂow provenance queries in spark,”
+
+in IEEE ICDCS, 2019.
+
+[54] D. Garijo, Y. Gil, K. M. Cobourn, E. Deelman, C. Duffy, R. Ferreira da Silva, A. Kemanian, C. Knoblock, V. Kumar, S. D. Peckham, Y. Y.
+Chiang, D. Khider, A. Khandelwal, J. Pujara, V. Ratnakar, M. Stoica, B. Vu, and M. Pham, “Integrating models through knowledge-powered
+data and process composition,” AGU Fall Meeting, 2018.
+
+[55] M. H. Namaki, A. Floratou, F. Psallidas, S. Krishnan, A. Agrawal, and Y. Wu, “Vamsa: tracking provenance in data science scripts,” arXiv,
+
+2020.
+
+[56] A. Spinuso, M. Atkinson, and F. Magnoni, “Active provenance for data-intensive workﬂows: engaging users and developers,” in IEEE
+
+eScience, 2019.
+
+[57] T. Guedes, L. B. Martins, M. L. F. Falci, V. Silva, K. A. C. S. Oca ˜na, M. Mattoso, M. V. N. Bedo, and D. Oliveira, “Capturing and analyzing
+
+provenance from spark-based scientiﬁc workﬂows with SAMbA-RaP,” FGCS, 2020.
+
+[58] F. Magnoni, E. Casarotti, P. Artale Harris, M. Lindner, A. Rietbrock, I. A. Klampanos, A. Davvetas, A. Spinuso, R. Filgueira, A. Krause,
+
+M. Atkinson, A. Gemund, and V. Karkaletsis, “DARE to perform seismological workﬂows,” AGU Fall Meetings, 2019.
+
+[59] K. Chard, N. Gaffney, M. Hategan, K. Kowalik, B. Ludascher, T. McPhillips, J. Nabrzyski, V. Stodden, I. Taylor, T. Thelen, M. Turk, and
+
+C. Willis, “Toward enabling reproducibility for data-intensive research using the whole tale platform,” in arXiv, 2020.
+
+[60] T. McPhillips, T. Song, T. Kolisnik, S. Aulenbach, K. Belhajjame, R. K. Bocinsky, Y. Cao, J. Cheney, F. Chirigati, S. Dey, J. Freire, C. Jones,
+J. Hanken, K. W. Kintigh, T. A. Kohler, D. Koop, J. A. Macklin, P. Missier, M. Schildhauer, C. Schwalm, Y. Wei, M. Bieda, and B. Lud¨ascher,
+“YesWorkﬂow: A user-oriented, language-independent tool for recovering workﬂow information from scripts,” IJDC, 2015.
+
+[61] J. F. Pimentel, L. Murta, V. Braganholo, and J. Freire, “noWorkﬂow: a tool for collecting, analyzing, and managing provenance from python
+
+scripts,” VLDB, 2017.
+
+[62] L. Rupprecht, J. C. Davis, C. Arnold, Y. Gur, and D. Bhagwat, “Improving reproducibility of data science pipelines through transparent
+
+provenance capture,” VLDB, vol. 13, no. 12, 2020.
+
+[63] M. Arnold, R. K. E. Bellamy, M. Hind, S. Houde, S. Mehta, A. Mojsilovic, R. Nair, K. N. Ramamurthy, A. Olteanu, D. Piorkowski, D. Reimer,
+J. Richards, J. Tsay, and K. R. Varshney, “Factsheets: Increasing trust in ai services through supplier’s declarations of conformity,” IBM J.
+Research & Development, 2019.
+
+[64] Y. Mendes, R. Braga, V. Str ¨oele, and D. Oliveira, “Polyﬂow: a soa for analyzing workﬂow heterogeneous provenance data in distributed
+
+environments,” in SBSI, 2019.
+
+[65] F. Nargesian, E. Zhu, R. J. Miller, K. Q. Pu, and P. C. Arocena, “Data lake management: challenges and opportunities,” VLDB, 2019.
+[66] X. Liang, S. Shetty, D. Tosh, C. Kamhoua, K. Kwiat, and L. Njilla, “Provchain: A blockchain-based data provenance architecture in cloud
+
+environment with enhanced privacy and availability,” in CCGrid, 2017.
+
+[67] P. Ruan, G. Chen, T. T. A. Dinh, Q. Lin, B. C. Ooi, and M. Zhang, “Fine-grained, secure and efﬁcient data provenance on blockchain systems,”
+
+VLDB, 2019.
+
+[68] A. Kumar, R. McCann, J. Naughton, and J. M. Patel, “Model selection management systems: the next frontier of advanced analytics,” SIGMOD
+
+Rec., 2016.
+
+[69] R. Souza, L. Neves, L. Azeredo, R. Luiz, E. Tady, P. Cavalin, and M. Mattoso, “Towards a human-in-the-loop library for tracking
+
+hyperparameter tuning in deep learning development,” in LaDaS@VLDB, 2018.
+
+[70] E. Deelman, A. Mandal, M. Jiang, and R. Sakellariou, “The role of machine learning in scientiﬁc workﬂows,” Int. J. HPC, 2019.
+[71] S. Samuel, F. L ¨ofﬂer, and B. K ¨onig-Ries, “Machine learning pipelines: provenance, reproducibility and FAIR data principles,” arXiv, 2020.
+[72] M. Moreno, V. Lourenc¸o, S. Fiorini, P. Costa, R. Brand˜ao, D. Civitarese, and R. Cerqueira, “Managing machine learning workﬂow
+
+components,” in IEEE ICSC, 2020.
+
+[73] R. Brand˜ao, V. Lourenc¸o, M. Machado, L. Azevedo, M. Cardoso, R. Souza, G. Lima, R. Cerqueira, and M. Moreno, “A knowledge-based
+
+approach for structuring cyclic workﬂows,” in ISWC, 2020.
+
+APPENDIX
+
+TABLE 4: Details about the captured data in the use case.
+
+Data
+name
+
+structure
+
+Description
+
+Geoscientist’s
+Annotations
+
+Structured domain
+knowledge
+
+Geological Labeled
+Data
+
+Observations they do about the seismic dataset,
+such as its geographic global coordinates and char-
+acteristics about the subsurface terrain this seismic
+acqusition was obtained. Also, they relate the seis-
+mic datasets with other artifacts of interest, such as
+well logs and geological basins.
+Domain-speciﬁc information parsed from unstruc-
+tured and semi-structured documents and repre-
+sented as structured facts in domain ontologies. En-
+tities in such ontologies may represent taxonomy,
+rules and assertions for a given domain.
+Tabular text ﬁles, where each line contains x, y
+positions (ﬂoar32, ﬂoat32) on Earth surface, and
+depth (ﬂoat32) that can be in distance or time.
+
+Post-stacked SEGY
+ﬁle
+
+A binary ﬁle containing Nx × Ny stacked traces
+of one particular seismic attribute, e.g. amplitude,
+coherence, frequency, phase. The ﬁle also includes
+a main header and several trace headers.
+
+Curated and anno-
+tated seismic data
+
+Merged expert annotations and the SEGY raw ﬁle.
+It comprises the structured knowledge about the
+geological data and also cube geometry, such as in-
+line and crossline ranges, resolution, depth range,
+and unit. The expert informs which parts of the
+input ﬁle are suitable or not for the task. Finally,
+it may contain legal and access information. With
+this data, it is possible to set next phase hyperpa-
+rameters.
+
+Training, validation,
+and evaluation data
+sets
+
+Binary ﬁles stored in HDF5 or using Google’s
+Protocol buffer serialization for a good balance
+between portability and speed.
+
+Learned models
+
+Mix of binary and conﬁguration ﬁles depending on
+the engine used to run the learning phase (PyTorch,
+Tensorﬂow, Scikit-learn, etc.).
+
+22
+
+Data Store
+
+Textual
+documents
+in the ﬁle
+system
+
+Data Characteristics and Size
+
+Semi-structured textual ﬁles
+
+Stored as domain-speciﬁc knowledge graphs in a
+Knowledge Base, typically managed by a Triple
+Store
+
+Triple store
+
+Nx·Ny ·Nh·4 bytes, where Nx and Ny are the num-
+ber of points in x and y directions, respectively. Nh
+is the number of annotated horizons.
+Hmain + Nx · Ny · (Htrace · Tsize), where the main
+header (Hmain) takes approximately 10KB; the
+trace header uses 240 bytes; and each trace contains
+one ﬂoat32 value for each point in depth. For exam-
+ple, if the seismic is a volume 1000 × 2000 × 3000,
+besides the headers, it will contain 2 × 106 traces
+each of which comprising 3000 ﬂoat32 values.
+
+File system
+
+File system
+
+Stored as structured data in a combination of Doc.
+DBMS and Knowledge Bases with references to
+the Doc. DBMS. The Doc. DBMS has hundreds of
+gigabytes and the Knowledge Base has hundreds
+of megabytes.
+
+Triple Store
+and Doc.
+DBMS
+
+These ﬁles vary depending on the conﬁguration
+selected for data preparation workﬂows. From our
+experimental observations, it takes about 10% or
+less of the input SEGY ﬁle. However, because
+workﬂows create data sets by experiment conﬁg-
+uration, it is possible to end up with a total data set
+storage multiple times bigger than the original raw
+ﬁle.
+The engine used to run deﬁnes trained models’
+type and size. Since we used Tensorﬂow backend
+in our experiments, we store our trained models
+using Tensorﬂow’s tools, where each experiment
+produces conﬁguration and binary ﬁles. The ﬁrst
+one stores the model structure and other training
+parameters, and the second one stores the model’s
+state. Although model size can vary from a few
+MB to several GB, our models used approximately
+50MB per state in our experiments. Notice that one
+state is just one snapshot of one step during train-
+ing, so if depending on the conﬁguration settings,
+it is possible to have several saved states, the 50MB
+may turn GB very quickly.
+
+Cloud
+Object
+Store
+and
+File system
+
+File system
+
+

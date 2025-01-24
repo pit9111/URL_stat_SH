@@ -1,0 +1,2198 @@
+Cache-aware scheduling of scientific workflows in a
+multisite cloud
+Gaëtan Heidsieck, Daniel de Oliveira, Esther Pacitti, Christophe Pradal,
+
+Francois Tardieu, Patrick Valduriez
+
+To cite this version:
+
+Gaëtan Heidsieck, Daniel de Oliveira, Esther Pacitti, Christophe Pradal, Francois Tardieu, et al..
+Cache-aware scheduling of scientific workflows in a multisite cloud. Future Generation Computer
+Systems, 2021, 122, pp.172-186. ￿10.1016/j.future.2021.03.012￿. ￿hal-03189130￿
+
+HAL Id: hal-03189130
+
+https://hal.science/hal-03189130
+
+Submitted on 2 Apr 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Cache-aware Scheduling of Scientiﬁc Workﬂows in a Multisite Cloud
+
+Ga¨etan Heidsiecka,∗, Daniel de Oliveirab, Esther Pacittia, Christophe Pradala,c, Fran¸cois Tardieud, Patrick Valdurieza
+
+aInria,University of Montpellier, CNRS, LIRMM, France
+bFluminense Federal University, Niter´oi, Brazil
+cCIRAD, UMR AGAP Institut, F-34398 Montpellier, France
+dLEPSE, Univ Montpellier, INRAE, Institut Agro, Montpellier, France
+
+Abstract
+
+Many scientiﬁc experiments today are performed using scientiﬁc workﬂows, which become more and more data-intensive.
+We consider the eﬃcient execution of such workﬂows in a multisite cloud, leveraging heterogeneous resources available at
+multiple geo-distributed data centers. Since it is common for workﬂow users to reuse code or data from previous workﬂows,
+a promising approach for eﬃcient workﬂow execution is to cache intermediate data in order to avoid re-executing entire
+workﬂows. However, caching intermediate data and scheduling workﬂows to exploit such caching in a multisite cloud
+is complex. In particular, workﬂow scheduling must be cache-aware, in order to decide whether reusing cache data or
+re-executing workﬂows entirely. In this paper, we propose a solution for cache-aware scheduling of scientiﬁc workﬂows in
+a multisite cloud. Our solution includes a distributed and parallel architecture and new algorithms for adaptive caching,
+cache site selection, and dynamic workﬂow scheduling. We implemented our solution in the OpenAlea workﬂow system,
+together with cache-aware distributed scheduling algorithms. Our experimental evaluation in a three-site cloud with a
+real application in plant phenotyping shows that our solution can yield major performance gains, reducing total time up
+to 42% with 60% of the same input data for each new execution.
+
+Keywords: Multisite cloud, Distributed Caching, Scientiﬁc Workﬂow, Workﬂow System, Workﬂow Scheduling
+
+1. Introduction
+
+In many scientiﬁc domains, e.g., bio-science [1], complex
+numerical experiments typically require many processing or
+analysis steps over huge datasets. They can be represented
+as scientiﬁc workﬂows, or workﬂows for short in this paper
+(but not to be confused with business workﬂows, which
+are diﬀerent). These workﬂows facilitate the modeling,
+management, and execution of computational activities
+linked by data dependencies. As data size and computation
+complexity keep increasing, these workﬂows become data-
+intensive [1], thus requiring high-performance computing
+(HPC) resources.
+
+The cloud is a convenient infrastructure for support-
+ing workﬂow execution, as it allows leasing resources at
+very large scale and relatively low cost.
+In this paper,
+we consider the execution of data-intensive workﬂows in
+a multisite cloud, i.e., a cloud with geo-distributed data
+centers (or sites). Today, all popular public clouds, e.g.,
+Microsoft Azure, Amazon AWS, and Google Cloud, provide
+a multisite option that allows accessing multiple cloud sites
+with a single cloud account. The main reason for using
+multiple sites is that they often exceed the capabilities of a
+single site, either because the site imposes usage limits for
+
+∗Corresponding author
+Email address: gaetan.heidsieck@inria.fr (Ga¨etan Heidsieck)
+
+fairness and security, or simply because the datasets are
+too big.
+
+In scientiﬁc applications, the storage and computing
+capabilities of the diﬀerent sites, e.g., on premise servers,
+HPC platforms from research organizations or federated
+sites at the national level [2], can be very heterogeneous.
+For instance, in plant phenotyping, greenhouse platforms
+generate Terabytes of raw data from plants. Such data are
+typically stored at data centers close to the greenhouse to
+minimize data transfers. However, the computation power
+of those data centers may be limited and fail to scale when
+the analyses become complex, as in plant modeling or 3D
+reconstruction. In this case, the computing capabilities of
+other sites are required.
+
+Most scientiﬁc workﬂow management systems, or work-
+ﬂow systems for short, can execute workﬂows in the cloud
+[3]. Some examples are Swift/T [4], Pegasus [5], SciCumu-
+lus [6], Kepler [7] and OpenAlea [8]. Our work is based on
+OpenAlea, which is widely used in plant science for sim-
+ulation and analysis. Most existing systems use naive or
+manual approaches to distribute workﬂow tasks across sites.
+The problem of workﬂow scheduling on a multisite cloud
+has started to be addressed in [9], using performance models
+to predict the execution time on diﬀerent resources. In [10],
+the authors proposed a solution based on multi-objective
+scheduling and a single site virtual machine provisioning
+approach, assuming relatively homogeneous sites, as in a
+
+public cloud.
+
+Since it is common for workﬂow users to reuse code
+or data from other workﬂows or previous executions [11],
+a promising approach for eﬃcient workﬂow execution is
+to cache intermediate data in order to avoid entire re-
+execution. Very often, a user may re-execute a workﬂow
+many times with diﬀerent values of parameters and input
+data depending on the previous results. When the same
+workﬂow is executed several times with diﬀerent param-
+eters, some workﬂow fragments, i.e., subsets of workﬂow
+activities and dependencies, can be unchanged, and thus,
+their intermediate data be reused. Another important ben-
+eﬁt of caching intermediate data is to make it easy for users
+to share it with other research teams, thus fostering new
+analyses at low cost.
+
+Caching has been supported by some workﬂow systems,
+e.g., Kepler [12], VisTrails [13] and OpenAlea [14]. In [15],
+we proposed an adaptive caching method for OpenAlea
+that automatically determines the most suited intermediate
+data to cache, but only for a single site. Another inter-
+esting single site method is to compute the ratio between
+re-computation cost and storage cost to determine the in-
+termediate data that should be stored [16]. Distributed
+caching in a multisite cloud has been addressed in [17]
+to deal with hot metadata (frequently accessed metadata)
+only, not intermediate data.
+
+Caching data in a multisite cloud with heterogeneous
+sites is much more complex. In addition to the trade-oﬀ be-
+tween re-computation and storage cost at single sites, there
+is the problem of site selection for placing the cache data.
+The problem is harder than data allocation in distributed
+databases [18], which only deals with well-deﬁned base data,
+not intermediate data. Furthermore, workﬂow scheduling
+should be cache-aware, i.e., exploit the knowledge of cache
+data to decide whether reusing and transferring cache data
+or re-executing the workﬂow fragments.
+
+In this paper, we propose a solution for cache-aware
+scheduling of scientiﬁc workﬂows in a multisite cloud. Our
+solution enables users to automatically store, share, and
+reuse intermediate data to speed up workﬂow execution.
+The solution includes a distributed and parallel architec-
+ture and new algorithms for adaptive caching, cache site
+selection and dynamic workﬂow scheduling.
+
+The main contributions of this paper are:
+
+• A novel distributed and parallel architecture for work-
+ﬂows systems that supports caching and cache-aware
+scheduling algorithms in a multisite cloud;
+
+• A cost model for estimating workﬂow execution time
+and the beneﬁt of caching based on a combination
+of data transfer time, execution time, and resource
+usage of cloud sites;
+
+• Three cache-aware scheduling algorithms for multisite
+cloud, including one that optimizes the overall cost
+of workﬂow execution with cache data;
+
+Figure 1: Phenomenal plant analysis workﬂow.
+
+• A full-ﬂedged implementation of our solution in the
+
+OpenAlea worﬂow system.
+
+• An extensive experimental evaluation of our solution
+using the Phenomenal workﬂow and real data in a
+cloud with three heterogeneous sites.
+
+This paper is organized as follows. Section 2 presents
+our real use case in plant phenotyping. Section 3 introduces
+our workﬂow system architecture. Section 4 describes our
+caching solution. Section 5 gives our experimental evalua-
+tion. Section 6 discusses related work. Finally, Section 7
+concludes.
+
+2. Use Case in Plant Phenotyping
+
+In this section, we introduce a real use case in plant
+phenotyping that will serve as motivation for the work
+and as the basis for the experimental evaluation. In the
+last decade, high-throughput phenotyping platforms have
+emerged, allowing for the acquisition of quantitative data
+on thousands of plants in well-controlled environmental
+conditions. For instance, the seven facilities of the French
+Phenome project1 produce each year 200 Terabytes of data,
+which are various (images, environmental conditions and
+sensor outputs), multiscale and coming from diﬀerent sites.
+Analyzing such massive datasets is an open, yet important,
+problem for biologists [19].
+
+The Phenomenal workﬂow [20], shown in Figure 1, has
+been developed in OpenAlea to analyze and reconstruct
+the geometry and topology of thousands of plants through
+time in various conditions. Phenomenal is continuously
+evolving with the addition of new state-of-the-art methods,
+
+1https://www.phenome-emphasis.fr/phenomeeng/
+
+2
+
+1.Original workflow in fragments2.Workflow activities3.Intermediate datasets processed by activities4.Execution in multisite cloudUserRaw data productionF4F2F1F3workflow submissioncloud site 1cloud site 3cloud site 2D1D6D245126738923456781F1F2F4F39D1D2D3D4D5D6D0intermediate data that has already been computed rather
+than recompute the fragments again. In our use case, we
+suppose that workﬂows are submitted from the site where
+the raw data is produced and executed in sequential order.
+Figure 2 shows two workﬂows used in plant analysis:
+the Phenomenal workﬂow (Wf1) and a workﬂow to simulate
+light competition for plants in greenhouse (Wf2). Both
+workﬂows use fragments F1 (binarization) and F2 (3D
+reconstruction), so the subsequent execution of Wf2 may
+beneﬁt from reusing the data generated previously from
+the corresponding fragments in Wf1. Suppose for instance
+that the execution of Wf1 has generated some data that
+has been cached, as shown in Figure 1.4. Then, a user can
+reuse the datasets D1 and D2 to speed up the execution of
+Wf2. Thus, the only fragment that requires to be executed
+is F7.
+
+3. Problem Deﬁnition and System Model
+
+In this section, we start by giving an overview of dis-
+tributed workﬂow execution. Then, we formulate the prob-
+lem of cache-aware scheduling in a multisite cloud. Finally,
+we present our workﬂow system architecture that integrates
+caching and reuse of intermediate data in a multisite cloud.
+We motivate our design decisions and describe our architec-
+ture in two ways: in terms of functional layers (see Figure
+3), which shows the diﬀerent functions and components;
+and in terms of nodes and components (see Figure 4), which
+are involved in the processing of workﬂows.
+
+3.1. Problem Deﬁnition
+
+We consider a multisite cloud with a set of sites S={s1,
+..., sn}. A workﬂow W (A, D) is a directed acyclic graph
+(DAG) of computational activities A and their data de-
+pendencies D. A task t is the instantiation of an activity
+during execution with associated input data. A fragment
+f of an instantiated workﬂow is a subset of tasks and their
+dependencies.
+
+We introduce basic cost functions for data transfer and
+distributed execution. The time to transfer data d from
+site si to site sj, noted Ttr(d, si, sj), is deﬁned by
+
+Ttr(d, si, sj) =
+
+Size(d)
+T rRate(si, sj)
+
+(1)
+
+where T rRate(si, sj) is the transfer rate between si and
+sj.
+
+The time to transfer input and cache data, In(f ) and
+Cached(f ), respectively, to execute a fragment f at site si
+is Tinput(f, si):
+
+Tinput(f, si) =
+
+S
+(cid:88)
+
+(Ttr(In(f ), sj, si)
+
+sj
+
+(2)
+
++ Ttr(Cached(f ), sj, si))
+
+Note that both the input data In(f ) and cache data
+Cached(f ) used to execute a fragment can be distributed
+
+Figure 2: Two workﬂows in plant analysis and their intermediate
+data (the shared activities have same color).
+
+thus yielding new biological insights. The workﬂow is com-
+posed of diﬀerent fragments, i.e., reusable subworkﬂows:
+binarization (circled in green), 3D volume reconstruction
+(blue), images calibration (red), and organ segmentation
+(purple). Figure 1.2 gives an abstract representation of the
+workﬂow, with the activities grouped by fragments F1 to
+F4. The intermediate datasets, processed by the activities
+during execution are shown in Figure 1.3. Dataset D0 con-
+tains raw data that serves as input for the ﬁrst fragment.
+Dataset D1 is generated by activity 2 and is the input of
+fragment 2 as it is processed by activity 4. The datasets
+are grouped by fragments.
+
+The raw data is produced by the Phenoarch platform,
+which has a capacity of managing 1,680 plants within a
+controlled environment (e.g., temperature, humidity, irriga-
+tion) and automatic imaging through time. The total size
+of the raw image dataset for one experiment is 11 Terabytes.
+The raw data is stored on a server close to the experimental
+platform. This server is considered as a site and has both
+data storage and computing resources. However, these
+resources may not be suﬃcient to perform a full workﬂow
+execution in a relatively short time. Thus, the solution
+is to use additional resources provided by other sites and
+execute the workﬂow in a distributed way on multiple sites.
+The multisite cloud used to execute the Phenomenal
+workﬂow (see Figure 1.4) is composed of heterogeneous sites,
+in terms of computing and storage resources. The site with
+the raw data is used to execute some Phenomenal frag-
+ments that do not require powerful resources. Whenever
+more computational resources are needed, it is necessary
+to choose whether transferring the raw data or some inter-
+mediate data to a more powerful site, or re-executing some
+fragments locally before transferring intermediate data.
+The workﬂow fragments are distributed and executed on
+diﬀerent sites depending on the site resources. At each
+site, some intermediate data generated by the fragment
+execution is stored in a cache to be reused in other fragment
+executions.
+
+Diﬀerent users can conduct diﬀerent analyses by exe-
+cuting some workﬂow fragments on the same dataset in
+order to test diﬀerent hypotheses [15]. To save both time
+and resources, it may be useful to reuse the corresponding
+
+3
+
+1.Phenomenal workflow (Wf1)2.Light competition workflow (Wf2)a.Workflow represen- tation colored by fragmentsb.Datasets generated by the fragmentsa.Workflow represen- tation colored by fragmentsb.Datasets generated by the fragmentsF1F2F4F1F2F7F3D1D2D3D6D1D2D7on several sites. The time to transfer data considers the
+data transfer from all sites.
+
+The time to compute a fragment f at site s, noted
+Tcompute(f, s), can be estimated using Amdahl’s law [21]:
+
+Tcompute(f, s) =
+
+( α
+n + (1 − α)) ∗ W (f )
+Pperf (s)
+
+(3)
+
+where W (f ) is the workload for the execution of f , Pperf (s)
+is the average computing performance of the processors at
+site s and n is the number of processors at site s. We assume
+that the local scheduler may parallelize task executions.
+Therefore, α represents the percentage of the workload
+that can be executed in parallel. The expected waiting
+time to be able to execute a fragment at site s is noted
+Twait(s), which is the minimum expected time for s to
+ﬁnish executing the fragments in its queue.
+
+The time to transfer the intermediate data generated
+by fragment f at site si to site sj, noted Twrite(Output(f ),
+si, sj), is deﬁned by:
+
+Twrite(Output(f ), si, sj) = Ttr(Output(f ), si, sj)
+
+(4)
+
+where Output(f ) is the data generated by the execution of
+f .
+
+Based on these diﬀerent cost functions, we make three
+
+assumptions to deﬁne our scheduling problem:
+
+• A1. The frequency of reusing each fragment is un-
+known. For each fragment execution, storing data
+into the cache has a cost (see Equation 4), which gets
+amortized only if it is reused. Thus, scheduling must
+take into account cache management.
+
+• A2. The sites are heterogeneous and have limited
+storage and computing resources. For each fragment,
+the input data and cache data can be distributed
+on multiple sites. The time to retrieve data before
+execution (see Equation 2) can be signiﬁcant. Thus,
+the scheduling decision should consider the cost of
+transferring data, both cached and intermediate data.
+
+• A3. The workﬂows are executed in sequential order.
+Thus, we do not consider concurrency in the data
+and resources access.
+
+We focus on the problems of workﬂow scheduling and
+cache management. The workﬂow scheduling problem is to
+map each workﬂow fragment f for execution to a site in S in
+a way that minimizes execution time (from Equations 2 and
+3). The cache management problem involves the decision
+of choosing which intermediate data should be added to
+the cache dynamically. However, the two problems are not
+independent. Workﬂow scheduling depends on cache data
+management as the cache data can be reused for execution
+but may require to be transferred to the execution site. On
+the other hand, cache management depends on workﬂow
+scheduling as the intermediate data is generated on the
+execution site, which may not be the optimal site to do
+
+Figure 3: Workﬂow System Functional Architecture.
+
+caching. However, an eﬃcient solution for one of these
+problems may not be optimal when considering the overall
+cost of workﬂow execution. Thus, our goal is to minimize
+this overall cost by considering both workﬂow scheduling
+and cache management.
+
+3.2. Workﬂow System Architecture
+
+Our architecture capitalizes on the latest advances in
+distributed and parallel data management to provide per-
+formance and scalability [18]. We consider a distributed
+cloud architecture with on premise servers, where raw data
+is produced, e.g., a phenotyping experimental platform
+in our use case, and remote sites, where the workﬂow is
+executed. The remote sites are data centers using shared-
+nothing clusters, i.e., clusters of server machines, each
+with independent processors, disk and memory. We adopt
+shared-nothing as it is the most scalable and cost-eﬀective
+architecture for big data analysis.
+
+In the cloud, metadata is critical for workﬂow schedul-
+ing as it provides a global view of data location, e.g., at
+which nodes some raw data is stored, and enables task
+tracking during execution [17]. We organize the metadata
+in three repositories: catalog, provenance database and
+cache index. The catalog contains all information about
+users (access rights, etc.), raw data location and workﬂows
+(code libraries, application code). The provenance database
+captures all information about workﬂow speciﬁcation and
+execution. The cache index contains information about
+tasks and cache data, as well as the location of ﬁles that
+store the cache data. Thus, the cache index itself is small
+(only ﬁle references) and the cache data can be managed
+using the underlying distributed ﬁle system. A good so-
+lution for implementing these metadata repositories is a
+key-value store, such as Cassandra2 which provides eﬃ-
+cient key-based access, scalability and high availability in
+a shared-nothing cluster.
+
+The raw data ﬁles are initially produced and stored
+at some sites, e.g., in our use case, the Phenoarch plat-
+form. During workﬂow execution, the intermediate data is
+generated and consumed at one site’s node in memory. It
+gets written to disk when it must be transferred to another
+node (potentially at the same site) or explicitly added to
+the cache.
+
+2https://cassandra.apache.org
+
+4
+
+Figure 2. Multisite SWfMS Functional ArchitectureWorkflow mgr (fragment execution)Workflow mgr (fragment execution)Global schedulingGlobal schedulingMetadata (catalog, cache index, provenance)Metadata (catalog, cache index, provenance)Local schedulingLocal schedulingTask mgr (task execution)Task mgr (task execution)Data mgr (file mgt, data transfer, intersite replication…)Data mgr (file mgt, data transfer, intersite replication…)SchedulerSchedulerlike Yarn3. Each site has one active master node and
+a standby node to deal with master node failure. The
+master nodes are the only ones to communicate across sites.
+Each master node supports the top layers of the functional
+architecture: workﬂow manager, global scheduler, local
+scheduler and metadata management.
+
+The master nodes are responsible for transferring data
+between sites during execution. They are lightly loaded as
+most of the work of serving clients is done by the compute
+and data nodes (or worker nodes), which perform local
+execution and data management, respectively.
+
+4. Cache-aware Workﬂow Execution
+
+In this section, we present in more details our solution
+to cache-aware workﬂow execution in a multisite cloud. In
+particular, the global scheduler must decide which data to
+cache (cache data selection) where (cache site selection),
+and where to execute workﬂow fragments (execution site
+selection). Since these decisions are not independent, we
+propose a cost function to make a global decision, based
+on the cost components for individual decisions. We start
+by presenting the methods and cost functions for cache
+data selection, cache site selection, execution site selection,
+and global decision. Then, we introduce our algorithms for
+cache-aware scheduling.
+
+The execution of a workﬂow W (A, D) in S starts at a
+
+coordinator site sc and proceeds in three main steps:
+
+1. The global scheduler at sc simpliﬁes and partitions
+the workﬂow into fragments. Simpliﬁcation uses
+metadata to decide whether a task can be replaced
+by corresponding cache data references. Partitioning
+uses the dependencies in D to produce fragments.
+2. For each fragment, the global scheduler at sc com-
+putes a cost function to make a global decision on
+which data to cache where, and on which site to
+execute. Then, it triggers fragment execution and
+caching at the selected sites.
+
+3. At each selected site, the local scheduler performs
+the execution of the received fragments using its task
+manager (to execute tasks) and data manager (to
+transfer the required input data).
+It also applies
+the decision of the global scheduler on storing new
+intermediate data into the cache.
+
+4.1. Workﬂow Simpliﬁcation
+
+Workﬂow simpliﬁcation is performed by the workﬂow
+manager before execution, transforming the workﬂow into
+an executable workﬂow and considering the metadata, in-
+put, and cache data location. It is based on the workﬂow
+simpliﬁcation method presented in [23].
+
+First, the workﬂow W (A, D) is transformed into an ex-
+ecutable workﬂow Wex(A, D, T, Input), where T is a DAG
+
+3http://hadoop.apache.org
+
+5
+
+Figure 4: Multisite Workﬂow System Architecture.
+
+Figure 3 extends the workﬂow system architecture pro-
+posed in [22] for single site. It is composed of six modules:
+workﬂow manager, global scheduler, local scheduler, task
+manager, data manager and metadata manager. The work-
+ﬂow manager provides a user interface for workﬂow deﬁni-
+tion and processing. Before workﬂow execution, the user
+selects a number of virtual machines (VMs), given a set of
+possible instance formats, i.e., the technical characteristics
+of the VMs, deployed on each site’s nodes. When a work-
+ﬂow execution is started, the workﬂow manager simpliﬁes
+the workﬂow by removing some workﬂow fragments and
+partitions, depending on the raw input data and the cache
+data (see Section 4). The global scheduler uses the meta-
+data (catalog, provenance database, and cache index) to
+schedule the workﬂow fragments of the simpliﬁed workﬂow.
+The VMs on each site are then initialized, i.e., the programs
+required for the execution of the tasks are installed and all
+parameters are conﬁgured. The local scheduler schedules
+the workﬂow fragments received on its VMs.
+
+The data manager handles data transfers between sites
+during execution for both newly generated intermediate
+data and cache data, and manages cache storage. At a
+single site, data storage is distributed between cluster nodes.
+Finally, the task manager takes care of executing fragments
+on the VMs at each site. It exploits the provenance data
+to decide whether or not the task’s output data should
+be placed in the cache, based on the cache provisioning
+algorithm (see Section 4). Local scheduling and execution
+can be performed as in [15].
+
+Figure 4 shows how these components are organized, us-
+ing the traditional master-worker model. Each site provides
+the same functionality, i.e., all the components described
+in Figure 3. Thus, users can trigger a workﬂow execution
+at any site. However, for a given workﬂow execution, there
+is one coordinator site, where the execution is started. The
+coordinator site performs workﬂow management and global
+scheduling, and manages the execution with other partici-
+pant sites. The workﬂow manager and the global scheduler
+modules are involved only on the coordinator site while all
+other modules are involved on all sites.
+
+At each site, there are three kinds of nodes: master,
+compute and data nodes, which are mapped to cluster
+nodes at conﬁguration time, e.g., using a cluster manager
+
+Site 1CatalogProvDBCache indexCatalogProvDBCache indexMaster Node(Workflow mgr,Scheduler)StandbyMaster Node       Site 2       Site 2Data Node(Data mgr)Compute Node(Task mgr)DataData       Site 3       Site 3Data Node(Data mgr)Compute Node(Task mgr)DataDataof tasks corresponding to the activities in A and Input is
+the input data. The goal is to transform an executable
+workﬂow Wex(A, D, T, Input) into an equivalent, simpler
+subworkﬂow W (cid:48)
+ex(A(cid:48), D(cid:48), T (cid:48), Input(cid:48)), where A(cid:48) is a sub-
+graph of A with dependencies D(cid:48), T (cid:48) is a subgraph of T
+corresponding to A(cid:48) and Input(cid:48) is a subset of Input.
+
+The workﬂow simpliﬁcation algorithm is recursive and
+traverses the DAG T , starting from the sink tasks to the
+source tasks. The algorithm marks each task whose output
+is already in the cache. Then, the subgraphs of T for which
+each of their sink tasks is marked are removed and replaced
+by the associated data from the cache. The remaining
+graph is noted T (cid:48). Finally, the algorithm determines the
+fragments of T (cid:48), i.e., the subgraphs that still need to be
+executed.
+
+4.2. Cache Data Selection
+
+To determine what new intermediate data to cache,
+we consider two diﬀerent methods: greedy and adaptive.
+Greedy data selection simply adds all new data to the cache.
+Adaptive data selection extends our method proposed in
+[15] to a multisite cloud.
+It achieves a good trade-oﬀ
+between the cost saved by reusing cache data and the cost
+incurred to feed the cache.
+
+To determine whether it is worth adding some interme-
+diate data Output(f ) at site sj, we consider the trade-oﬀ
+between the cost of adding Output(f ) to the cache and
+the potential beneﬁt if it were reused. The cost of adding
+Output(f ) to site sj is the time to transfer from the site,
+say site si, where it was generated. The potential beneﬁt
+is the time saved from loading Output(f ) from sj to the
+site of computation instead of re-executing the fragment.
+We model this trade-oﬀ with the ratio between the cost
+and beneﬁt of the cache, noted p(f, si, sj), which can be
+computed from Equations 2, 3 and 4,
+
+p(f, si, sj) =
+
+Twrite(Output(f ), si, sj)
+Tinput(f, si) + Tcompute(f, si)
+−Ttr(Output(f ), sj, si)
+
+(5)
+
+In the case of multiple users, the probability that Output(f )
+
+will be reused or the number of times fragment f will be
+re-executed is not known when the workﬂow is executed.
+Thus, we introduce a threshold T hreshold (computed on
+behalf of the user) as the limit value to decide whether a
+fragment output will be added to the cache. The decision
+on whether Output(f ) generated at site si is stored at site
+sj can be expressed by
+
+storage load (bStorage) or computation load (bCompute)
+between sites. The bStorage method prevents bottlenecks
+when loading cache data. To assess this method at any
+site s, we use a load indicator, noted LbStorage(s), which
+represents the relative storage load as the ratio between
+the storage used for the cache data (Storageused(s)) and
+the total storage (Storagetotal(s)).
+
+LbStorage(s) =
+
+Storageused(s)
+Storagetotal(s)
+
+(7)
+
+The bCompute method balances the cache data between
+the most powerful sites, i.e., with more processors, to pre-
+vent computing bottlenecks during execution. Using the
+knowledge on the sites’ computing resources and usage, we
+use a load indicator for each site s, noted LbCompute(s),
+based on processors idleness (Pidle(s)) versus total proces-
+sor capacity (Ptotal(s)).
+
+LbCompute(s) =
+
+1 − Pidle(s)
+Ptotal(s)
+
+(8)
+
+The load of a site s, depending on the method used, is
+represented by L(s), ranging between 0 (empty load) and
+1 (full). Given a fragment f executed at site si, and a set
+of sites {sj} with enough storage for Output(f ), the best
+site s∗ to add Output(f ) to its cache can be obtained using
+Equation 1 (to include transfer time) and Equation 6 (to
+consider multiple users),
+
+s∗(f )si = argmax
+
+(df,i,j ∗
+
+sj
+
+(1 − L(sj))
+Twrite(Output(f ), si, sj)
+
+)
+
+(9)
+
+4.4. Execution Site Selection
+
+To select an execution site s for a fragment f , we need
+to estimate the execution time for f as well as the time
+to feed the cache with the result of executing f . The
+execution time of f at site s (Texecute(f, s)) is the sum of
+the time to transfer input and cache data to s, the time
+to get computing resources and the time to compute the
+fragment. It is obtained using Equations 2 and 3.
+
+Texecute(f, s) = Tinput(f, s) + Tcompute(f, s) + Twait(s)
+
+(10)
+Given a fragment f executed at site si and its interme-
+diate data Output(f ), the time to write Output(f ) to the
+cache (Tf eed cache (f, si, sj)) can be deﬁned as:
+
+(cid:40)
+
+df,i,j =
+
+1 if p(f, si, sj) < T hreshold.
+0 otherwise.
+
+(6)
+
+Tf eed cache(f, si, sj, df,i,j) = df,i,j∗Twrite(Output(f ), si, sj)
+(11)
+
+where sj is given by Equation 9.
+
+4.3. Cache Site Selection
+
+Cache site selection must take into account the data
+transfer cost and the heterogeneity of computing and stor-
+age resources. We propose two methods to balance either
+
+4.5. Global Decision
+
+At Step 2 of workﬂow execution, for each fragment f ,
+the global scheduler must make a global decision on the best
+
+6
+
+combination of individual decisions regarding cache data,
+cache site, and execution site. These individual decisions
+depend on each other. The decision on cache data depends
+on the site where the data is generated and the site where
+it will be stored. The decision on cache site depends on the
+site where the data is generated and the decision of whether
+or not the data will be cached. Finally, the decision on
+execution site depends on what data will be added to the
+cache and at which site. Using Equations 10 and 11, we can
+estimate the total time (Ttotal) for executing a fragment f
+at site si and adding its intermediate data to the cache at
+another site sj:
+
+the global decision is computed using Equation 13 to de-
+termine the best execution site Sexec, cache placement site
+Scache and cache decision df,i,j. At line 5, the fragment is
+transferred to the site Sexec to be executed. Recall that the
+cache decision df,i,j determines whether the intermediate
+data will be cached. Whenever the intermediate data is
+to be stored in the cache (lines 6-8), it is transferred at
+site Scache (line 7). At line 8, the Cache Index is updated
+locally and the update is propagated at all replicas at other
+sites. Finally (line 11), the fragment is removed from F.
+
+Algorithm 1: GlobalGreedyCache
+
+Ttotal(f, si, sj, df,i,j) = Texecute(f, si)
+
++ Tf eed cache(f, si, sj, df,i,j)
+
+(12)
+
+Input: WF : a workﬂow,
+Cache index : the index of the placement of the
+data existing in the cache
+
+Then, the global decision for cache data (df,i,j), cache
+exec) implies minimizing
+
+site (s∗
+the following equation for the n2 pairs of sites si and sj
+
+cache) and execution site (s∗
+
+(s∗
+
+exec, s∗
+
+cache, df,i,j) = argmin
+
+(Ttotal(f, si, sj, df,i,j)) (13)
+
+si,sj
+
+This decision is performed by the coordinator site before
+each fragment execution. It only takes into account the
+site’s status at that time. Note that s∗
+cache can
+be the same site, including the coordinator site.
+
+exec and s∗
+
+4.6. Cache-Aware Scheduling
+
+In this section, we present in details our solution to
+cache-aware scheduling. We propose three algorithms:
+GlobalGreedyCache, SiteGreedyCache and FragGreedyCache.
+GlobalGreedyCache is a new greedy algorithm that per-
+forms cache-aware scheduling. The two other algorithms
+extend distributed greedy scheduling algorithms [10] to be
+cache-aware. These three algorithms are dynamic in that
+they produce scheduling plans that distribute and allocate
+executable tasks to computing nodes during workﬂow exe-
+cution [22]. Such kind of scheduling is appropriate for our
+workﬂows, where the workload is diﬃcult to estimate, or
+for environments where the computing capabilities vary
+much during execution.
+
+4.6.1. GlobalGreedyCache.
+
+The GlobalGreedyCache algorithm (see Algorithm 1) is
+based on the global decision (see Equation 13) made by
+the coordinator site. It takes the simpliﬁed workﬂow graph
+as input and, starting from the root fragment, computes
+the global decision for each fragment. Recall that the
+global decision combines individual decisions regarding
+cache data, cache site, and execution site, before scheduling
+each fragment.
+
+Algorithm 1 proceeds as follows. The workﬂow is parti-
+tioned into fragments (line 1), where F represents the set
+of all fragments of the workﬂow. Whenever a fragment is
+ready for execution, it is selected (line 3). Then (line 4),
+
+1 F ← partition WF into fragment;
+2 while F not empty do
+3
+
+f ← select a fragment of F that is next to be
+computed ;
+Sexec, Scache, df,i,j ← compute from Equation
+13 ;
+Schedule f execution on site Sexec ;
+if df,i,j is True then
+
+/* The intermediate data is cached
+
+*/
+
+Place the intermediate data on site Scache;
+Update the Cache Index
+
+else
+
+/* The intermediate data will not be
+*/
+
+cached
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+end
+Remove f from F ;
+
+11
+12 end
+
+4.6.2. SiteGreedyCache and FragGreedyCache.
+
+SiteGreedyCache (site greedy with caching) extends the
+SiteGreedy algorithm presented in [10]. The scheduling
+decision of SiteGreedy works as follows. Let F be the set
+of workﬂow fragments. Whenever a site s is available, it
+requests the execution of a ready fragment in F to the
+coordinator site. The selection of the fragment is based
+on a cost function that takes into account data transfer
+and execution times. The idea is to keep sites as busy as
+possible, scheduling a fragment whenever a site is available.
+The caching decision is done after the workﬂow fragment
+has been scheduled for execution by the local scheduler
+at each site. Unlike GlobalGreedyCache, SiteGreedyCache
+does not make the global decision at once but proceeds in
+two steps. First, the choice of the site where the cache data
+should be stored is determined by Equation 9. Then, the
+decision on whether or not to store the intermediate data is
+determined by Equation 5, considering the execution time
+and the time to transfer the intermediate data. Note that
+Equation 5 considers both the execution site and the cache
+
+7
+
+site, which are already determined when computed during
+the execution of SiteGreedyCache.
+
+FragGreedyCache (fragment greedy with caching) ex-
+tends the ActGreedy algorithm presented in [10]. Frag-
+GreedyCache schedules each workﬂow fragment at the site
+that minimizes a cost function based on execution time
+and input data transfer time. The cost function is the sum
+of the initialization, expected execution and data transfer
+times for each fragment at each site. Then, after each
+fragment execution at the selected site, the local scheduler
+performs the cache site and cache data decisions based on
+Equations 9 and 5.
+
+These two greedy algorithms generate a dynamic schedul-
+ing plan. After each fragment execution, the decision con-
+cerning caching is made by the local scheduler. In contrast,
+GlobalGreedyCache makes a global decision for each frag-
+ment. Note that SiteGreedyCache and FragGreedyCache
+perform less operations to schedule the fragments.
+
+4.6.3. Analysis.
+
+In this section, we analyze the runtime and storage
+
+complexity of the GlobalGreedyCache algorithm.
+
+Runtime complexity analysis. Let n be the num-
+ber of given input datasets. Our algorithm generates a
+constant number of tasks for each set of input data, i.e.,
+in our usecase less than 14 tasks per set. Let |T | be the
+number of generated tasks, then we have |T |= n ∗ c, where
+c is a constant value. Our algorithm groups tasks into
+fragments to be scheduled, generating at most |T | frag-
+ments. Our algorithm performs one scheduling operation
+for each fragment, and the time needed for each operation
+is constant. Thus, the time complexity of the algorithm is
+O(|T |). Since we have |T |= n ∗ c and c is a constant, the
+time complexity of the algorithm is O(n), where n is the
+number of sets of images.
+
+Storage complexity analysis. The largest data struc-
+ture used by our algorithm is a list containing the fragments.
+As before, the number of fragment generated by the algo-
+rithm is at most |T |. Thus, the storage complexity of the
+algorithm is O(|T |), so O(n), where n is the number of sets
+of images.
+
+5. Experimental Evaluation
+
+This section describes our experimental evaluation based
+on a full-ﬂedged implementation of our solution in the Ope-
+nAlea worﬂow system using the Phenomenal workﬂow and
+real data from the Phenoarch phenotyping platform in a
+multisite cloud. We ﬁrst present our experimental setup,
+which features the multisite cloud with multiple users that
+re-execute part of the workﬂow. Then, we compare the
+performance of our multisite cache scheduling algorithms
+against two baseline algorithms. We end the section with
+concluding remarks.
+
+5.1. Experimental Setup
+
+We use a multisite cloud, with three sites in France.
+Site 1 in Montpellier is the raw data server of the Phe-
+noarch phenotyping platform, with the smallest number
+of processors and largest amount of storage among the
+sites. Site 2 is the coordinator site, located in Lille. Site 3,
+located in Lyon, has the largest number of processors and
+the smallest amount of storage.
+
+To model site heterogeneity in terms of storage and
+computing resources, we use the heterogeneity factor H in
+three conﬁgurations: H = 0, H = 0.3 and H = 0.7. For the
+three sites altogether, the total number of processors is 96
+and the total storage 180 GB. With H = 0 (homogeneous
+conﬁguration), each site has 32 processors and 60 GB. With
+H = 0.3, we have 22 processors and 83 GB for Site 1, 30
+processors and 57 GB for Site 2 and 44 processors and
+40 GB for Site 3. With H = 0.7 (most heterogeneous
+conﬁguration), we have 6 processors and 135 GB for Site 1,
+23 processors and 35 GB for Site 2 and 67 processors and
+10 GB for Site 3.
+
+To determine the data transfer rate between sites, each
+site sends to the other sites a 10 MB test ﬁle and measures
+the time. This operation is repeated every 30 minutes and
+the information is updated at the coordinator site.
+
+The Phenomenal workﬂow (presented in Section 2)
+which we use is composed of 9 main activities. The input
+dataset is produced by the Phenoarch platform (see Section
+2). Each workﬂow execution is performed on a subset of the
+input dataset, i.e., 200 GB of raw data, which represents
+the execution of 15,000 tasks. The workﬂow is executed
+by several users. Each user wants the results produced by
+the last activity, which requires the execution of all other
+activities when executed from scratch. For each user, 60%
+of the raw data is reused from previous executions. Thus,
+each execution requires only 40% of new raw data. For the
+ﬁrst execution, no data is available in the cache.
+
+For experiments 3, 4 and 5, the workﬂow executions
+are done three times, so we will present average values of
+the three executions.
+
+We implemented our solution in OpenAlea and deployed
+it at each site using the Conda multi-OS package manager.
+The metadata database is implemented using the Cassan-
+dra NoSQL data store. Communication between the sites is
+done using the protocol library ZeroMQ. Data transfer be-
+tween sites is done through SSH. We have also implemented
+two baseline scheduling methods: 1) ActGreedy, a multisite
+scheduling algorithm [10] that schedules the fragments at
+multiple sites given a cost function based on execution
+time and input data transfer time. This algorithm is not
+cache aware and does not reuse intermediate data. 2)
+a centralized version of the three cache-aware scheduling
+algorithms proposed in this paper(GlobalGreedyCache, Site-
+GreedyCache and FragGreedyCache). In our experiments,
+the centralized cache is managed on Site 1.
+
+Table 1 summarizes the diﬀerent variants of the schedul-
+ing algorithms used in our experiments. Preﬁx ”C-” in-
+dicates that the cache is centralized at a single site while
+
+8
+
+preﬁx ”D-” indicates that it is distributed. For all algo-
+rithms that use a cache, the cache index is fully replicated
+at all sites.
+
+5.2. Experiments
+
+We compare the three algorithms we proposed (Global-
+GreedyCache, SiteGreedyCache, FragGreedyCache) in terms
+of execution time, amount of data transferred, and total
+time with two baselines. The total time includes workﬂow
+execution time and data transfer time. We consider diﬀer-
+ent workﬂow executions: with and without caching (Experi-
+ment 1); on a monosite or a multisite cloud (Experiment 2);
+and using a centralized or distributed cache (Experiment 3).
+Then, we consider multiple users that execute the workﬂow
+in the following cases: on the same multisite conﬁguration,
+where 60% of the data is the same (Experiment 4); on dif-
+ferent multisite conﬁgurations (Experiment 5); and when
+adding or removing workﬂow fragments (Experiment 6).
+
+5.2.1. Experiment 1: with and without caching
+
+The goal of this experiment is to show that reusing
+cache data can speed up workﬂow execution although data
+caching also takes time. Thus, without a minimum amount
+of cache data reused, the cost of data caching may ex-
+ceed the beneﬁts. We compare two workﬂow executions:
+with caching, using the D-GlobalGreedyCache scheduling
+algorithm and the bStorage load balancing method; and
+without caching, using the ActGreedy algorithm. We con-
+sider one re-execution of the workﬂow on diﬀerent input
+datasets, from 0% to 60% of data reuse. D-GlobalGreedy-
+Cache outperforms ActGreedy from 20% of reused data.
+Below 20%, the overhead of caching outweighs its bene-
+ﬁt. For instance, with no reuse (0%), the total time with
+D-GlobalGreedyCache is 16% higher than with ActGreedy.
+But with 30%, it is 11% lower, and with 60%, it is 42%
+lower.
+
+5.2.2. Experiment 2: single site versus multisite execution
+The goal of this experiment is to show that, with sites
+with limited resources, increasing the number of sites re-
+duces the workﬂow total time despite increased data trans-
+fers and network latencies. We compare the total time in
+four cases with monosite and multisite clouds:
+
+1. a raw data site (Site 1), with only 10 processors,
+
+where the raw data is stored;
+
+2. another site (Site 3) with 96 processors, which can
+perform computation on the raw and cache data (that
+needs to be transferred from Site 1);
+
+3. a multisite cloud composed of three sites with conﬁg-
+
+uration H = 0.7, using C-FragGreedyCache;
+
+4. the same multisite cloud but using D-GlobalGreedy-
+
+Cache.
+
+Figure 5 shows the total time of the workﬂow for the
+diﬀerent cases. When executing on the raw data site (ﬁrst
+chart on Figure 5), all the input data as well as the cache
+
+Figure 5: Total time of Phenomenal workﬂow execution in four cases.
+
+data are already stored on Site 1, thus there is no data
+transfer between sites during workﬂow execution. However,
+due to the reduced number of available processors, the
+total time is by far longer than on any other infrastructure
+(66% longer than the execution on Site 3, 238% longer
+than the multisite execution with C-FragGreedyCache and
+334% longer than the multisite execution with D-Global-
+GreedyCache). Overall, executing the workﬂow on the full
+raw dataset on Site 1 would take more than a week, which
+is unpractical. In practice, the raw dataset is ﬁrst sent
+to a site with more computing resources available before
+execution.
+
+The execution on Site 3 yields the shortest execution
+time, outperforming the multisite execution with C-Frag-
+GreedyCache and D-GlobalGreedyCache in terms of execu-
+tion time by 21% and 26%, respectively. However, the time
+for transferring the raw data makes its total time much
+longer, so it is outperformed by the multisite execution
+using D-GlobalGreedyCache by 61%.
+
+The intermediate data transfer time on the multisite
+cloud is much smaller (83% smaller for the execution with
+D-GlobalGreedyCache) than the raw data transfer time of
+the execution on Site 3. Since fragments can be executed on
+the site of their input data, the raw data is not transferred
+between sites, but locally processed on Site 1 by the ﬁrst
+workﬂow fragment. The intermediate data generated by
+the ﬁrst fragment is smaller than the raw data and is more
+easily transferred to other sites, where the other fragments
+are scheduled.
+
+5.2.3. Experiment 3: centralized versus distributed cache
+The goal of this experiment is to show that distributing
+the cache enables reducing signiﬁcantly data transfer time
+as well as total time. Figure 6 shows the total time of the
+workﬂow for the three algorithms SiteGreedyCache, Frag-
+GreedyCache and GlobalGreedyCache. The algorithms used
+with a centralized cache on Site 1 are C-SiteGreedyCache,
+C-FragGreedyCache and C-GlobalGreedyCache. They are
+compared with D-GlobalGreedyCache, which uses a dis-
+tributed cache in two conﬁgurations: (a) with two users;
+
+9
+
+0100020003000400050006000Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataRaw data siteSite 1Monosite cloudSite 3Multisite cloud& C-GlobalGreedyCacheMultisite cloud& D-GlobalGreedyCacheInfrastructureTable 1: Scheduling algorithms and their main dimensions.
+
+Algorithm
+ActGreedy
+
+C-GlobalGreedyCache
+(C-G)
+C-SiteGreedyCache
+(C-S)
+C-FragGreedyCache
+(C-F)
+D-GlobalGreedyCache
+(D-G)
+D-SiteGreedyCache
+(D-S)
+D-FragGreedyCache
+(D-F)
+
+Cost function parameters
+Activity exec. time
+Input transfer time
+Frag. exec. time
+Input & Cache transfer time
+Frag. exec. time
+Input transfer time
+Frag. exec. time
+Input transfer time
+Frag. exec. time
+Input & Cache transfer time
+Frag. exec. time
+Input transfer time
+Frag. exec. time
+Input transfer time
+
+Cache decision
+Local
+after execution
+Global per frag.
+before execution
+Local
+after execution
+Local
+after execution
+Global per frag.
+before execution
+Local
+after execution
+Local
+after execution
+
+Cache placement
+No cache
+
+Single
+cache site
+Single
+cache site
+Single
+cache site
+Distributed
+
+Distributed
+
+Distributed
+
+(b) with diﬀerent site heterogeneity factors.
+
+Let us ﬁrst analyze the results of Figure 6.a, where
+two users execute the Phenomenal workﬂow with 60% of
+common raw data in two conﬁgurations: centralized cache
+on Site 1 and distributed cache with H = 0.7. For the
+ﬁrst user execution, D-GlobalGreedyCache outperforms C-
+SiteGreedyCache in terms of total time by 44%. This is
+due to D-GlobalGreedyCache outperforming C-SiteGreedy-
+Cache in terms of intermediate and cache data transfer
+times by 66% and 60%, respectively. D-GlobalGreedyCache
+outperforms C-FragGreedyCache in terms of total time by
+24%, even though D-GlobalGreedyCache’s execution time
+is lower than C-FragGreedyCache (5%). This is due to
+D-GlobalGreedyCache outperforming C-FragGreedyCache
+in terms of data transfer time by 44%. D-GlobalGreedy-
+Cache outperforms C-GlobalGreedyCache in terms of total
+time by 15%. The execution time and intermediate data
+transfer time are similar (17% shorter and 11% longer).
+Yet, D-GlobalGreedyCache outperforms C-GlobalGreedy-
+Cache in terms of cache data transfer by 32%. For the
+ﬁrst execution D-GlobalGreedyCache outperforms the three
+algorithms with centralized cache, mostly due to shorter
+data transfer times. This is because the distributed cache
+enables executing the workﬂow at a site with more comput-
+ing resources and storing the cache data on that site. For
+re-execution, D-GlobalGreedyCache outperforms the three
+algorithms with centralized cache, C-SiteGreedyCache, C-
+FragGreedyCache and C-GlobalGreedyCache, in terms of
+total time by 63%, 47% and 23%, respectively.
+
+Figure 6.b shows the total time of the workﬂow for
+the second user and the four diﬀerent algorithms: C-Site-
+GreedyCache, C-FragGreedyCache, C-GlobalGreedyCache
+and D-GlobalGreedyCache. The execution is performed on
+three values of H in two conﬁgurations: centralized cache
+on Site 1 and distributed cache. In any conﬁguration, D-
+GlobalGreedyCache outperforms the three other algorithms
+with centralized cache, C-SiteGreedyCache, C-FragGreedy-
+Cache and C-GlobalGreedyCache, in terms of total time by
+
+44%, 33% and 17%, respectively for H = 0, by 53%, 40%
+and 25%, respectively for H = 0.3, and by 61%, 44% and
+22%, respectively for H = 0.7. The performance gain is
+due to less data transfers.
+
+5.2.4. Experiment 4: multiple users
+
+The goal of this experiment is to show that the proposed
+algorithms reduce the workﬂow total time in the case of
+multiple users executing the workﬂow. Figure 8 shows
+the total time of the workﬂow for the three scheduling
+algorithms, four users, H = 0.7, and our two cache site
+selection methods: (a) bStorage, and (b) bCompute.
+
+Let us ﬁrst analyze the results in Figure 8.a (bStorage
+method). For the ﬁrst user execution, D-GlobalGreedy-
+Cache outperforms D-SiteGreedyCache in terms of execu-
+tion time by 10% and in terms of data transfer time by 36%.
+The reason that D-SiteGreedyCache is slower is because
+it schedules some compute-intensive fragments at Site 1,
+which has the lowest computing resources. Furthermore, it
+does not consider data placement and transfer time when
+scheduling fragments.
+
+Again for the ﬁrst user execution, D-GlobalGreedyCache
+outperforms D-FragGreedyCache in terms of total time by
+20%, when considering the time to transfer data to the
+cache. However, its execution time is a bit slower (by
+11%). The reason that D-FragGreedyCache is slower is
+that it does not take into account the placement of the
+cache data, which leads to larger amounts (by 66%) of
+cache data to transfer. For other users’ executions (when
+cache data exists), D-GlobalGreedyCache outperforms D-
+SiteGreedyCache in terms of execution time by 29%, and
+for the fourth user execution by 31%. This is because D-
+GlobalGreedyCache better selects the cache site in order to
+reduce the execution time of the future re-executions. Fur-
+thermore, D-GlobalGreedyCache balances the cache data
+and computations. It outperforms D-SiteGreedyCache and
+D-FragGreedyCache in terms of intermediate data trans-
+fer time (by 63% and 11%, respectively) and cache data
+
+10
+
+(a) Two users
+
+(b) Site heterogeneity
+
+Figure 6: Centralized versus distributed cache in terms of execution time. Three scheduling algorithms with centralized cache: C-SiteGreedyCache
+(C-S), C-FragGreedyCache (C-F) and C-GlobalGreedyCache (C-G), and one with distributed cache: D-GlobalGreedyCache (D-G).
+
+(a) Total time
+
+(b) Amount of data transfer
+
+Figure 7: Execution for one user (60% of same raw data used) on heterogeneous sites with three scheduling algorithms (D-SiteGreedyCache
+(D-S), D-FragGreedyCache (D-F) and D-GlobalGreedyCache (D-G)).
+
+(a) bStorage method
+
+(b) bCompute method
+
+Figure 8: Total times for multiple users (60% of same raw data per user) for three scheduling algorithms (D-SiteGreedyCache (D-S), D-
+FragGreedyCache (D-F) and D-GlobalGreedyCache (D-G)).
+
+11
+
+12C-SC-SC-FC-FC-GC-GD-GD-GNumber of users05001000150020002500Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataExecution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate data0.00.30.7C-SC-SC-SC-FC-FC-FC-GC-GC-GD-GD-GD-GHeterogeneity factor02004006008001000120014001600Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataExecution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate data0.00.30.7D-SD-SD-SD-FD-FD-FD-GD-GD-GHeterogeneity factor02004006008001000120014001600Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataExecution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate data0.00.30.7D-SD-SD-SD-FD-FD-FD-GD-GD-GHeterogeneity factor020406080100120Size (GB)Cached data readCached data writeIntermediate dataCached data readCached data writeIntermediate data1234D-SD-SD-SD-SD-FD-FD-FD-FD-GD-GD-GD-GNumber of users025050075010001250150017502000Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataExecution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate data1234D-SD-SD-SD-SD-FD-FD-FD-FD-GD-GD-GD-GNumber of users025050075010001250150017502000Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataExecution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate datatransfer time (by 78% and 69%, respectively).
+
+Overall, D-GlobalGreedyCache outperforms D-SiteGreedy-
+
+Cache and D-FragGreedyCache in terms of total time by
+61% and 41%, respectively. The workﬂow fragments are
+not necessarily scheduled to the site with shortest execu-
+tion time, but to the site that minimizes the overall total
+time. Considering the multiuser perspective, D-Global-
+GreedyCache outperforms D-SiteGreedyCache and D-Frag-
+GreedyCache, reducing the total time for each new user.
+
+Let us now consider Figure 8.b (bCompute method). For
+the ﬁrst user execution, D-GlobalGreedyCache outperforms
+D-SiteGreedyCache and D-FragGreedyCache in terms of
+total time by 38% and 12%, respectively. bCompute stores
+the cache data on the site with the most idle processors,
+which is often the site with the most processors. This leads
+the cache data to be stored close to where it is generated,
+thus reducing data transfers when adding data to the cache.
+For the second user, D-GlobalGreedyCache outperforms D-
+SiteGreedyCache and D-FragGreedyCache in terms of to-
+tal time by 54% and 24%, respectively. The cache data
+generated by the ﬁrst user is stored on the sites with more
+available processors, which minimizes the transfers of inter-
+mediate and cache data. From the third user, the storage
+at some site gets full, i.e., for the third user’s execution,
+Site 3’s storage is full and from the fourth user’s execution,
+Site 2’s storage is full. Thus, the performance of the three
+scheduling algorithms decreases due to higher cache data
+transfer time. Yet, D-GlobalGreedyCache outperforms D-
+SiteGreedyCache and D-FragGreedyCache in terms of total
+time by 47% and 22%, respectively.
+
+5.2.5. Experiment 5: site heterogeneity
+
+We now compare the three algorithms in the case of
+heterogeneous sites by considering the amount of data
+transferred and execution time. In this experiment (see
+Figure 7), we consider one user with the cache already
+provisioned by previous executions on 60% of the same raw
+data. We use the bStorage method for cache site selection.
+Figure 7 shows the execution times and the amount
+of data transferred using the three scheduling algorithms.
+With homogeneous sites (H = 0), the three algorithms
+have almost the same execution time. D-GlobalGreedy-
+Cache outperforms D-SiteGreedyCache in terms of amount
+of data transferred and total time by 47% and 32%, re-
+spectively. The execution time of D-GlobalGreedyCache
+is similar to D-FragGreedyCache (9% longer). The cache
+data is balanced as the three sites have the same storage
+capacities. Thus, total times of D-GlobalGreedyCache and
+D-FragGreedyCache are almost the same.
+
+With heterogeneous sites (H > 0), the sites with more
+processors have less available storage but can execute more
+tasks, which leads to larger amounts of intermediate and
+cache data being transferred between the sites. For H = 0.3,
+D-GlobalGreedyCache outperforms D-SiteGreedyCache and
+D-FragGreedyCache in terms of total time (by 41% and
+17%, respectively) and amount of data transferred (by 48%
+and 21%, respectively).
+
+12
+
+Figure 9: Four subworkﬂows derived from the Phenomenal workﬂow.
+
+With H = 0.7, D-GlobalGreedyCache outperforms D-
+SiteGreedyCache and D-FragGreedyCache in terms of to-
+tal time (by 58% and 42%, respectively) and in terms of
+amount of data transferred (by 55% and 31%, respectively).
+D-GlobalGreedyCache is faster because its scheduling leads
+to a smaller amount of cache data transferred when reused
+(50% smaller than D-FragGreedyCache) and added to the
+cache (57% smaller than D-FragGreedyCache).
+
+5.2.6. Experiment 6: adding and removing fragments
+
+In this experiment, we evaluate our approach in terms
+of total time when subworkﬂows (with common fragments)
+derived from the Phenomenal workﬂow are executed inde-
+pendently. Figure 9 shows four subworkﬂows, each corre-
+sponding to a diﬀerent analysis required by the user: WF1
+performs image binarization, WF2 generates an analysis of
+the binary images, WF3 generates a 3D reconstruction of
+the plant and WF4 performs maize analysis. WF1 is mostly
+data-intensive, the image binarization fragment performing
+little computation but consuming Terabytes of data. WF2
+requires more computational resources but is still mostly
+data-intensive. Fragment F3 in WF3 (composed of activi-
+ties 3 and 4 in Figure 9) is mostly computation-intensive.
+Finally, WF4 is both data- and computation-intensive. The
+subworkﬂows are executed two times starting without cache
+data and 60% of the raw input data is common between
+the users. Each user wants the output data generated by
+the last activity of the workﬂow, i.e. activity 2 for WF1,
+activity 3 for WF2, activity 5 for WF3, and activity for
+WF9. All executions use method bStorage.
+
+Figure 10 shows the total times for executing WF1,
+WF2, WF3 and WF4 by two users, one after the other.
+The ﬁrst user executes the subworkﬂow without existing
+cache data, then the second user executes the subwork-
+ﬂow using 60% of the same raw data. In the case of WF1
+(see Figure 10a), D-SiteGreedyCache outperforms both
+
+WF1WF2WF3WF4123214521451267389(a) WF1
+
+(b) WF2
+
+(c) WF3
+
+(d) WF4
+
+Figure 10: Total times for executing the four subworkﬂows by two users (with 60% of same raw data for second user) with three algorithms
+(D-SiteGreedyCache (D-S), D-FragGreedyCache (D-F) and D-GlobalGreedyCache (D-G)).
+
+13
+
+12D-SD-SD-FD-FD-GD-GTwo users0100200300400500600700Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataExecution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate data12D-SD-SD-FD-FD-GD-GTwo users0100200300400500Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataExecution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate data12D-SD-SD-FD-FD-GD-GTwo users0200400600800100012001400Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataExecution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate data12D-SD-SD-FD-FD-GD-GTwo users025050075010001250150017502000Time (sec)Execution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataExecution timeTransfer time to cache dataTransfer time to read cached dataTransfer time to read intermediate dataD-FragGreedyCache and D-GlobalGreedyCache in terms
+of execution times by 92% for the ﬁrst user and by 83%
+for the second user. This is becauseD-SiteGreedyCache
+uses all processors at all sites, whereas D-FragGreedyCache
+and D-GlobalGreedyCache almost only use the processors
+of Site 1 (where the raw input data is). However, D-
+GlobalGreedyCache transfers less intermediate data (70%
+less) during execution, which makes D-GlobalGreedyCache
+outperforming D-Sgreedy in terms of total time by 49%.
+D-GlobalGreedyCache and D-FragGreedyCache have simi-
+lar total times (D-GlobalGreedyCache is outperformed by
+only D-FragGreedyCache by 2%). Since WF1 is mostly
+data-intensive, both methods D-GlobalGreedyCache and
+D-FragGreedyCache try to execute the workﬂow at the site
+where the input data is.
+
+In the case of WF2 (see Figure 10b), D-SiteGreedy-
+Cache also outperforms both D-FragGreedyCache and D-
+GlobalGreedyCache in terms of execution times by 91% for
+the ﬁrst user and 79% for the second user. This is because
+the added fragment can be executed just after the execu-
+tion of WF1 without any delay as it does not require much
+computational resources. However, D-GlobalGreedyCache
+outperforms D-SiteGreedyCache in terms of total time by
+39% due to longer data transfer times with D-SiteGreedy-
+Cache. D-GlobalGreedyCache and D-FragGreedyCache also
+have similar total times, D-GlobalGreedyCache outperforms
+D-FragGreedyCache by 4% for the second user. WF1 and
+WF2 are both data-intensive, not compute-intensive. Since
+the raw data is stored on Site 1, the site with the biggest
+storage capacities, it is the most likely to be used as cache
+site. For these subworkﬂows, the selection of the execution
+site by both algorithms D-FragGreedyCache and D-Glob-
+alGreedyCache depends mostly on the intermediate data
+location. In this case, they make similar decisions, and
+thus have similar performance.
+
+In the case of WF3 (see Figure 10c), for the ﬁrst user, D-
+GlobalGreedyCache outperforms both D-SiteGreedyCache
+and D-FragGreedyCache in terms of total time by 30%
+and 8%, respectively. Then, for the second user, D-Glob-
+alGreedyCache also outperforms both D-SiteGreedyCache
+and D-FragGreedyCache by 47% and 18%, respectively.
+This is due to D-GlobalGreedyCache outperforming D-Site-
+GreedyCache and D-FragGreedyCache in terms of data
+transfers by 69% and 35%, respectively. D-FragGreedy-
+Cache selects the best sites that minimize execution times
+and intermediate data transfer times. In the case of WF3,
+which has a compute-intensive fragment, most of the com-
+putation will be scheduled on the site with the biggest
+computational resources. D-GlobalGreedyCache, however,
+will schedule some of the computation to the sites where the
+intermediate data will be cached and these sites may have
+less computational resources. This is why D-FragGreedy-
+Cache has shorter execution time, but is outperformed by
+D-GlobalGreedyCache in terms of total time.
+
+In the case of WF4 (see Figure 10d), D-GlobalGreedy-
+Cache outperforms both D-SiteGreedyCache and D-Frag-
+GreedyCache by 32% and 24% for the ﬁrst user and 60%
+
+and 40% for the second one, respectively. In the case of
+WF4, the fragments are both data- and compute-intensive,
+thus the scheduling decision becomes more complex. D-
+FragGreedyCache schedules fragments to minimize execu-
+tion and intermediate data transfer times, which makes it
+outperforming D-GlobalGreedyCache in terms of execution
+time and intermediate data transfer by 8%. However, the
+intermediate data that is cached is bigger than with WF3,
+and the time to transfer cache data becomes a major ele-
+ment of the total time. This is why D-GlobalGreedyCache
+outperforms D-SiteGreedyCache and D-FragGreedyCache
+in terms of total time.
+
+5.3. Concluding Remarks
+
+The main result of this experimental evaluation is that
+GlobalGreedyCache always outperforms the two greedy al-
+gorithms SiteGreedyCache and FragGreedyCache, both in
+case of multiple users and heterogeneous sites.
+
+The ﬁrst experiment (with or without caching) shows
+that storing and reusing cache data becomes beneﬁcial when
+20% or more of the input data is reused. The fourth exper-
+iment (multiple users) shows that D-GlobalGreedyCache
+outperforms D-SiteGreedyCache and D-FragGreedyCache
+in terms of total time by up to 61% and 41%, respec-
+It also shows that, with increasing numbers of
+tively.
+users, the performance of the three scheduling algorithms
+decreases due to higher cache data transfer times. The
+ﬁfth experiment (heterogeneous sites) shows that D-Global-
+GreedyCache adapts well to site heterogeneity, minimizing
+the amount of cache data transferred and thus reducing
+total time. It outperforms D-SiteGreedyCache and D-Frag-
+GreedyCache in terms of total time by up to 58% and 42%,
+respectively.
+
+Both cache site selection methods bCompute and bStor-
+age have their own advantages. bCompute outperforms
+bStorage in terms of data transfer time by 13% for the ﬁrst
+user and up to 17% for the second user. However, it does
+not scale with the number of users, and the limited storage
+capacities of Site 2 and 3 lead to a bottleneck. On the
+other hand, bStorage balances the cache data among sites
+and prevents the bottleneck when accessing the cache data,
+thus reducing re-execution times In summary, bCompute
+is best suited for compute-intensive workﬂows that gener-
+ate smaller intermediate datasets while bStorage is best
+suited for data-intensive workﬂows where executions can
+be performed at the site where the data is stored.
+
+6. Related Work
+
+There are many methods to optimize workﬂow exe-
+cution in the cloud. However, to the best of the au-
+thors’ knowledge, no solution that takes into account geo-
+distribution in a multisite cloud, which should address two
+related problems: 1) determine what intermediate data
+should be cached, taking into account data transfers; 2)
+schedule the workﬂow, considering that intermediate and
+
+14
+
+cache data are distributed on multiple sites. This section
+describes the related work on eﬃcient workﬂow execution in
+the cloud as follows. First, we present the approaches that
+exploit centralized caching. Next, we broaden the scope
+with approaches that use distributed caching. Then, we
+present approaches that focus on scheduling algorithms in
+a multisite cloud, but without considering caching. Finally,
+we summarize the various approaches based on several
+dimensions.
+
+6.1. Centralized Caching
+
+Several workﬂow systems, such as VisTrails, Kepler,
+and OpenAlea, exploit centralized caching of intermediate
+data for eﬃcient workﬂow execution. Each system has
+its unique way of addressing caching data. VisTrails sup-
+ports visual analysis of workﬂow results and provenance,
+by capturing and caching the graph of execution and the
+intermediate data generated [13]. The intermediate data
+is reused when tasks are re-executed on a local computer.
+The user can then change some activities and parameters
+in the workﬂow and eﬃciently re-execute some workﬂow
+activities to analyze the diﬀerent results. The intermediate
+data is used to enhance reproducibitily when associated
+with provenance metadata [24]. Caching and reuse of in-
+termediate data is done whenever possible, but does not
+scale up as the data size increases and exceeds the storage
+capacity of the local computer. Finally, VisTrails does
+not consider distribution when storing and using the cache
+since all data is stored in the same computer.
+
+When storing intermediate data in the cloud, the trade-
+oﬀ between the cost of re-executing tasks and the costs of
+storing intermediate data is not easy to estimate [25]. Yuan
+et al. [16] propose an algorithm based on the ratio between
+re-computation cost and storage cost at the fragment level.
+The algorithm uses the provenance data to generate a
+graph of intermediate dataset dependencies. Then, the
+cost of storing each intermediate data set is weighted by
+the number of dependencies in the graph. The algorithm
+determines the optimized set of intermediate datasets to
+store. Casas et al.
+[26] propose a scheduling algorithm
+based on the trade-oﬀ between the cost of re-executing tasks
+and the cost of storing intermediate data in the cloud. The
+algorithm splits workﬂows into multiple workﬂow fragments
+to balance system utilization via parallelization. It also
+exploits data reuse and replication techniques to reduce
+the amount of data that needs to be transferred among
+tasks at run-time. These two approaches require global
+knowledge of executions, such as the execution time of each
+task, the size of each dataset and the number of incoming
+re-executions, which is hard to estimate and monitor in
+practice. Furthermore, they do not consider data transfers.
+Kepler [27] provides intermediate data caching for work-
+ﬂow execution on a monosite cloud. The cache data is
+stored on a remote server. When a workﬂow is re-executed,
+the workﬂow speciﬁcation is modiﬁed to access the cache
+data. Then, all the cache data that will be reused by the
+
+workﬂow is sent to the cloud where the workﬂow will be ex-
+ecuted. This solution is improved in [28] to store the cache
+data on the site where the workﬂow is executed. It ﬁnds a
+near optimum data caching policy by selecting the interme-
+diate data to cache using an algorithm based on the Ant
+Colony Optimization probabilistic technique. Owsiak et al.
+[12] propose an approach in Kepler to enable multiple users
+to execute workﬂows and reuse intermediate data through
+a cache. The approach encapsulates all Kepler instances
+into Docker containers, which can be easily deployed in a
+monosite cloud. During workﬂow execution, each user can
+generate cache data, which is stored in a local cache, and
+thus not shared with other users.
+
+Guo and Engler [29] propose an approach for incre-
+mental re-execution of workﬂows that are implemented as
+Python scripts and managed by science gateways, some of
+which are built on top of workﬂows systems. Their approach
+caches results of long-running activities (i.e., functions) of
+the workﬂow into a local ﬁle that can be reused to avoid fu-
+ture activity re-executions. This approach only works with
+Python-based workﬂows and is limited to a single machine,
+as other Python-based workﬂow management approaches
+[30].
+
+Zohrevandi and Bazzi [31] propose a method to deter-
+mine which intermediate datasets produced by a workﬂow
+should be stored for further reuse. Considering that storage
+is limited, they formulate the problem as a non-linear inte-
+ger programming (NLP) problem and develop a heuristic
+to eﬃciently generate a data reuse plan. Although a step
+forward, this work does not consider data distribution.
+
+Diﬀerent from VisTrails and Kepler, OpenAlea [8] uses
+both in memory and disk caching. In memory caching is
+used on a local computer for small-scale workﬂows. Disk
+caching is based on an adaptive cache method that auto-
+matically determines the intermediate data that needs to
+be stored [15]. This solution only works on monosite cloud
+and the cache data is systematically reused.
+
+6.2. Distributed Caching
+
+Recently, some of the previous approaches have been
+
+extended for distributed caching.
+
+Cala et al. [32] propose a reusable provenance-based
+approach to optimize workﬂow re-execution in the case of
+evolving versions of the software used. The model computes
+a ”restart tree”, i.e. a data-structure that captures the
+evolution of the workﬂow when executed. Then, it uses
+ReComp [33] a meta-process that enables re-computation
+of processes such as workﬂows. The intermediate data can
+be stored in a monosite cloud and the solution is adapted
+for data-intensive workﬂows.
+
+Vulimiri et al.
+
+[34] propose WANalytics, an Hadoop
+based system that manages data-intensive workﬂows in a
+multisite cloud. The system works on top of any work-
+ﬂow system , analyzing workﬂows before execution and
+minimizing data transfers during execution by taking into
+account the workﬂow workload and size of datasets. It
+
+15
+
+automatically caches all intermediate data produced on
+the execution site and replicates the cache data on all sites.
+This provides eﬃcient workﬂow re-execution, but at the
+expense of major storage cost in the case of data-intensive
+workﬂows.
+
+6.3. Scheduling in a Multisite Cloud
+
+The previous approaches focus on caching and reusing
+data during workﬂow execution. Another way to yield
+eﬃcient workﬂow execution is to optimize scheduling. We
+present some workﬂow scheduling approaches that are rele-
+vant for a multisite cloud.
+
+Scheduling algorithms have been proposed to allow dis-
+tributed workﬂow execution on single and multiple sites.
+de Oliveira et al. [35, 36] propose a scheduling heuristic
+based on the collected provenance. The authors use his-
+torical information to estimate the execution time of each
+activity and then schedule the workﬂow to multiple virtual
+machines in the cloud environment. The approach can be
+applied in monosite and multisite clouds.
+
+Teylo et al. [37] also consider execution time and ﬁnan-
+cial costs when scheduling workﬂows in the cloud, consid-
+ering workﬂow activities and data in the same dependency
+graph. They formulate the problem as an Integer Linear
+Programming (ILP) problem and propose a hybrid evolu-
+tionary algorithm to eﬃciently schedule task and data.
+
+Liu et al. [38] propose a scheduling algorithm based on
+data location, that minimizes data transfer during workﬂow
+execution. The algorithm is further improved in [10] with
+a multi-objective cost function, which includes the time
+and monetary cost of workﬂow execution in a dynamic
+environment. Liu et al. also consider data transfer costs
+in their multi-objective model. Zhang et al. [39] propose
+another interesting approach based on a specialized hybrid
+genetic algorithm, that optimizes data transfer between the
+sites. Hu et al. [40] propose a multi-objective algorithm for
+scheduling workﬂows in a multisite cloud. The algorithm
+is based on the particle swarm optimization technique and
+optimizes both task and data location during scheduling.
+These aforementioned distributed scheduling approaches
+focus on optimizing workﬂow execution, but do not consider
+caching and reusing intermediate data.
+
+6.4. Summary
+
+To summarize the various workﬂow execution approaches
+discussed above, Table 2 provides a comparison based on
+the following dimensions:
+
+• Load balancing (LB): the approach balances the ex-
+
+ecution workload, data load or both;
+
+• Data-intensive (DI): the approach considers the data-
+intensive aspect of the workﬂow for eﬃcient execution
+and caching;
+
+• Cache intermediate data (CID): the approach caches
+and reuses intermediate data for an eﬃcient re-exe-
+cution of workﬂows ((cid:55) when cache is not supported,
+L for local caching and D for distributed caching);
+
+• Environment (Target Environment): the target
+
+environment of the approach;
+
+• Optimization method (OM): the optimization method
+used in the approach (greedy, heuristic, ILP, etc.).
+
+Table 2 highlights that there is no other approach that
+combines all the dimension we focus on. Thus, our approach
+is the only solution that combines cache data management
+and workﬂow scheduling in a multisite cloud.
+
+7. Conclusion
+
+In this paper, we considered the eﬃcient execution
+of data-intensive scientiﬁc workﬂows in a multisite cloud,
+using caching of intermediate data produced by previous
+workﬂows. Caching intermediate data and scheduling work-
+ﬂows to exploit such caching is complex, because of the
+heterogeneity of cloud data centers. In particular, workﬂow
+scheduling must be cache-aware, in order to decide whether
+reusing cache data or re-executing workﬂows.
+
+We proposed a solution for cache-aware scheduling of
+scientiﬁc workﬂows in a multisite cloud. Our solution
+is based on a distributed and parallel architecture and
+includes new algorithms for adaptive caching, cache site
+selection and dynamic workﬂow scheduling. It has been
+implemented in the OpenAlea workﬂow system. We pro-
+vided an extensive experimental evaluation in a three-site
+cloud with a real application in plant phenotyping (Phe-
+nomenal). We compared our solution with two baselines:
+1) a multisite workﬂow scheduling algorithm that does not
+consider caching of intermediate data, 2) and a centralized
+cache architecture for workﬂow execution. For further com-
+parisons, we extended two multisite scheduling algorithms
+to exploit our caching architecture. First, we showed that
+our solution for caching and reuse can reduce the total
+workﬂow execution up to 42% with 60% of same input
+data for each new execution. Second, we showed that our
+solution eﬃciently distributes the fragments to the sites,
+which reduces data transfer time, and thus the total time
+up by to 61% compared with a single remote site. Third,
+we showed that our distributed cache architecture enables
+reducing the total time by 22% compared with our algo-
+rithm GlobalGreedyCache with a centralized cache. We
+showed that the performance gain gets higher with hetero-
+geneous sites. Fourth, we showed that the two methods
+bStorage and bCompute eﬃciently distribute the cache data
+to reduce total time in the case of multiple users execut-
+ing the workﬂow. Each method provides its own beneﬁts.
+bStorage distributes the cache data so that each site still
+has available storage for future intermediate data caching.
+bCompute enables faster workﬂow re-executions but the
+cache of the most powerful sites is rapidly full, which re-
+duces the gain for future workﬂow executions. Fifth, we
+showed that our solution provides similar results as the
+adapted baseline algorithm in the case of homogeneous
+sites. And as site heterogeneity increases, it reduces total
+
+16
+
+Table 2: Workﬂow execution approaches along dimensions: Load balancing (LB), Data-intensive (DI), Caching intermediate data (CID),
+Target Environment, and Optimization method (OM)
+
+Proposed Approach
+
+de Oliveira et al. [35, 36]
+Lin et al. [41]
+Zhang et al. [42]
+Hu et al. [40]
+Teylo et al. [37]
+Zhang et al. [43]
+Liu et al. [10, 38]
+Zhang et al. [39]
+Owsiak et al. [12]
+Callahan et al. [44]
+Guo and Engler [29]
+Yuan et al. [16]
+Zohrevandi and Bazzi [31]
+Casas et al. [26]
+Pradal et al. [8]
+Qasha et al. [45]
+Vulimiri et al. [34]
+Cala et al. [32, 33]
+Our Approach
+
+±
+(cid:55)
+(cid:55)
+
+LB DI CID
+(cid:55)
+(cid:55)
+(cid:55)
+(cid:55)
+(cid:55)
+(cid:55)
+(cid:55)
+(cid:55)
+
+(cid:55)
+(cid:55)
+
+(cid:55)
+(cid:55)
+(cid:55)
+(cid:55)
+(cid:55)
+(cid:55)
+
+(cid:55)
+
+(cid:55)
+
+(cid:55)
+(cid:55)
+
+±
+±
+
+(cid:55)
+(cid:55)
+
+±
+
+Target Environment
+
+OM
+
+Cloud
+Cloud-IoT
+Cloud
+Multisite Cloud
+Monosite Cloud
+Multisite Cloud
+Multisite Cloud
+Multisite Cloud
+Cloud
+Local computer
+Local computer
+
+Greedy
+Heuristic
+Heuristic
+Heuristic
+ILP
+Heuristic
+Greedy
+Heuristic
+Greedy
+Heuristic
+Heuristic
+Local computer, Cluster Greedy, Heuristic
+NLP
+Monosite Cloud Greedy, Heuristic
+Greedy
+Greedy
+Heuristic
+Graph-based
+Greedy
+
+L
+L
+L
+L
+L Local computer, Monosite Cloud
+L
+L
+D
+D
+D
+D
+
+Cluster, Monosite Cloud
+Multisite Cloud
+Multisite Cloud
+-
+Multisite Cloud
+
+time up to 42%. Finally, we showed that our solution re-
+duces the total time of several data-intensive subworkﬂows
+from the Phenomenal workﬂow. For compute-intensive
+subworkﬂows only, our solution has a small overhead of up
+to 4% compared with the adapted baseline algorithm.
+
+This paper can be the basis for future work. The cost
+model of our solution focuses on minimizing the total time.
+Some other objectives, such as minimizing ﬁnancial costs,
+meeting deadline constraints, or following security con-
+straints would change the decisions on scheduling and data
+caching. Furthermore, the objective of minimizing envi-
+ronmental cost becomes essential and could be integrated
+with the cache decision. The work proposed in this paper
+presents a solution for workﬂow caching in the environ-
+ment of a multisite cloud with multiple users. A possible
+improvement would be to consider other objectives in the
+cost model.
+
+Acknowledgements
+
+This work was supported by the French National Re-
+search Agency under the Investments for the Future Pro-
+gram, referred as ANR-16-CONV-0004, the SciDISC and
+HPDaSc Inria associated teams with Brazil, the Phenome-
+Emphasis project (ANR-11-INBS-0012) and IFB (ANR-
+11-INBS-0013) from the Agence Nationale de la Recherche
+and the France Grille Scientiﬁc Interest Group.
+
+References
+
+[1] S. Kelling, W. M. Hochachka, D. Fink, M. Riedewald, R. Caru-
+ana, G. Ballard, G. Hooker, Data-intensive science: a new
+paradigm for biodiversity studies, BioScience 59 (7) (2009) 613–
+620.
+
+[2] S. Crago, K. Dunn, P. Eads, L. Hochstein, D.-I. Kang, M. Kang,
+D. Modium, K. Singh, J. Suh, J. P. Walters, Heterogeneous
+cloud computing, in: 2011 IEEE International Conference on
+Cluster Computing, IEEE, 2011, pp. 378–385.
+
+[3] D. de Oliveira, F. A. Bai˜ao, M. Mattoso, Towards a taxonomy
+for cloud computing from an e-science perspective, in: Cloud
+Computing. Computer Communications and Networks., Springer,
+2010, pp. 47–62.
+
+[4] J. M. Wozniak, T. G. Armstrong, M. Wilde, D. S. Katz,
+E. Lusk, I. T. Foster, Swift/t: Large-scale application com-
+position via distributed-memory dataﬂow processing, in: 2013
+13th IEEE/ACM International Symposium on Cluster, Cloud,
+and Grid Computing, IEEE, 2013, pp. 95–102.
+
+[5] E. Deelman, K. Vahi, M. Rynge, G. Juve, R. Mayani, R. F.
+Da Silva, Pegasus in the cloud: Science automation through
+workﬂow technologies, IEEE Internet Computing 20 (1) (2016)
+70–76.
+
+[6] D. de Oliveira, E. Ogasawara, F. Bai˜ao, M. Mattoso, Scicumulus:
+A lightweight cloud middleware to explore many task computing
+paradigm in scientiﬁc workﬂows, in: 2010 IEEE 3rd International
+Conference on Cloud Computing, IEEE, 2010, pp. 378–385.
+[7] P. Korambath, J. Wang, A. Kumar, L. Hochstein, B. Schott,
+R. Graybill, M. Baldea, J. Davis, Deploying kepler workﬂows
+as services on a cloud infrastructure for smart manufacturing,
+Procedia Computer Science 29 (2014) 2254–2259.
+
+[8] C. Pradal, C. Fournier, P. Valduriez, S. Cohen-Boulakia, Ope-
+nalea: scientiﬁc workﬂows combining data analysis and sim-
+ulation, in: Int. Conf. on Scientiﬁc and Statistical Database
+Management (SSDBM), 2015, pp. 11:1–11:6.
+
+[9] K. Maheshwari, E. Jung, J. Meng, V. Vishwanath, R. Ket-
+timuthu, Improving multisite workﬂow performance using model-
+
+17
+
+based scheduling, in: IEEE nt. Conf. on Parallel Processing
+(ICPP), 2014, pp. 131–140.
+
+[10] J. Liu, E. Pacitti, P. Valduriez, D. de Oliveira, M. Mattoso,
+Multi-objective scheduling of scientiﬁc workﬂows in multisite
+clouds, Future Generation Computer Systems(FGCS) 63 (2016)
+76–95.
+
+[11] D. Garijo, P. Alper, K. Belhajjame, O. Corcho, Y. Gil, C. Goble,
+Common motifs in scientiﬁc workﬂows: An empirical analysis,
+Future Generation Computer Systems (FGCS) 36 (2014) 338–
+351.
+
+[12] M. Owsiak, M. Plociennik, B. Palak, T. Zok, C. Reux,
+L. Di Gallo, D. Kalupin, T. Johnson, M. Schneider, Running
+simultaneous kepler sessions for the parallelization of parametric
+scans and optimization studies applied to complex workﬂows,
+Journal of Computational Science 20 (2017) 103–111.
+
+[13] J. Freire, D. Koop, F. S. Chirigati, C. T. Silva, Reproducibility
+using vistrails, Implementing Reproducible Research 33.
+[14] C. Pradal, S. Artzet, J. Chopard, D. Dupuis, C. Fournier,
+M. Mielewczik, V. Negre, P. Neveu, D. Parigot, P. Valduriez,
+et al., Infraphenogrid: a scientiﬁc workﬂow infrastructure for
+plant phenomics on the grid, Future Generation Computer Sys-
+tems (FGCS) 67 (2017) 341–353.
+
+[15] G. Heidsieck, D. de Oliveira, E. Pacitti, C. Pradal, F. Tardieu,
+P. Valduriez, Adaptive caching for data-intensive scientiﬁc work-
+ﬂows in the cloud, in: Int. Conf. on Database and Expert Systems
+Applications (DEXA), 2019, pp. 452–466.
+
+[16] D. Yuan, Y. Yang, X. Liu, W. Li, L. Cui, M. Xu, J. Chen,
+A highly practical approach toward achieving minimum data
+sets storage cost in the cloud, IEEE Trans. on Parallel and
+Distributed Systems 24 (6) (2013) 1234–1244.
+
+[17] J. Liu, L. P. Morales, E. Pacitti, A. Costan, P. Valduriez, G. An-
+toniu, M. Mattoso, Eﬃcient scheduling of scientiﬁc workﬂows
+using hot metadata in a multisite cloud, IEEE Trans. on Knowl-
+edge and Data Engineering (2018) 1–20.
+
+[18] M. T. ¨Ozsu, P. Valduriez, Principles of Distributed Database
+
+Systems, Fourth Edition, Springer, 2020.
+
+[19] F. Tardieu, L. Cabrera-Bosquet, T. Pridmore, M. Bennett, Plant
+phenomics, from sensors to knowledge, Current Biology 27 (15)
+(2017) R770–R783.
+
+[20] S. Artzet, N. Brichet, J. Chopard, M. Mielewczik, C. Fournier,
+C. Pradal, Openalea.phenomenal: A workﬂow for plant pheno-
+typing (Sep. 2018). doi:10.5281/zenodo.1436634.
+
+[21] J. Zhang, J. Luo, F. Dong, Scheduling of scientiﬁc workﬂow in
+non-dedicated heterogeneous multicluster platform, Journal of
+Systems and Software 86 (7) (2013) 1806–1818.
+
+[22] J. Liu, E. Pacitti, P. Valduriez, M. Mattoso, A survey of data-
+intensive scientiﬁc workﬂow management, Journal of Grid Com-
+puting 13 (4) (2015) 457–493.
+
+[23] G. Heidsieck, D. de Oliveira, E. Pacitti, C. Pradal, F. Tardieu,
+P. Valduriez, Eﬃcient execution of scientiﬁc workﬂows in the
+cloud through adaptive caching, in: Transactions on Large-Scale
+Data-and Knowledge-Centered Systems XLIV, Springer, 2020,
+pp. 41–66.
+
+[24] S. C. Dey, K. Belhajjame, D. Koop, T. Song, P. Missier,
+B. Lud¨ascher, Up & down: Improving provenance precision
+by combining workﬂow-and trace-level information, in: USENIX
+Workshop on the Theory and Practice of Provenance (TAPP),
+2014.
+
+[25] I. F. Adams, D. D. Long, E. L. Miller, S. Pasupathy, M. W.
+Storer, Maximizing eﬃciency by trading storage for computa-
+tion., in: HotCloud, 2009.
+
+[26] I. Casas, J. Taheri, R. Ranjan, L. Wang, A. Y. Zomaya, A
+balanced scheduler with data reuse and replication for scien-
+tiﬁc workﬂows in cloud computing systems, Future Generation
+Computer Systems 74 (2017) 168–178.
+
+[27] I. Altintas, O. Barney, E. Jaeger-Frank, Provenance collection
+support in the kepler scientiﬁc workﬂow system, in: International
+Provenance and Annotation Workshop, 2006, pp. 118–132.
+[28] W. Chen, I. Altintas, J. Wang, J. Li, Enhancing smart re-run
+of kepler scientiﬁc workﬂows based on near optimum prove-
+nance caching in cloud, in: IEEE World Congress on Services
+
+(SERVICES), 2014, pp. 378–384.
+
+[29] P. J. Guo, D. R. Engler, Towards practical incremental recompu-
+tation for scientists: An implementation for the python language,
+in: M. I. Seltzer, W. Tan (Eds.), 2nd Workshop on the The-
+ory and Practice of Provenance, TaPP’10, San Jose, CA, USA,
+February 22, 2010, USENIX Association, 2010.
+URL https://www.usenix.org/conference/tapp-10/towards-
+practical-incremental-recomputation-scientists-impleme
+ntation-python
+
+[30] J. F. Pimentel, L. Murta, V. Braganholo, J. Freire, noworkﬂow:
+a tool for collecting, analyzing, and managing provenance from
+python scripts, Proc. VLDB Endow. 10 (12) (2017) 1841–1844.
+doi:10.14778/3137765.3137789.
+URL http://www.vldb.org/pvldb/vol10/p1841-pimentel.pdf
+[31] M. Zohrevandi, R. A. Bazzi, The bounded data reuse prob-
+lem in scientiﬁc workﬂows, in: 2013 IEEE 27th International
+Symposium on Parallel and Distributed Processing, 2013, pp.
+1051–1062. doi:10.1109/IPDPS.2013.71.
+
+[32] J. Ca(cid:32)la, P. Missier, Provenance annotation and analysis to sup-
+port process re-computation, in: International Provenance and
+Annotation Workshop, Springer, 2018, pp. 3–15.
+
+[33] P. Missier, J. Cala, Eﬃcient re-computation of big data analytics
+processes in the presence of changes: Computational framework,
+reference architecture, and applications, in: 2019 IEEE Interna-
+tional Congress on Big Data (BigDataCongress), IEEE, 2019,
+pp. 24–34.
+
+[34] A. Vulimiri, C. Curino, B. Godfrey, K. Karanasos, G. Varghese,
+Wanalytics: Analytics for a geo-distributed data-intensive world.,
+in: CIDR, 2015.
+
+[35] D. de Oliveira, E. S. Ogasawara, F. A. Bai˜ao, M. Mattoso, Sci-
+cumulus: A lightweight cloud middleware to explore many task
+computing paradigm in scientiﬁc workﬂows, in: IEEE Interna-
+tional Conference on Cloud Computing, CLOUD 2010, Miami,
+FL, USA, 5-10 July, 2010, IEEE Computer Society, 2010, pp.
+378–385. doi:10.1109/CLOUD.2010.64.
+URL https://doi.org/10.1109/CLOUD.2010.64
+
+[36] D. de Oliveira, E. Ogasawara, K. Oca˜na, F. Bai˜ao, M. Mattoso,
+An adaptive parallel execution strategy for cloud-based scien-
+tiﬁc workﬂows, Concurrency and Computation: Practice and
+Experience 24 (13) (2012) 1531–1550.
+
+[37] L. Teylo, U. de Paula Junior, Y. Frota, D. de Oliveira, L. M.
+de A. Drummond, A hybrid evolutionary algorithm for task
+scheduling and data assignment of data-intensive scientiﬁc work-
+ﬂows on clouds, Future Gener. Comput. Syst. 76 (2017) 1–17.
+doi:10.1016/j.future.2017.05.017.
+URL https://doi.org/10.1016/j.future.2017.05.017
+[38] J. Liu, V. Silva, E. Pacitti, P. Valduriez, M. Mattoso, Scientiﬁc
+workﬂow partitioning in multisite cloud, in: European Conf. on
+Parallel Processing (Euro-Par), 2014, pp. 105–116.
+
+[39] J. Zhang, J. Chen, J. Zhan, J. Jin, A. Song, Graph partition–
+based data and task co-scheduling of scientiﬁc workﬂow in geo-
+distributed datacenters, Concurrency and Computation: Prac-
+tice and Experience 31 (24) (2019) e5245.
+
+[40] H. Hu, Z. Li, H. Hu, J. Chen, J. Ge, C. Li, V. Chang, Multi-
+objective scheduling for scientiﬁc workﬂow in multicloud envi-
+ronment, Journal of Network and Computer Applications 114
+(2018) 108–122.
+
+[41] W. Lin, G. Peng, X. Bian, S. Xu, V. Chang, Y. Li, Scheduling
+algorithms for heterogeneous cloud environment: main resource
+load balancing algorithm and time balancing algorithm, Journal
+of Grid Computing 17 (4) (2019) 699–726.
+
+[42] F. Zhang, J. Ge, Z. Li, C. Li, C. Wong, L. Kong, B. Luo,
+V. Chang, A load-aware resource allocation and task scheduling
+for the emerging cloudlet system, Future Generation Computer
+Systems 87 (2018) 438–456.
+
+[43] J. Zhang, M. Wang, J. Luo, F. Dong, J. Zhang, Towards opti-
+mized scheduling for data-intensive scientiﬁc workﬂow in mul-
+tiple datacenter environment, Concurrency and Computation:
+Practice and Experience 27 (18) (2015) 5606–5622.
+
+[44] S. P. Callahan, J. Freire, E. Santos, C. E. Scheidegger, C. T. Silva,
+H. T. Vo, Vistrails: visualization meets data management, in:
+
+18
+
+ACM SIGMOD Int. Conf. on Management of Data (SIGMOD),
+2006, pp. 745–747.
+
+[45] R. Qasha, Z. Wen, J. Ca(cid:32)la, P. Watson, Sharing and performance
+optimization of reproducible workﬂows in the cloud, Future
+Generation Computer Systems 98 (2019) 487–502.
+
+19
+
+

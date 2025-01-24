@@ -1,0 +1,5782 @@
+A/B/n Testing with Control in the Presence of
+Subpopulations
+Yoan Russac, Christina Katsimerou, Dennis Bohle, Olivier Cappé, Aurélien
+
+Garivier, Wouter M Koolen
+
+To cite this version:
+
+Yoan Russac, Christina Katsimerou, Dennis Bohle, Olivier Cappé, Aurélien Garivier, et al.. A/B/n
+Testing with Control in the Presence of Subpopulations. NeurIPS 2021 - Thirty-fifth Conference on
+Neural Information Processing Systems, Dec 2021, Virtual, France. ￿hal-03407247￿
+
+HAL Id: hal-03407247
+
+https://hal.science/hal-03407247
+
+Submitted on 28 Oct 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+A/B/n Testing with Control in the Presence of
+Subpopulations
+
+Yoan Russac
+CNRS, Inria, ENS
+Université PSL
+yoan.russac@ens.fr
+
+Christina Katsimerou
+Booking.com
+christina.katsimerou@booking.com
+
+Dennis Bohle
+Booking.com
+dennis.bohle@booking.com
+
+Olivier Cappé
+CNRS, Inria, ENS
+Université PSL
+olivier.cappe@cnrs.fr
+
+Aurélien Garivier
+UMPA, CNRS
+Inria, ENS Lyon
+aurelien.garivier@ens-lyon.fr
+
+Wouter M. Koolen
+Centrum Wiskunde & Informatica
+wmkoolen@cwi.nl
+
+Abstract
+
+Motivated by A/B/n testing applications, we consider a ﬁnite set of distributions
+(called arms), one of which is treated as a control. We assume that the population
+is stratiﬁed into homogeneous subpopulations. At every time step, a subpopulation
+is sampled and an arm is chosen: the resulting observation is an independent draw
+from the arm conditioned on the subpopulation. The quality of each arm is assessed
+through a weighted combination of its subpopulation means. We propose a strategy
+for sequentially choosing one arm per time step so as to discover as fast as possible
+which arms, if any, have higher weighted expectation than the control. This strategy
+is shown to be asymptotically optimal in the following sense: if τδ is the ﬁrst
+time when the strategy ensures that it is able to output the correct answer with
+δ, then E[τδ] grows linearly with log(1/δ) at the exact
+probability at least 1
+optimal rate. This rate is identiﬁed in the paper in three different settings: (1)
+when the experimenter does not observe the subpopulation information, (2) when
+the subpopulation of each sample is observed but not chosen, and (3) when the
+experimenter can select the subpopulation from which each response is sampled.
+We illustrate the efﬁciency of the proposed strategy with numerical simulations on
+synthetic and real data collected from an A/B/n experiment.
+
+−
+
+1
+
+Introduction
+
+A/B/n testing is a website optimization procedure where multiple versions of the content (called
+"arms" below) are compared, often in order to ﬁnd the one with the highest conversion rate. However,
+many e-commerce companies use A/B/n testing not only to deploy the best product implementation,
+but primarily to draw post-experiment inferences [11]. The decision-making involves, besides
+experiment results, factors such as the cost of scaling-up a solution, external data, or whether the
+implementation ﬁts in a broader theme. In this setting, each of the arms better than the default product
+(which we will refer to as the "control" arm) is a contender for being deployed and the interest is not
+only in the best arm.
+
+35th Conference on Neural Information Processing Systems (NeurIPS 2021).
+
+≥
+
+1 alternative implementations (variants), the simplest idea is to distribute
+Given the control and K
+the trafﬁc uniformly among the arms; the arms that appear to be signiﬁcantly better than the control
+at the end of the experiment are considered for deployment. While well-established, this process
+can be inefﬁcient in terms of resources. Some alternatives are soon obviously worse (or better) than
+the control and would require fewer samples than the alternatives closer to the control. A second
+related shortcoming of the basic A/B/n testing approach is that setting the duration of the experiment
+–when done in advance– necessitates a very conservative approach by choosing a run-length that is
+sufﬁciently long to differentiate even the smallest possible changes.
+
+To address these limitations, we consider in this work sequential testing policies that can both adjust
+the allocation of the samples and be stopped adaptively, in light of the data gathered during the
+experiment. In the terminology of multi-armed bandits, this corresponds to pure exploration problems
+(see, e.g., Chap. 33 of [15]). A pure exploration strategy will typically choose every minute (say),
+an allocation of trafﬁc that favors arms for which the uncertainty is the highest. The experiment is
+stopped as soon as the signiﬁcance is considered sufﬁcient for every arm. Approaches have been
+developed in [8, 12, 10] for the identiﬁcation of the single arm with the highest mean, a task called the
+Best Arm Identiﬁcation (BAI) problem. In particular, [10] propose a strategy that is asymptotically
+optimal in the ﬁxed conﬁdence setting, meaning that, given a risk parameter δ, it ﬁnds the best arm
+with probability at least 1
+δ, using an expected number of samples that is hardly improvable when δ
+is small. Later, [18] incorporated the special role of the control arm in BAI and proposed an algorithm
+that declares as winning arm the one with the highest mean only if it is signiﬁcantly better than the
+control. In this paper, we propose a solution to the problem of identifying all the arms that are better
+than the control, in a framework that generalizes the ﬁxed conﬁdence setting. In order to provide
+useful tools for practical A/B/n testing, we address two additional issues.
+
+−
+
+First, traditional stochastic bandit models are based on the assumption that the arm samples are
+i.i.d., whereas real world data streams usually show trends or some form of inhomogeneity. A
+particular case of interest for website optimization are the seasonal patterns caused by time-of-day or
+day-of-week variations. We henceforth include in our model observed covariates (e.g. the time of the
+day, but possibly also the country of origin, or controlled covariates like the order in which partners
+appear on the page, etc.) that stratify the observations into homogeneous subpopulations. We study
+different scenarios, depending on how much interaction is possible with these subpopulations. We
+provide a sample complexity analysis and an efﬁcient algorithm in each case. In particular, we will
+show that using the subpopulation information efﬁciently can provide signiﬁcant speedups of the
+decision-making. In the following, we will refer to the task of identifying the set of Arms that are
+Better than the Control in the presence of Subpopulations as the ABC-S problem.
+
+Second, the practice of A/B/n testing often differs from a pure sequential experiment in that the
+experimenter cannot always ﬁx a risk δ at the beginning and passively wait for the stopping time of
+the experiment without any time limitation. To address this issue, [11] proposed to deﬁne some notion
+of sequential "p-values" that can be monitored as the experiment progresses and used to terminate it.
+This notion was further used in the BAI setting in [18]. In this contribution, we elaborate on this idea
+by sequentially updating a suggested solution to the ABC-S problem together with a risk assessment
+for this suggestion. We show that, for any stopping time, the probability that the suggested solution is
+incorrect is indeed lower than the risk assessment. When the stopping time is selected as in usual
+ﬁxed-conﬁdence pure exploration, we recover the exact same guarantees but this view of the problem
+also provides useful results, for instance, if the experiment needs to be terminated prematurely.
+
+Related work. Pure exploration strategies have been studied in various settings: the identiﬁcation
+of the best arm [8, 10], the identiﬁcation of the top m arms [3, 12, 9] identifying the arms that are
+better than a threshold [16, 4], or identifying all (cid:15)-good arms [17]. As far as we know, this paper
+is the ﬁrst to consider the problem of identifying all the arms better than a control. It is also the
+ﬁrst to consider subpopulations in pure exploration tasks. While motivated by the example of online
+companies, we believe that the proposed algorithms are relevant to other domains where randomized
+controlled trials are used for learning. An example could be clinical trials: one may wish to identify
+all the alternative treatments that work better that some reference medical treatment. This would
+permit to choose among them taking into account different characteristics (some could be cheaper,
+using another molecule for avoiding allergy, etc.).
+
+Close to the notion of the control is the notion of threshold. Locatelli et al. [16] propose an algorithm
+for identifying all arms above a given threshold. Their algorithm samples according to the signiﬁcance
+
+2
+
+of a statistical test, and shares some similarities with the present article in the Gaussian case; however,
+the perspective is rather different: the authors consider the ﬁxed-budget setting: the total number of
+samples is ﬁxed, and the goal is then to minimize the probability of returning a wrong answer at the
+end. Here, the index of the control arm is known but its probability distribution is not.
+
+In our work, the quality of the different arms is assessed with a weighted combination of its subpopu-
+lations means. Minimizing the estimation error of a convex combination of means through adaptive
+sampling was considered in [2] with the introduction of a stratiﬁed estimator that will naturally
+appear in our analysis.
+
+The paper is organized as follows. In Section 2, we present the mathematical model and study the
+information-theoretic complexity of the problem, extending the lower bound of [10] to the ABC-S
+setting. We show how the complexity of the problem depends on the degree of interaction that one
+has with the subpopulations, introducing different modes of interaction to be deﬁned in Figure 1
+below. We also consider in detail the Gaussian case which gives rise to more interpretable results.
+Section 3 describes how to implement the proposed strategy, which involves the numerical resolution
+of non-trivial optimization problems. Finally, we provide the results of numerical experiments on
+synthetic and real data sets in Section 4.
+
+2 The complexity of the ABC-S problem
+
+2.1 Mathematical framework
+
+≥
+
+A problem instance consists of the following ingredients. Known to the learner are the number of arms
+1 in addition to the designated control arm 0, the number of subpopulations J (a standard bandit
+K
+RJ representing the relative importance of the subpopulations for
+being J = 1), and the vector β
+the learning objective. We further make the stochastic assumption that samples from each arm a
+(including the control) and subpopulation i are drawn i.i.d. from an unknown probability distribution
+νa,i on R, whose mean we will denote by µa,i. The quality of arm a is µa := (cid:80)J
+i=1 βiµa,i the
+RJ we deﬁne the ABC-S
+combination of the means of the arms in the different populations. For β
+problem as the correct identiﬁcation of the set
+
+∈
+
+∈
+
+β(µ) :=
+
+S
+
+(cid:110)
+
+a
+
+[K]
+
+∈
+
+(cid:12)
+(cid:12)
+(cid:12)
+
+J
+(cid:88)
+
+i=1
+
+βiµa,i >
+
+βiµ0,i
+
+(cid:111)
+
+.
+
+J
+(cid:88)
+
+i=1
+
+At every time step t, the algorithm selects an arm At based on previous choices and outcomes and
+observes or selects (except when explicitly speciﬁed) the population type It. Upon the selection of the
+arm At a reward Xt is obtained. This deﬁnes a sigma-ﬁeld generated by the observations up to time
+t = σ(I1, X1, . . . , It, Xt). The number of times arm a was selected for subpopulation
+t denoted
+F
+i at time t is denoted Na,i(t) := (cid:80)t
+1(As = a, Is = i) and the number of draws of arm a,
+Na(t) := (cid:80)t
+
+1(As = a). We deﬁne the gap with the control arm and arm a, ∆a := µ0
+
+µa.
+
+s=1
+
+s=1
+
+−
+
+Modes of interaction We consider four modes of interaction of the learner with the bandit, as
+speciﬁed in Figure 1 below. In any of the three passive modes of interaction (described in Figures 1b
+to 1d), we assume that the subpopulation i represents a known proportion αi of the total population,
+and hence that the sequence of subpopulations is drawn i.i.d. from the ﬁxed and discrete distribution
+It
+the J-dimensional simplex.
+Here α is an exogenous parameter and can differ from β which is inherent to the learning objective
+and is also assumed to be known. Although it is most natural in many applications to consider that
+β = α (it is even necessary in the oblivious mode to make the estimation of the µa’s feasible),
+Example 1 below describes a concrete scenario in which β has negative components.
+
+α = (α1, . . . , αJ ) with α
+
+i xi = 1
+
+ΣJ :=
+
+[0, 1]J
+
+x
+{
+
+(cid:80)
+
+∼
+
+∈
+
+∈
+
+}
+
+|
+
+The distributions (νa,i)a,i are assumed to belong the same one-parameter exponential family,
+(νθ)θ : dνθ/dξ = exp(θx
+{
+−
+probability distribution νθ in
+bandit instance with its matrix of means µ
+between two distributions νθ and νθ(cid:48)
+
+:=
+P
+R. Every
+is entirely deﬁned by its mean ˙b(θ) [1]. We may hence identify any
+R(K+1)×J In addition, the Kullback-Leibler divergence
+
+, with ξ a reference measure on R and b : Θ
+}
+
+b(θ))
+
+(cid:55)→
+
+⊂
+
+R
+
+P
+
+∈ P
+
+∈
+may be written in the following Bregman form:
+˙b(θ)(θ(cid:48)
+
+b(θ)
+
+θ) ,
+
+d(µ, µ(cid:48)) = KL(νθ, νθ(cid:48)) = b(θ(cid:48))
+
+−
+
+−
+
+−
+
+3
+
+1. Pick At and It
+2. See Xt
+
+νAt,It
+
+∼
+(a) Active mode
+
+α
+
+1. See It
+∼
+2. Pick At
+3. See Xt
+
+νAt,It
+
+∼
+(b) Proportional mode
+
+1. Pick At
+2. See It
+3. See Xt
+
+α
+νAt,It
+
+∼
+∼
+(c) Agnostic mode
+
+1. Pick At
+2. Do not see It
+3. See Xt
+
+∼
+νAt,It
+
+∼
+(d) Oblivious mode.
+
+α
+
+Figure 1: Modes of Interaction between Learner and Bandit in each round. In Active mode the learner
+determines the subpopulation, while in the right three passive modes it is sampled from α.
+
+where µ = ˙b(θ) and µ(cid:48) = ˙b(θ(cid:48)) correspond to the means of the two distributions νθ and νθ(cid:48). We also
+use the notation kl(p, q) to denote the KL divergence of two Bernoulli distributions of parameter p
+and q.
+
+:=
+
+a
+
+L
+
+µ :
+
+0
+the set of identiﬁable
+We deﬁne
+}
+}
+∪ {
+instances where no arm has the same weighted mean as the control. At every time step, the policies
+we consider output a risk assessment ˆδt together with a recommendation ˆ
+t. We focus on safely
+S
+calibrated policies, that are deﬁned as satisfying the following property
+
+[J], νa,i
+
+and µ0
+
+= µa
+
+∈ P
+
+i
+∀
+
+[K]
+
+∈
+
+∈
+
+∀
+
+{
+
+,
+
+(1)
+
+µ
+
+,
+∈ L
+
+δ
+∀
+
+(0, 1), Pµ
+
+(cid:16)
+
+t
+∃
+
+1 : ˆ
+t
+S
+
+=
+
+β(µ)
+
+ˆδt
+
+(cid:17)
+
+δ
+
+δ .
+
+δ
+
+∀
+
+S
+
+∩
+
+∈
+
+≥
+
+≤
+
+≤
+
+≤
+
+t
+{
+
+0, ˆδt
+
+≥
+Finally, when ﬁxing a level of risk δ, we consider the stopping time associated to the ﬁltration
+t,
+τδ = inf
+. The objective is then to minimize the expected number of rounds necessary
+}
+to obtain a level of risk of at most δ. Contrary to usual δ-PAC algorithms if stopped before τδ,
+the strategy still provides guarantees on the output set following Equation 1. In particular, safely
+calibrated policies have a sampling rule that does not depend on any pre-speciﬁed δ, and as such they
+are δ-PAC for any δ.
+Example 1 ([Largest Proﬁt Identiﬁcation problem 13, p24]). Consider a company choosing among
+K product designs the model to mass produce. Each candidate design k has an (equilibrium)
+sales price µk,1 and production cost µk,2. The goal is to ﬁnd the model k with the largest proﬁt
+µk,2. Prices and costs are currently unknown, but can be adaptively sampled. Sampling the
+µk,1
+"price" subpopulation i = 1 is typically implemented by performing user preference studies, taking
+questionnaires, etc. Samples from the "cost" subpopulation i = 2 involve rating manufacturing
+facilities, forecasting material and labor costs etc. This problem is interesting both in the BAI and
+ABC objectives. The importance vector is here β = (1,
+
+1) and α has to be set by the learner.
+
+−
+
+F
+
+−
+
+2.2 General form of the sample complexity
+
+Depending on the mode of interaction from Figure 1, the learner has a set of sampling constraints
+and precisely deﬁned in the next section. We deﬁne Alt(µ), the different
+to satisfy, here denoted
+problem instances where the set of arms better than the control differs from that of the instance µ.
+Formally, Altβ(µ) :=
+. This allows us to bound the sample complexity.
+}
+
+Theorem 1. Let δ
+, the
+expected number of rounds for the ABC-S problem for the agnostic, proportional and active mode
+satisﬁes:
+
+RJ . For any strategy satisfying Equation 1 and any µ
+
+C
+λ
+{
+∈ L | S
+(0, 1) and β
+
+β(µ)
+
+β(λ)
+
+∈ L
+
+=
+
+∈
+
+∈
+
+S
+
+Eµ[τδ]
+
+≥
+
+T (cid:63)(µ) kl(δ, 1
+
+δ)
+
+and
+
+−
+
+lim inf
+δ→0
+
+where (recalling that λa = (cid:80)J
+
+i=1 βiλa,i)
+
+Eµ[τδ]
+ln(1/δ) ≥
+
+T (cid:63)(µ) .
+
+T (cid:63)(µ)−1 = sup
+w∈C
+
+inf
+λ∈Altβ(µ)
+
+K
+(cid:88)
+
+J
+(cid:88)
+
+a=0
+
+i=1
+
+wa,id(µa,i, λa,i)
+
+= sup
+w∈C
+
+min
+b(cid:54)=0
+
+inf
+λ∈L:λ0=λb
+
+(cid:88)
+
+J
+(cid:88)
+
+a∈{0,b}
+
+i=1
+
+wa,id(µa,i, λa,i) .
+
+This result is established in Appendix A. T (cid:63) characterizes the difﬁculty of the learning problem.
+
+4
+
+(2)
+
+(3)
+
+(4)
+
+(cid:54)
+(cid:54)
+(cid:54)
+2.3
+
+Inﬂuence of the mode of interaction
+
+We consider the four different modes governing the sampling rule as outlined in Figure 1. In the
+agnostic mode (Fig. 1c) an arm is ﬁrst selected, after which the subpopulation type is observed.
+Mathematically, this brings the equality Eµ[Na,i(T )] = αiEµ[Na(T )] established in Lemma 2 and
+ΣK+1
+the independence constraint on the weights w
+.
+
+agnostic :=
+wa,i = αiua : (u0, . . . , uK)
+}
+{
+In the proportional mode (Fig. 1b), At is chosen based on
+t−1 and the current subpopulation It.
+Here, the constraint is that the total number of pulls of the different arms in the subpopulation i should
+respect the frequency of this subpopulation, i.e. (cid:80)
+Eµ[Na,i(T )] = αiT . This induces a marginal
+a
+J, (cid:80)
+prop :=
+w
+constraint on the weights of the form w
+. This
+}
+∈
+{
+result is established in Lemma 3 reported in Appendix B.
+
+i
+Σ(K+1)J | ∀
+
+a wa,i = αi
+
+∈ C
+
+∈ C
+
+≤
+
+F
+
+∈
+
+In the active mode (Fig. 1a), the learner has an additional degree of freedom— she can ask for any
+subpopulation type at any round. In that case, w
+
+active := Σ(K+1)J is unconstrained.
+active, and given the optimization program (3) solved to obtain
+
+∈ C
+
+By remarking that
+agnostic
+the characteristic time, one immediately gets
+
+⊂ C
+
+⊂ C
+
+prop
+
+C
+
+µ
+
+∀
+
+, T (cid:63)
+
+active(µ)
+
+∈ L
+
+T (cid:63)
+proportional(µ)
+
+T (cid:63)
+agnostic(µ) .
+
+≤
+
+≤
+
+(5)
+
+Hence, as expected, the more control/information on the subpopulation the learner has, the faster she
+is able to identify the set of arms that are better than the control.
+
+|
+
+At = a
+
+To compare with the oblivious mode, in which the subpopulation information is not even observed,
+we have to assume that α = β.
+In that case, the arm rewards follow a mixture distribution:
+(cid:80)J
+Xt
+i=1 αiνa,i. In Proposition 4 reported in Appendix B.3, we properly deﬁne the
+characteristic time of an oblivious safely calibrated policy and prove that the joint convexity of
+Kullback-Leibler divergences implies that it is larger than its agnostic counterpart. This completes
+the picture of the ordering of the characteristic times by showing that, when α = β,
+T (cid:63)
+proportional(µ)
+
+T (cid:63)
+oblivious(µ) .
+
+T (cid:63)
+agnostic(µ)
+
+active(µ)
+
+, T (cid:63)
+
+(6)
+
+∼
+
+µ
+
+∀
+
+∈ L
+
+≤
+
+≤
+
+≤
+
+Note that although we provide, in Section 3, algorithms to numerically compute the ﬁrst three
+complexites, evaluating T (cid:63)
+oblivious(µ) would be much harder, as the mixture distributions can no more
+be parameterized by their mean only. Our current techniques do not yield a general-purpose practical
+algorithm that is asymptotically optimal in the oblivious mode for the ABC-S problem. In the
+Bernoulli case, however, as mixtures of Bernoulli distributions are Bernoulli distribution, one can use
+the single-population Bernoulli approach discussed in the next paragraph. For Gaussian distributions,
+one can use a suboptimal approach based on the observation that location mixtures of Gaussians with
+bounded means are sub-Gaussian (see Appendix B.3 for details).
+
+2.4 Single population and relationship with best arm identiﬁcation
+
+In order to illustrate the nature of the the ABC-S problem, we make a detour through the single
+population case, that is, when J = 1. Given two weights wa, wb and two means µa, µb, we introduce
+the minimum weighted transportation cost for moving the means to a common position.
+
+dmid(wa, µa, wb, µb) := inf
+v
+
+wad(µa, v) + wbd(µb, v) = wad(µa, v(cid:63)
+
+a,b) + wbd(µb, v(cid:63)
+
+a,b)
+
+where v∗
+
+a,b, the optimal common location, is the weighted average, i.e. v∗
+
+a,b = wa
+
+wa+wb
+
+µa + wb
+
+wa+wb
+
+µb.
+
+Constructing an instance in the alternative When identifying all the arms better than a control,
+there are two different ways to obtain a close-by bandit model λ in the alternative. The ﬁrst option
+β(µ) and to augment its mean on the alternative
+consists in taking an arm which does not belong to
+model such that it becomes above the control (or to reduce the mean of the control). Otherwise, it is
+possible to take an arm that is better than the control in the bandit model µ and to shrink its mean
+such that it becomes lower than the control on the alternative (or augment the control). Note that the
+inﬁmum over the alternative has the same expression in the two cases (see proof of Proposition 1 in
+Appendix A.2).
+
+S
+
+There is a priori no link between a BAI problem and an ABC one. In particular, in the BAI problem
+β(µ) there are up to
+there are only K + 1 possible choices for the best arm while when looking for
+
+S
+
+5
+
+2K different sets to consider. Yet, the next proposition shows that the characteristic time T (cid:63) of any
+ABC problem with J = 1 subpopulation shares strong similarities with that of BAI problems.
+Proposition 1. Let δ
+with
+
+. For any strategy satisfying Equation 1, Equation 2 holds
+
+(0, 1) and µ
+
+∈ L
+
+∈
+
+T (cid:63)(µ)−1 = sup
+
+w∈ΣK+1
+
+inf
+λ∈Altβ(µ)
+
+K
+(cid:88)
+
+a=0
+
+wad(µa, λa) = sup
+
+w∈ΣK+1
+
+min
+b(cid:54)=0
+
+dmid(w0, µ0, wb, µb) .
+
+The proof is reported in Appendix A.2. Note that the expression of the sample complexity is really
+close to the one in the BAI setting (Garivier and Kaufmann [10, Lemma 3]) except that we consider
+all the indices different from the control here instead of the indices different from the best arm.
+
+2.5 The Gaussian case
+
+In this section, we consider the Gaussian case which is of interest as the characteristic time admits a
+more explicit expression, making it possible to further investigate the differences between the various
+modes of interaction. We will state our results for the heteroscedastic case, in particular to get a
+closed-form proxy for the Bernoulli case, where each variance is a function of the (unknown) mean.
+
+A/B testing When K = 1 (one arm and the control arm), we are considering a standard A/B test
+with subpopulations and one can easily prove the following result (established in Appendix C).
+Proposition 2. For any µ
+
+with K = 1 and νa,i =
+
+(µa,j, σ2
+
+a,j) one has
+
+∈ L
+
+N
+(cid:33)2
+
+(cid:32)(cid:114)
+
+2
+
+(cid:80)J
+
+i=1
+
+1. T (cid:63)
+
+agnostic(µ) =
+
+β2
+i
+
+0,i
+
+σ2
+αi
+
+(cid:114)
+
++
+
+(cid:80)J
+
+i=1
+
+β2
+i
+
+1,i
+
+σ2
+αi
+
+∆2
+1
+
+and w(cid:63)
+
+a,i =
+
+(cid:114)
+
+(cid:114)
+
+(cid:80)J
+
+i=1
+
+αi
+
+β2
+i
+
+a,i
+
+σ2
+αi
+
+(cid:80)J
+
+i=1
+
+β2
+i
+
+0,i
+
+σ2
+αi
+
+(cid:114)
+
++
+
+(cid:80)J
+
+i=1
+
+β2
+i
+
+1,i
+
+σ2
+αi
+
+2. T (cid:63)
+
+prop(µ) =
+
+2 (cid:80)J
+
+i=1
+
+β2
+i
+αi
+
+(σ0,i+σ1,i)2
+∆2
+1
+
+and
+
+i
+∀
+
+≤
+
+J,
+
+a
+
+∀
+
+, w(cid:63)
+0, 1
+}
+
+∈ {
+
+a,i = αiσa,i
+σ0,i+σ1,i
+
+2((cid:80)J
+
+i=1 |βi|(σ0,i+σ1,i))2
+
+|βi|σa,i
+
+, w(cid:63)
+
+3. T (cid:63)
+
+a
+
+∀
+
+≤
+
+J,
+
+∆2
+1
+
+and
+
+∈ {
+
+a,i =
+
+0, 1
+}
+
+active(µ) =
+
+i
+∀
+The optimal allocations in the agnostic and proportional cases are constrained by the proportion of
+the different subpopulations α, whereas, for the active mode, the optimal weights only depend on
+β. In general, the optimal weights also depend on the subpopulation variances, as is well-known in
+stratiﬁed sampling estimation. Note however, that when (a) the subpopulations all have a common
+variance σ2 and (b) β = α, then the optimal allocations and the characteristic times are equal for the
+agnostic, the proportional and the active modes. In that case, w(cid:63)
+a,i = αi/2, which also corresponds to
+the well-known result in Gaussian A/B testing [14]. We have more generally observed that whenever
+the subpopulations have approximately the same variances, the agnostic and proportional modes
+yield very similar performances.
+
+i=1 |βi|(σ0,i+σ1,i)
+
+(cid:80)J
+
+Weight computation in the homoscedastic case Even in scenarios where all subpopulation
+variances are equal to σ2, the active mode remains very attractive in the cases where β
+= α. The
+following proposition shows that in that case, the optimal weights for the ABC-S problem can be
+computed efﬁciently.
+Proposition 3 (Efﬁcient computation in the Gaussian case). With Gaussian distributions with a
+known variance σ2, letting (u(cid:63)
+(cid:17) , the optimal weights
+K) = argmaxu∈ΣK+1
+
+0, . . . , u(cid:63)
+
+minb(cid:54)=0
+
+for the active mode satisfy
+
+a
+
+∀
+
+0, . . . , K
+
+∈ {
+
+,
+}
+
+i
+∀
+
+≤
+
+J, w(cid:63)
+
+a,i = u(cid:63)
+a
+
+∆2
+b
++ 1
+ub
+
+(cid:16) 1
+2
+u0
+
+βi
+|
+|(cid:80)J
+i=1 |
+
+βi
+
+|
+
+.
+
+If, in addition α = β, the above also holds for the agnostic and the proportional modes.
+
+The interesting part of Proposition 3 is that computing (u(cid:63)
+K) can be done efﬁciently using
+Theorem 5 from [10]. The optimal weights of the ABC-S problem can be deduced from u(cid:63) without
+any further calculation.
+
+0, . . . , u(cid:63)
+
+6
+
+(cid:54)
+3 Algorithms
+
+To obtain our algorithms, we instantiate the Track-and-Stop algorithm template to our ABC-S problem.
+Garivier and Kaufmann [10] introduced Track-and-Stop and proved its asymptotic optimality in the
+BAI setting. Asymptotic optimality for general partition identiﬁcation problems was subsequently
+established by Kaufmann and Koolen [13, Theorem 23] under the assumption of continuity of the
+w∗(µ). Degenne and Koolen [6] show that the continuity assumption holds for
+oracle weights µ
+all single-answer problems, in the upper-hemicontinuity sense, which they show implies asymptotic
+optimality of the Track-and-Stop (T-a-S) algorithm. These results directly apply to our ABC-S
+problem. Degenne et al. [7] interpret T-a-S as a noisy sequential equilibrium computation for the
+max-min problem from the lower bound (e.g. Equation 3) and develop computationally attractive
+variants including lazy iterative solution of the w∗ problem, and optimistic gradients instead of forced
+exploration.
+
+(cid:55)→
+
+The details of our implementation are given in Appendix F. In short, we use the simple standard
+Θ(√t) forced exploration rounds, a mode/subpopulation aware upgrade of the D-tracking scheme
+[10] (which is empirically superior to C-tracking) and we approximately and incrementally compute
+the oracle weights using the AdaHedge vs Best Response iterative saddle point solver from [7]. We
+use one single learner, instead of one per possible answer, as advocated in [7, Section 4]. Note that
+we are not affected by the non-convergence of D-tracking from [7, Appendix E], as our problem has
+a unique w∗ because it is strictly concave in w (see Appendix E).
+
+(cid:80)t
+
+Na,i(t)
+
+s=1 Xs1
+
+The sampling rule The high level overview of the algorithm is as follows. We are given the number
+of arms K and subpopulations J, the exponential family, the mode of interaction, the subpopulation
+importance coefﬁcients β and, for passive modes, their natural frequencies α. The algorithm then
+R(K+1)×J
+proceeds in rounds t = 1, 2, . . . Each round t, it calculates the empirical frequencies ˆµt
+given by ˆµa,i(t) = 1
+As = a, Is = i
+. It then computes (a suitable approximation
+}
+{
+of) the maximiser (i.e. the oracle policy) wt = w∗( ˆµt)
+Σ(K+1)×J of problem (2).
+In the
+active mode, we “D-track” wt, i.e. we sample (At, It)
+twt(a, i). In
+the proportional mode, the subpopulation It is given and we “D-track” the conditional distribution
+of wt on arms given the subpopulation, i.e. At
+It), where
+argmaxaNa,It(t
+|
+i). In the agnostic mode we “D-track” the marginal distribution of wt on
+wt(a, i) = αiwt(a
+|
+twt(a). For each mode, this sampling strategy ensures that
+arms, i.e. At
+tw∗
+Na,i(t)
+a,i(µ), thus driving down the reported level of conﬁdence as quickly as
+possible given the lower bound from Theorem 1.
+
+∈
+argmaxa,iNa,i(t
+
+−
+−
+tαItwt(a
+
+argmaxaNa(t
+
+∈
+twt(a, i)
+
+1)
+
+1)
+
+1)
+
+−
+
+−
+
+≈
+
+≈
+
+−
+
+−
+
+∈
+
+∈
+
+∈
+
+The recommendation Concluding each round, we recommend
+min
+
+(0, 1)
+
+obtained by inverting the threshold β(t, δ) at the GLR statistic
+
+β( ˆµt) at conﬁdence level ˆδ(t) =
+S
+
+δ
+{
+
+∈
+
+Λ(t)
+|
+
+≥
+
+β(t, δ)
+}
+
+Λ(t) = min
+b(cid:54)=0
+
+inf
+λ∈L:λ0=λb
+
+(cid:88)
+
+J
+(cid:88)
+
+a∈{0,b}
+
+i=1
+
+Na,i(t)d(ˆµa,i(t), λa,i) .
+
+(7)
+
+δ + K + 2J
+
+The threshold For the sharpest theoretically supported thresholds we refer to [13]. Namely, an
+ABC-S problem with K-arms and J-subpopulations has 2K answers, and its rank [13, Deﬁnition 22]
+is 2J, as can be read off from (4). By [13, Proposition 23] we have validity for β(t, δ) = 6J ln ln t +
+O(ln ln 1
+ln 1
+In practice, we follow [10] and use instead the heavily stylized
+ln((1 + ln t)/δ) that omits several union bounds.
+Theorem 2. For every mode, Subpopulation Track-and-Stop is safely calibrated (Equation 1).
+Moreover, Subpopulation Track-and-Stop is asymptotically optimal and matches the lower bound
+from Theorem 1, in the sense that
+
+δ ).
+
+·
+
+for every bandit µ
+
+, lim
+δ→0
+
+∈ L
+
+E[τδ]
+ln(1/δ)
+
+= T (cid:63)(µ) .
+
+We include the proof in Appendix E.
+
+4 Experiments
+
+7
+
+4.1 Simulations
+
+We conduct numerical experiments to evaluate the proposed algorithms, focusing on Bernoulli bandit
+models, which are ubiquitous in practical applications.
+
+In our experiments, in addition to our T-a-S algorithms with the various interaction modes, we
+include two more sampling rules for comparison: (1) uniform sampling as a baseline, and (2) the
+experimentally efﬁcient Best Challenger heuristic inspired by [10], adapted to the ABC problem and
+denoted BC-ABC in the sequel. BC [10] for the BAI problem samples in every round the empirical
+best arm ˆat or its best challenger, i.e. the arm ˆct
+= ˆat at which the GLR statistic (Equation 7) reaches
+its minimum. Our BC-ABC adaptation samples in every round the control arm or the arm that
+yields the minimum GLR statistic Λ(t), in the agnostic interaction mode (since Λ(t) is subpopulation
+independent). For clearer comparison between the sampling strategies, all algorithms use the Chernoff
+stopping criterion [10] to determine either when to stop or output the risk assessment at a given
+time. We also opted for sampling rules independent from the conﬁdence parameter δ, because we are
+aiming for safely calibrated policies.
+
+We ﬁrst illustrate the fact that the T-a-S algorithm provides a correct –but rather conservative–
+assessment of the risk of its decision whatever the time it is stopped at. To do so, we generated
+1000 bandit instances uniformly at random from [0, 1] with K = 2 arms. For each instance, we
+recorded the ﬁrst time a certain risk assessment level is reached and the correctness of the algorithm’s
+recommendation at that point. We map to each risk assessment level the proportion of errors across
+all instances. We chose two stopping rates that are not supported by theory but are recommended in
+practice [10]. Figure 2 (Left) illustrates the isotonic curve ﬁtted on our observations and suggests that
+even the most lenient stopping threshold ln((ln(t) + 1)/δ) results in much lower empirical probability
+of error than the risk assessment. In the following, we use the stopping threshold ln((ln(t) + 1)/δ).
+
+Figure 2: (Left) Risk assessment calibration on a log-log scale. (Right) Stopping time boxplot for µ =
+[0, 1](K+1)×J when β = [1/3, 1/3, 1/3], α = [0.4, 0.5, 0.1]
+[0.1 0.4 0.3; 0.2 0.5 0.2; 0.5 0.1 0.1]
+with Bernoulli distributions.
+
+∈
+
+In our second experiment 1, we generated 3000 Bernoulli bandit instances with K = 2 and a
+random number of subpopulations J between 2 and 10. Each subpopulation-arm’s mean µa,i is
+drawn uniformly at random from [0, 1], and the subpopulation frequency vector α is drawn from a
+Dirichlet(10) distribution. Table 1 reports the average stopping time of each algorithm across all
+bandit instances. On average, the T-a-S algorithms at all modes stop at similar times, and all adaptive
+sampling methods terminate faster than uniform sampling.
+
+Table 1: Average stopping time. Description in text.
+T-a-S (active) T-a-S (proportional) T-a-S (agnostic) BC-ABC Uniform
+21586
+
+15279
+
+14871
+
+15231
+
+15444
+
+To better understand the role of β and α, we ran the algorithms on a speciﬁc model (see Figure 2,
+= β. In this case, the optimal proportions are constrained by the frequencies of the
+Right) with α
+
+1Code at https://gitlab.com/ckatsimerou/abc_s_public
+
+8
+
+10−310−210−1100riskassessment10−310−210−1100errorrateln((ln(t)+1)/δ)ln((Kln(t)+1)/δ)activeprop.agn.BC-ABCUniform010000200003000040000500006000070000avglowerbdpracticalbd(cid:54)
+(cid:54)
+subpopulation for passive interaction modes. The expected number of samples needed to identify
+the ABC-S solution is lower for the active policy, which has an additional degree of freedom in its
+sampling strategy. The proportional interaction mode and the agnostic interaction modes perform
+similarly. As expected, all the proposed strategies outperform the uniform sampling rule. We contrast
+δ)T ∗(µ), and with a more practical version, which
+the stopping time with the lower bound kl(δ, 1
+indicates, approximately, the ﬁrst time at which the GLR statistic crosses the threshold, i.e. solving
+t = ln((ln(t) + 1)/δ)T ∗(µ), as was done in [7]. All adaptive algorithms perform well on this
+instance, with their average runtime being very close to their respective practical bound.
+
+−
+
+4.2 Application to A/B/n experiment
+
+We evaluate the algorithms on data collected from an actual A/B/n experiment, which compares
+different copies of a component of the webpage, in order to identify the ones better than the default
+copy. The metric of interest is whether the visitor clicked at least once during the experiment to the
+next page after getting exposed to one of the variants. For this setup we considered K = 2 copies
+competing against the control, with each copy being treated as an arm. Due to global trafﬁc, the
+data exhibits strong seasonality patterns within a day, as seen in Figure 3a, in which every point
+corresponds to click-through rate per six hours (quarter of day) for 12 consecutive days. We treat
+the J = 4 seasons as i.i.d. subpopulations. Within each season we shufﬂed the data to eliminate the
+weekly trend.
+
+The summary statistics of the dataset, together with the characteristic times and the optimal weights
+for each T-a-S mode can be found in Appendix G. Note that the small gaps between the arm means
+makes this practical ABC-S problem much harder than the synthetically generated examples.
+
+·
+
+≤
+
+We tested all algorithms described in Section 4.1. Each algorithm terminates when it reaches for the
+ﬁrst time ˆδt
+0.1 or outputs a risk assessment on the recommendation if it runs out of samples, which
+107 observations. Here, we weigh the importance β of each season
+in this experiment occurs after 1.4
+equally to its observed frequency α. Doing so, we do not expect large performance discrepancies
+between the different T-a-S interaction modes, which is conﬁrmed by their characteristic times
+(Appendix G). The observations from Fig. 3b are similar to the results from the numerical simulations:
+adaptive sampling achieves lower sample complexity over uniform sampling and T-a-S for the active
+interaction mode terminates faster than for the passive modes. All algorithms yield the correct
+recommendation, but not with the same risk assessment. All T-a-S algorithms terminated within the
+available sample size, BC-ABC almost terminated and output a risk assessment slightly above 0.1
+and uniform’s risk assessment was 0.67. Of course, when viewing seasonality as a subpopulation,
+the active mode is unrealistic, but it is still informative to see that it can be very economical in hard
+problems in which sampling the subpopulations actively is an option. In this instance, proportional,
+agnostic and oblivious modes terminated at similar times. However, we would recommend using the
+proportional mode, given that we expect it to never perform worse than the other passive modes on
+average. One should not be surprised by the curve for the uniform sampling, this policy was stopped
+before convergence because it ran out of samples.
+
+Lastly, here we assumed that seasons occur in i.i.d. fashion, but in reality there is temporal dependence
+between them. This imposes extra constraints on the optimal weights and increases the sample
+complexity. However, we do not expect this to be detrimental for cases in which seasons alternate
+frequently and full cycles are observed often, as was the case with our example.
+
+5 Conclusion
+
+In this work, we considered the pure exploration task of identifying all the arms that are better than a
+control arm in the presence of subpopulations (ABC-S). We design asymptotically optimal policies
+for this problem under different assumptions on the mode of interaction between the learner and
+the bandit. We observed that the active mode, in which the learner decides which subpopulation it
+samples, may signiﬁcantly reduce decision times. On the other hand, the other modes, in which the
+learner has to respect the natural proportions of the different subpopulations (i.e., in proportional and
+agnostic modes) produce more modest effects, except when the subpopulations differ signiﬁcantly in
+variances. Finally, we proposed a natural way to provide anytime decisions with risk guarantees in
+the Track-and-Stop framework.
+
+9
+
+(a) Click-through rate per 6 hours for 12 days.
+
+(b) Risk assessment over time.
+
+Figure 3: Real data and results.
+
+6 Potential Societal Impact
+
+The contributions presented in this work are mostly related to methods and, as such, do not have a
+direct expected societal impact. This being said, a potential concern that will need to be addressed
+more carefully in subsequent applications of these methods is the use of subpopulation information,
+which could be exploited to target speciﬁc user behaviour or characteristics.
+In the use case
+considered in Section 4.2, the subpopulations correspond to time slots that are used to model
+seasonality in the user responses, which does not raise any speciﬁc ethical concern. However, in
+cases where the subpopulations are formed using characteristics of individual users, the impact needs
+to be assessed more thoroughly. Note that in such cases, restricting to one of the more conservative
+modes of interaction (i.e. agnostic or even oblivious) may become necessary in order to prevent
+undue use of population-dependent information.
+
+Acknowledgment
+The authors would like to thank the anonymous reviewers whose comments and questions helped
+improve the clarity of this manuscript. A. Garivier acknowledges the support of the Project IDEX-
+LYON of the University of Lyon, in the framework of the Programme Investissements d’Avenir
+(ANR-16-IDEX-0005), and Chaire SeqALO (ANR-20-CHIA-0020).
+
+10
+
+010203040time0.030.040.050.060.07metricbaselinevariant1variant20.80.91.01.11.21.31.4samples/107(after8·107)×1070.10.20.30.40.50.60.70.8riskassessmentactiveproportionalagnosticobliviousBC-ABCuniformReferences
+
+[1] O. Cappé, A. Garivier, O.-A. Maillard, R. Munos, G. Stoltz, et al. Kullback–leibler upper
+conﬁdence bounds for optimal sequential allocation. Annals of Statistics, 41(3):1516–1541,
+2013.
+
+[2] A. Carpentier and R. Munos. Finite-time analysis of stratiﬁed sampling for monte carlo. In
+NIPS-Twenty-Fifth Annual Conference on Neural Information Processing Systems, 2011.
+
+[3] L. Chen, J. Li, and M. Qiao. Nearly instance optimal sample complexity bounds for top-k arm
+
+selection. In Artiﬁcial Intelligence and Statistics, pages 101–110. PMLR, 2017.
+
+[4] J. Cheshire, P. Menard, and A. Carpentier. The inﬂuence of shape constraints on the thresholding
+
+bandit problem. In Conference on Learning Theory, pages 1228–1275. PMLR, 2020.
+
+[5] S. de Rooij, T. van Erven, P. Grünwald, and W. M. Koolen. Follow the leader if you can, Hedge
+
+if you must. Journal of Machine Learning Research, 15:1281–1316, Apr. 2014.
+
+[6] R. Degenne and W. M. Koolen. Pure exploration with multiple correct answers. In Advances in
+
+Neural Information Processing Systems (NeurIPS) 32, pages 14591–14600. Dec. 2019.
+
+[7] R. Degenne, W. M. Koolen, and P. Ménard. Non-asymptotic pure exploration by solving games.
+In Advances in Neural Information Processing Systems (NeurIPS) 32, pages 14492–14501. Dec.
+2019.
+
+[8] E. Even-Dar, S. Mannor, Y. Mansour, and S. Mahadevan. Action elimination and stopping
+conditions for the multi-armed bandit and reinforcement learning problems. Journal of machine
+learning research, 7(6), 2006.
+
+[9] V. Gabillon, M. Ghavamzadeh, and A. Lazaric. Best arm identiﬁcation: A uniﬁed approach
+to ﬁxed budget and ﬁxed conﬁdence. In NIPS-Twenty-Sixth Annual Conference on Neural
+Information Processing Systems, 2012.
+
+[10] A. Garivier and E. Kaufmann. Optimal best arm identiﬁcation with ﬁxed conﬁdence.
+
+In
+
+Conference on Learning Theory, pages 998–1027. PMLR, 2016.
+
+[11] R. Johari, L. Pekelis, and D. J. Walsh. Always valid inference: Bringing sequential analysis to
+
+A/B testing. arXiv preprint arXiv:1512.04922, 2015.
+
+[12] S. Kalyanakrishnan, A. Tewari, P. Auer, and P. Stone. Pac subset selection in stochastic
+
+multi-armed bandits. In ICML, volume 12, pages 655–662, 2012.
+
+[13] E. Kaufmann and W. M. Koolen. Mixture martingales revisited with applications to sequential
+
+tests and conﬁdence intervals. Preprint, Oct. 2018.
+
+[14] E. Kaufmann, O. Cappé, and A. Garivier. On the complexity of best-arm identiﬁcation in
+
+multi-armed bandit models. The Journal of Machine Learning Research, 17(1):1–42, 2016.
+
+[15] T. Lattimore and C. Szepesvári. Bandit Algorithms. Cambridge University Press, 2020. doi:
+
+10.1017/9781108571401.
+
+[16] A. Locatelli, M. Gutzeit, and A. Carpentier. An optimal algorithm for the thresholding bandit
+problem. In International Conference on Machine Learning, pages 1690–1698. PMLR, 2016.
+
+[17] B. Mason, L. Jain, A. Tripathy, and R. Nowak. Finding all
+
+{
+Advances in Neural Information Processing Systems, 2020.
+
+(cid:15)
+
+-good arms in stochastic bandits.
+}
+
+[18] F. Yang, A. Ramdas, K. Jamieson, and M. J. Wainwright. A framework for Multi-
+A(rmed)/B(andit) testing with online FDR control. In Advances in Neural Information Process-
+ing Systems, 2017.
+
+11
+
+A General form of the characteristic time
+
+A.1 Proof of Theorem 1
+
+Theorem 1. Let δ
+, the
+expected number of rounds for the ABC-S problem for the agnostic, proportional and active mode
+satisﬁes:
+
+RJ . For any strategy satisfying Equation 1 and any µ
+
+(0, 1) and β
+
+∈ L
+
+∈
+
+∈
+
+Eµ[τδ]
+
+≥
+
+T (cid:63)(µ) kl(δ, 1
+
+δ)
+
+and
+
+−
+
+lim inf
+δ→0
+
+where (recalling that λa = (cid:80)J
+
+i=1 βiλa,i)
+
+Eµ[τδ]
+ln(1/δ) ≥
+
+T (cid:63)(µ) .
+
+T (cid:63)(µ)−1 = sup
+w∈C
+
+inf
+λ∈Altβ(µ)
+
+K
+(cid:88)
+
+J
+(cid:88)
+
+a=0
+
+i=1
+
+wa,id(µa,i, λa,i)
+
+= sup
+w∈C
+
+min
+b(cid:54)=0
+
+inf
+λ∈L:λ0=λb
+
+(cid:88)
+
+J
+(cid:88)
+
+a∈{0,b}
+
+i=1
+
+wa,id(µa,i, λa,i) .
+
+(2)
+
+(3)
+
+(4)
+
+Proof. Using the transportation lemma from [14] and recalling that Na,i(t) is the number of draws
+of arm a in subpopulation i up to time t, we have for any safely calibrated policies
+
+Therefore,
+
+λ
+
+∀
+
+∈
+
+Altβ(µ),
+
+J
+(cid:88)
+
+K
+(cid:88)
+
+i=1
+
+a=0
+
+Eµ[Na,i(τδ)]d(µa,i, λa,i)
+
+kl(δ, 1
+
+δ) .
+
+−
+
+≥
+
+kl(δ, 1
+
+δ)
+
+inf
+λ∈Altβ(µ)
+
+≤
+
+−
+
+K
+(cid:88)
+
+J
+(cid:88)
+
+a=0
+
+i=1
+
+Eµ[Na,i(τδ)]d(µa,i, λa,i)
+
+= Eµ[τδ]
+
+inf
+λ∈Altβ(µ)
+
+K
+(cid:88)
+
+J
+(cid:88)
+
+a=0
+
+i=1
+
+Eµ[Na,i(τδ)]
+Eµ[τδ]
+
+d(µa,i, λa,i)
+
+Eµ[τδ] sup
+w∈C
+
+≤
+
+inf
+λ∈Altβ(µ)
+
+K
+(cid:88)
+
+J
+(cid:88)
+
+a=0
+
+i=1
+
+wa,id(µa,i, λa,i) .
+
+C ⊂
+
+Σ(K+1)J . Using kl(δ, 1
+
+In the last inequality, we used the fact that the normalized expected numbers of draws satisfy the set
+ln(1/δ) when δ tends to 0 gives the
+of constraints deﬁned by
+ﬁrst result.
+We denote Λ(w, λ, µ) := (cid:80)K
+i=1 wa,id(µa,i, λa,i). To obtain the second result, we will
+simplify the expression of T (cid:63)(µ)−1. Using that the KL divergences and the weights are positive,
+for λ to be in the alternative, one of the two following conditions need to be met: (1) there exists
+a
+such that
+∈ S
+λa > λ0.
+
+β(µ) such that λa < λ0. (2) there exists a
+
+−
+β (µ) :=
+
+µa < µ0
+
+a
+{
+
+∈ S
+
+(cid:80)J
+
+[K]
+
+a=0
+
+δ)
+
+∼
+
+−
+
+∈
+
+}
+
+|
+
+For this reason, one has
+
+
+
+
+
+inf
+λ∈Altβ(µ)
+
+Λ(w, λ, µ) = min
+
+ min
+
+a∈Sβ(µ)
+
+inf
+λ:λa<λ0
+
+Λ(w, λ, µ), min
+a∈S−
+
+β (µ)
+
+inf
+λ:λa>λ0
+
+Λ(w, λ, µ)
+
+ .
+
+We obtain the desired result by remarking that the inner optimization programs inf λ are each
+achieved on the boundary (the constraint being satisﬁed with equality) where they coincide, and that
+1, . . . , K
+{
+
+−
+β (µ).
+
+β(µ)
+
+∪ S
+
+=
+
+S
+
+}
+
+A.2 Proof of Proposition 1
+
+In the particular case when J = 1, the expression of the characteristic time can be simpliﬁed.
+
+12
+
+Proposition 1. Let δ
+with
+
+∈
+
+(0, 1) and µ
+
+T (cid:63)(µ)−1 = sup
+
+w∈ΣK+1
+
+inf
+λ∈Altβ(µ)
+
+∈ L
+
+K
+(cid:88)
+
+a=0
+
+. For any strategy satisfying Equation 1, Equation 2 holds
+
+wad(µa, λa) = sup
+
+w∈ΣK+1
+
+min
+b(cid:54)=0
+
+dmid(w0, µ0, wb, µb) .
+
+Proof. The ﬁrst part of the proof can be obtained using similar argument than for Theorem 1. The
+missing part is the simpliﬁcation of the expression of T (cid:63)(µ).
+We denote Λ(w, λ, µ) := (cid:80)K
+one of the two following conditions needs to be met: (1) there exists a
+(2) there exists a
+such that λa > λ0.
+
+a=0 wad(µa, λa). Following the reasoning from the proof of Theorem 1
+β(µ) such that λa < λ0.
+
+µa < µ0
+
+∈ S
+
+[K]
+
+−
+β (µ) :=
+
+a
+{
+
+∈
+
+|
+
+}
+
+∈ S
+
+For this reason, one has
+
+
+
+
+
+inf
+λ∈Altβ(µ)
+
+Λ(w, λ, µ) = min
+
+ min
+
+a∈Sβ(µ)
+
+inf
+λ:λa<λ0
+
+Λ(w, λ, µ), min
+a∈S−
+
+β (µ)
+
+inf
+λ:λa>λ0
+
+Λ(w, λ, µ)
+
+ .
+
+In this simpler case, it is possible to obtain an explicit formula for this inﬁmum. We start from
+
+
+
+
+
+T (cid:63)(µ)−1 = sup
+
+min
+
+w∈ΣK+1
+
+ min
+
+a∈Sβ(µ)
+
+inf
+λ:λa<λ0
+
+Λ(w, λ, µ), min
+a∈S−
+
+β (µ)
+
+inf
+λ:λa>λ0
+
+Λ(w, λ, µ)
+
+ .
+
+Let us focus on the case, λa < λ0 and ﬁx an index a
+for b
+
+= a coincides with µb. This gives,
+
+= 0 and b
+
+β(µ). Λ is always smaller when all the λb
+
+∈ S
+
+min
+a∈Sβ(µ)
+
+inf
+λ:λa<λ0
+
+Λ(w, λ, µ) = min
+
+a∈Sβ(µ)
+
+inf
+λ:λa≤λ0
+
+w0d(µ0, λ0) + wad(µa, λa) .
+
+We consider the Lagrangian function, L(λ0, λa, q) = w0d(µ0, λ0) + wad(µa, λa) + q(λa
+Differentiating with respect to λ0 and λa brings the condition
+
+−
+
+λ0).
+
+0 = λ(cid:63)
+λ(cid:63)
+
+a = λ(cid:63)
+
+a,0 = argminλw0d(µ0, λ) + wad(µa, λ) =
+
+w0
+w0 + wa
+
+µ0 +
+
+wa
+w0 + wa
+
+µa .
+
+Recalling, dmid(wa, µa, wb, µb) := inf v wad(µa, v) + wbd(µb, v) one has,
+
+min
+a∈Sβ(µ)
+
+inf
+λ:λa<λ0
+
+Λ(w, λ, µ) = min
+
+dmid(w0, µ0, wa, µa) .
+
+(8)
+
+a∈Sβ(µ)
+
+Solving the optimization program for a
+same set of constraints and optimal solution, i.e.
+
+∈ S
+
+−
+β (µ) and under the constraint λa > λ0, gives the exact
+
+min
+a∈S−
+
+β (µ)
+
+inf
+λ:λa>λ0
+
+Λ(w, λ, µ) = min
+a∈S−
+
+β (µ)
+
+dmid(w0, µ0, wa, µa) .
+
+(9)
+
+Bringing Equation 8 and Equation 9 together and remarking that [K] =
+announced result.
+
+β(µ)
+
+S
+
+∪ S
+
+−
+β (µ) gives the
+
+A.3 Link between ABC and BAI
+
+In the particular case, of Gaussian distributions with a known variance σ2, for any µ
+easily create a BAI instance with the same characteristic time as T (cid:63)(µ).
+Lemma 1. Let µ
+be the mean of the control arm. We deﬁne (cid:101)µ as follows
+
+where all the arms are Gaussian distributions with known variance σ2. Let µ0
+
+, one can
+
+∈ L
+
+∈ L
+
+(cid:101)µk =
+
+(cid:26) 2µ0
+µk
+
+µk
+
+−
+
+if µk > µ0
+otherwise.
+
+By denoting T (cid:63)
+has
+
+BAI(µ) the characteristic time for the BAI problem with a bandit instance µ, then one
+
+T (cid:63)(µ) = T (cid:63)
+
+BAI( (cid:101)µ) .
+
+13
+
+(cid:54)
+(cid:54)
+Proof. In the particular case of Gaussian distributions with known variance σ2, easy calculation
+brings
+
+T (cid:63)(µ)−1 = sup
+
+with αb = w0
+
+wb+w0
+
+w∈ΣK+1
+.
+
+min
+b(cid:54)=0
+
+dmid(w0, µ0, wb, µb) = min
+b(cid:54)=0
+
+µb)2
+
+(µ0
+
+−
+2
+
+((1
+
+−
+
+αb)2w0 + α2
+
+b wb)
+
+On the instance ˜µ, ﬁrst note that ˜µ0 is the best arm by construction. For an index k such that µk > µ0,
+one has
+
+˜µ0
+
+˜µk = µ0
+
+(2µ0
+
+µk) = µk
+
+µ0 > 0 .
+
+−
+
+−
+[K], ˜µ0 > ˜µk. Using Lemma 3 from [10], by deﬁning Iγ(µ1, µ2) :=
+γ)µ2), one has
+
+γ)d(µ2, γµ1 + (1
+
+−
+
+−
+
+−
+
+min
+b(cid:54)=0
+
+(w0 + wb)I w0
+
+(µ0, µb) .
+
+w0+wb
+
+For this reason,
+γd(µ1, γµ1 + (1
+
+∀
+−
+
+∈
+
+k
+γ)µ2) + (1
+−
+T (cid:63)
+BAI( (cid:101)µ) = sup
+
+w∈ΣK+1
+Furthermore, letting αb = w0/(w0 + wb):
+(cid:18)
+
+(w0 + wb)Iαb (µ0, µb) = (w0 + wb)
+
+αb
+
+(1
+
+−
+
+αb)2(µ0
+2σ2
+
+−
+
+µb)2
+
++ (1
+
+αb)
+
+−
+
+α2
+
+b (µ0
+
+−
+2σ2
+
+µb)2
+
+(cid:19)
+
+−
+2σ2
+Plugging this in the expression of T (cid:63)
+BAI( (cid:101)µ) gives the announced result.
+
+−
+
+αb)2w0 + α2
+
+b wb
+
+=
+
+(cid:1) .
+
+(µ0
+
+µb)2
+
+(cid:0)(1
+
+B Results for speciﬁc modes of interaction
+
+B.1 Agnostic mode
+
+Lemma 2. For any agnostic policy where At is chosen knowing
+when deﬁning Na,j(t) = (cid:80)t
+0, . . . , K
+a
+
+Is = j) and Na(t) = (cid:80)t
+,
+
+∩
+1, . . . , J
+
+F
+
+1(As = a
+j
+∀
+
+∈ {
+
+s=1
+,
+}
+
+t
+∀
+
+≥
+
+}
+
+∀
+
+∈ {
+
+1, Eµ[Na,j(t)] = αjEµ[Na(t)]
+
+t−1 but independently from It,
+1(As = a), then
+
+s=1
+
+Proof.
+
+Eµ[Na,j(t)] =
+
+=
+
+t
+(cid:88)
+
+s=1
+t
+(cid:88)
+
+s=1
+
+P(As = a
+
+Is = j) =
+
+∩
+
+Is = j)P(Is = j)
+Pµ(As = a
+|
+
+αjPµ(As = a
+Is = j) =
+|
+
+αjPµ(As = a)
+
+t
+(cid:88)
+
+s=1
+t
+(cid:88)
+
+s=1
+
+= αjEµ[Na(t)] ,
+
+where in the third equality, we have used that the action At is selected independently from the
+population indicator It.
+
+B.2 Proportional mode
+
+Lemma 3. For any proportional policy where At is chosen knowing
+Na,j(t) = (cid:80)t
+
+Is = j) and Na(t) = (cid:80)t
+
+1(As = a
+
+1(As = a), then
+
+F
+
+s=1
+
+s=1
+
+t−1 and It, when deﬁning
+
+∩
+
+j
+∀
+
+1, . . . , J
+
+∈ {
+
+,
+
+t
+∀
+
+}
+
+≥
+
+1,
+
+K
+(cid:88)
+
+a=0
+
+Eµ[Na,j(t)] = αjt .
+
+Proof.
+K
+(cid:88)
+
+a=0
+
+Eµ[Na,j(t)] =
+
+t
+(cid:88)
+
+K
+(cid:88)
+
+Eµ [1(Is = j)1(As = a)] =
+
+a=0
+
+Pµ(Is = j) = αjt .
+
+s=1
+t
+(cid:88)
+
+s=1
+
+=
+
+t
+(cid:88)
+
+s=1
+
+(cid:34)
+1(Is = j)
+
+Eµ
+
+(cid:35)
+
+1(As = a)
+
+K
+(cid:88)
+
+a=0
+
+14
+
+B.3 Oblivious mode
+
+In the oblivious mode, the subpopulations can not be observed by the learner. In this case, we have
+
+1. E [Xt
+2. Xt
+
+At = a] = (cid:80)J
+|
+At = a
+|
+
+(cid:80)J
+
+∼
+
+i=1 αiνa,i
+
+.
+
+i=1 αiµa,i
+
+,
+
+While with observable subpopulations the distributions are entirely characterized by their means,
+this is no longer the case with mixture distributions. In particular, this requires deﬁning a different
+alternative.
+
+Alt(ν) :=
+
+ν(cid:48) :
+
+{
+
+a, ν(cid:48)
+∀
+
+a =
+
+Proposition 4. Let δ
+µ
+
+∈
+∈
+, the characteristic time satisﬁes
+
+(0, 1) and β
+
+∈ L
+
+J
+(cid:88)
+
+αiν(cid:48)
+
+a,i with ν(cid:48)
+
+and
+
+(ν(cid:48))
+
+=
+
+(ν)
+
+.
+
+S
+i=1
+RJ . For any oblivious strategy satisfying Equation 1 and any
+
+S
+
+}
+
+a,i ∈ P
+
+Eµ[τδ]
+
+≥
+
+T (cid:63)
+oblivious(µ) kl(δ, 1
+
+δ)
+
+and
+
+−
+
+lim inf
+δ→0
+
+Eµ[τδ]
+ln(1/δ) ≥
+
+T (cid:63)
+oblivious(µ) .
+
+where
+
+oblivious(µ)−1 = sup
+T (cid:63)
+
+w∈ΣK+1
+
+inf
+ν(cid:48)∈ Alt(ν)
+
+K
+(cid:88)
+
+a=0
+
+waKL
+
+(cid:32) J
+
+(cid:88)
+
+i=1
+
+αiνa,i,
+
+(cid:33)
+
+αiν(cid:48)
+
+a,i
+
+.
+
+J
+(cid:88)
+
+i=1
+
+(10)
+
+Furthermore,
+
+µ
+
+∀
+
+, T (cid:63)
+
+oblivious(µ)
+
+∈ L
+
+T (cid:63)
+agnostic(µ) .
+
+≥
+
+Proof. Using the transportation lemma from [14] we have for any safely calibrated oblivious policy
+
+ν(cid:48)
+∀
+
+∈
+
+Alt(ν),
+
+K
+(cid:88)
+
+a=0
+
+Eµ[Na(τδ)]KL
+
+(cid:32) J
+
+(cid:88)
+
+i=1
+
+αiνa,i,
+
+(cid:33)
+
+αiν(cid:48)
+
+a,i
+
+J
+(cid:88)
+
+i=1
+
+kl(δ, 1
+
+δ) .
+
+−
+
+≥
+
+Therefore,
+
+kl(δ, 1
+
+δ)
+
+inf
+ν(cid:48)∈Alt(ν)
+
+≤
+
+−
+
+K
+(cid:88)
+
+a=0
+
+Eµ[Na(τδ)]KL
+
+(cid:32) J
+
+(cid:88)
+
+i=1
+
+αiνa,i,
+
+(cid:33)
+
+αiν(cid:48)
+
+a,i
+
+J
+(cid:88)
+
+i=1
+
+= Eµ[τδ]
+
+inf
+ν(cid:48)∈Alt(ν)
+
+K
+(cid:88)
+
+a=0
+
+Eµ[Na(τδ)]
+Eµ[τδ]
+
+KL
+
+(cid:32) J
+
+(cid:88)
+
+i=1
+
+αiνa,i,
+
+(cid:33)
+
+αiν(cid:48)
+
+a,i
+
+J
+(cid:88)
+
+i=1
+
+Eµ[τδ]
+
+≤
+
+sup
+w∈ΣK+1
+
+inf
+ν(cid:48)∈Alt(ν)
+
+K
+(cid:88)
+
+a=0
+
+waKL
+
+(cid:32) J
+
+(cid:88)
+
+i=1
+
+αiνa,i,
+
+(cid:33)
+
+αiν(cid:48)
+
+a,i
+
+.
+
+J
+(cid:88)
+
+i=1
+
+ln(1/δ) when δ tends to 0 gives the ﬁrst result.
+
+Using kl(δ, 1
+
+δ)
+
+−
+
+∼
+
+Using the joint convexity of the KL divergence one gets
+(cid:32) J
+
+(cid:33)
+
+KL
+
+(cid:88)
+
+αiνa,i,
+
+J
+(cid:88)
+
+αiν(cid:48)
+
+a,i
+
+i=1
+
+i=1
+
+J
+(cid:88)
+
+≤
+
+i=1
+
+αiKL(νa,i, ν(cid:48)
+
+a,i) .
+
+Assuming that the mean of ν(cid:48)
+KL(νa,i, ν(cid:48)
+
+a,i) = d(µa,i, λa,i), we deduce,
+
+a,i = λa,i and recalling that for distributions in
+
+, one has
+
+P
+
+oblivious(µ)−1 = sup
+T (cid:63)
+
+w∈ΣK+1
+
+inf
+ν(cid:48)∈ Alt(ν)
+
+K
+(cid:88)
+
+a=0
+
+waKL
+
+(cid:32) J
+
+(cid:88)
+
+i=1
+
+αiνa,i,
+
+(cid:33)
+
+αiν(cid:48)
+
+a,i
+
+J
+(cid:88)
+
+i=1
+
+K
+(cid:88)
+
+J
+(cid:88)
+
+a=0
+
+i=1
+
+αiwad(µa,i, λa,i)
+
+≤
+
+sup
+inf
+w∈ΣK+1
+λ∈ Alt(µ)
+agnostic(µ)−1 .
+
+= T (cid:63)
+
+15
+
+(cid:54)
+Except in the case of Bernoulli distributions –where the mixture is also a Bernoulli distribution–,
+ﬁnding a strategy that matches T (cid:63)
+oblivious(µ)−1 is a hard task. However, one may use the following
+lemma to treat the mixture in a sub-optimal way, based on the fact that it exhibits sub-gaussian
+behavior.
+Lemma 4 (Sub-gaussianity of mixture). For each µ
+mean EX∼νµ[X] = µ that is σ2-sub-Gaussian, meaning that EX∼νµ
+λ
+∈
+Eµ∼α
+
+R, assume that νµ is a distribution on R with
+eσ2λ2/2 for any
+R. Further let α(µ) be a prior on µ with mean m that is itself η2-sub-Gaussian, meaning that
+eλ2η2/2. Then the mixture distribution Q = Eµ∼α [νµ] is σ2 + η2 sub-Gaussian.
+
+(cid:2)eλ(X−µ)(cid:3)
+
+(cid:2)eλ(µ−m)(cid:3)
+
+≤
+
+∈
+
+≤
+
+Proof. The mixture distribution obviously has mean EX∼Q[X] = m and
+
+(cid:104)
+
+eλ(X−m)(cid:105)
+
+E
+X∼Q
+
+= E
+µ∼α
+
+eλ(X−µ)(cid:105)(cid:21)
+
+(cid:104)
+
+(cid:20)
+eλ(µ−m) E
+eλ(µ−m)(cid:105)
+
+(cid:104)
+
+X∼νµ
+eσ2λ2/2
+
+E
+µ∼α
+e(σ2+η2)λ2/2.
+
+≤
+
+≤
+
+In particular, if α is supported on [
+sub-Gaussian.
+
+M ], then α is M 2 sub-Gaussian, and hence Q is (σ2 + M 2)
+
+±
+
+C Optimal allocations in the Gaussian case for K = 1 (A/B testing)
+
+Lemma 5. When K = 1 with Gaussian distributions such that νa,i =
+holds
+
+N
+
+(µa,i, σ2
+
+a,i) the following
+
+inf
+λ:λ0=λ1
+
+J
+(cid:88)
+
+i=1
+
+w0,id(µ0,i, λ0,i) +
+
+J
+(cid:88)
+
+i=1
+
+w1,id(µ1,i, λ1,i) =
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+∆2
+1
+(cid:16) σ2
+
+0,i
+w0,i
+
+(cid:17) .
+
++
+
+σ2
+1,i
+w1,i
+
+Proof. One has for b
+
+0, 1
+}
+
+∈ {
+
+,
+
+d(µb,i, λb,i) =
+
+(λb,i
+
+µb,i)2
+
+−
+2σ2
+b,i
+
+.
+
+Using the result from Theorem 1 for the case K = 1, the following holds
+
+inf
+λ∈Altβ(µ)
+
+1
+(cid:88)
+
+J
+(cid:88)
+
+a=0
+
+i=1
+
+wa,id(µa,i, λa,i) = min
+
+λ∈L:λ0=λ1
+
+1
+(cid:88)
+
+J
+(cid:88)
+
+a=0
+
+i=1
+
+wa,id(µa,i, λa,i) .
+
+We introduce
+
+L(λ0, λ1, q) =
+
+J
+(cid:88)
+
+i=1
+
+w0,i
+
+One has,
+
+(λ0,i
+
+µ0,i)2
+
+−
+2σ2
+0,i
+
++
+
+J
+(cid:88)
+
+i=1
+
+w1,i
+
+(λ1,i
+
+µ1,i)2
+
+−
+2σ2
+1,i
+
+1
+(cid:88)
+
+J
+(cid:88)
+
+min
+λ∈L:λ0=λ1
+
+wa,id(µa,i, λa,i) = sup
+q∈R
+
+inf
+λ∈L
+
+a=0
+Differentiating with respect to λ0,i and λ1,i brings the conditions
+
+i=1
+
++ q
+
+(cid:32) J
+
+(cid:88)
+
+i=1
+
+(cid:33)
+
+βi(λ0,i
+
+−
+
+λ1,i)
+
+.
+
+L(λ0, λ1, q) .
+
+λ0,i = µ0,i
+
+qβiσ2
+0,i
+w0,i
+
+−
+
+and λ1,i = µ1,i +
+
+qβiσ2
+1,i
+w1,i
+
+.
+
+Plugging these values back in L gives the function
+
+f (q) =
+
+q2
+2
+
+−
+
+J
+(cid:88)
+
+i=1
+
+β2
+i
+
+(cid:32)
+
+σ2
+0,i
+w0,i
+
++
+
+σ2
+1,i
+w1,i
+
+(cid:33)
+
++ q
+
+J
+(cid:88)
+
+i=1
+
+βi(µ0,i
+
+µ1,i) .
+
+−
+
+16
+
+Easy calculations show that the maximum of the function f is attained for
+
+q(cid:63) =
+
+(cid:80)J
+
+i=1 βi(µ0,i
+(cid:16) σ2
+i=1 β2
+i
+
+0,i
+w0,i
+
+µ1,i)
+σ2
+1,i
+w1,i
+
+(cid:17) .
+
+−
++
+
+(cid:80)J
+
+Plugging this value back in the expression of f ,
+
+f (q(cid:63)) =
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+∆2
+1
+(cid:16) σ2
+
+0,i
+w0,i
+
+(cid:17) .
+
++
+
+σ2
+1,i
+w1,i
+
+Proposition 2. For any µ
+
+∈ L
+
+with K = 1 and νa,i =
+
+(cid:32)(cid:114)
+
+2
+
+(cid:80)J
+
+i=1
+
+1. T (cid:63)
+
+agnostic(µ) =
+
+β2
+i
+
+0,i
+
+σ2
+αi
+
+(cid:114)
+
++
+
+(cid:80)J
+
+i=1
+
+β2
+i
+
+1,i
+
+σ2
+αi
+
+∆2
+1
+
+N
+(cid:33)2
+
+(µa,j, σ2
+
+a,j) one has
+
+and w(cid:63)
+
+a,i =
+
+(cid:114)
+
+(cid:114)
+
+(cid:80)J
+
+i=1
+
+αi
+
+β2
+i
+
+a,i
+
+σ2
+αi
+
+(cid:80)J
+
+i=1
+
+β2
+i
+
+0,i
+
+σ2
+αi
+
+(cid:114)
+
++
+
+(cid:80)J
+
+i=1
+
+β2
+i
+
+1,i
+
+σ2
+αi
+
+2. T (cid:63)
+
+prop(µ) =
+
+2 (cid:80)J
+
+i=1
+
+β2
+i
+αi
+
+(σ0,i+σ1,i)2
+∆2
+1
+
+and
+
+i
+∀
+
+≤
+
+J,
+
+a
+
+∀
+
+, w(cid:63)
+0, 1
+}
+
+∈ {
+
+a,i = αiσa,i
+σ0,i+σ1,i
+
+3. T (cid:63)
+
+active(µ) =
+
+2((cid:80)J
+
+i=1 |βi|(σ0,i+σ1,i))2
+
+∆2
+1
+
+and
+
+i
+∀
+
+J,
+
+a
+
+∀
+
+≤
+
+0, 1
+}
+
+∈ {
+
+, w(cid:63)
+
+a,i =
+
+Proof.
+
+Agnostic mode From the Lemma 2, we have
+
+agnostic(µ)−1 = sup
+T (cid:63)
+
+w∈Cagnostic
+
+inf
+λ∈Altβ(µ)
+
+1
+(cid:88)
+
+J
+(cid:88)
+
+a=0
+
+i=1
+
+wa,id(µa,i, λa,i)
+
+|βi|σa,i
+
+(cid:80)J
+
+i=1 |βi|(σ0,i+σ1,i)
+
+= sup
+
+w∈Cagnostic
+
+inf
+λ:λ0=λ1
+
+a=0
+
+1
+(cid:88)
+
+J
+(cid:88)
+
+wa,id(µa,i, λa,i)
+
+(Theorem 1)
+
+= sup
+
+w∈Cagnostic
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+(cid:17) (Lemma 5) .
+
++
+
+σ2
+1,i
+w1,i
+
+i=1
+∆2
+1
+(cid:16) σ2
+
+0,i
+w0,i
+
+w
+
+agnostic implies wa,i = αiua with (u0, . . . , uK)
+
+∈ C
+
+w(cid:63) = argminu:u0+u1=1
+
+J
+(cid:88)
+
+i=1
+
+∈
+β2
+i
+αi
+
+ΣK+1. For this reason,
+(cid:32)
+
+(cid:33)
+
+σ2
+0,i
+u0
+
++
+
+σ2
+1,i
+u1
+
+.
+
+We let ca := (cid:80)J
+differentiating with respect to u0 brings the condition
+
+. Plugging u1 = 1
+0, 1
+}
+
+for a
+
+∈ {
+
+i=1
+
+a,i
+
+i σ2
+β2
+αi
+
+u0 in the previous expression and
+
+−
+
+Solving this polynomial and using that u
+
+u2
+0 + 2u0
+
+c0
+
+c0
+
+.
+
+c1
+
+c0 −
+
+c1
+−
+Σ2 gives the unique solution
+
+c0
+
+−
+
+∈
+u(cid:63)
+0 =
+
+√c0
+√c0 + √c1
+
+.
+
+Implying,
+
+w(cid:63)
+
+0,i = αi
+
+(cid:113)
+
+(cid:113)
+
+(cid:80)J
+
+i=1
+
+(cid:80)J
+
+i=1
+
+i σ2
+β2
+0,i
+αi
+
++
+
+i σ2
+β2
+0,i
+αi
+(cid:80)J
+
+(cid:113)
+
+i=1
+
+and w(cid:63)
+
+1,i = αi
+
+i σ2
+β2
+1,i
+αi
+
+17
+
+(cid:113)
+
+(cid:80)J
+
+i=1
+
+i σ2
+β2
+0,i
+αi
+
++
+
+i σ2
+β2
+1,i
+αi
+(cid:80)J
+
+(cid:113)
+
+i=1
+
+.
+
+i σ2
+β2
+1,i
+αi
+
+(cid:113)
+
+(cid:80)J
+
+i=1
+
+With those values,
+
+T (cid:63)
+agnostic(µ) =
+
+(cid:18)(cid:113)
+
+2
+
+(cid:80)J
+
+i=1
+
+i σ2
+β2
+0,i
+αi
+
++
+
+(cid:113)
+
+(cid:80)J
+
+i=1
+
+i σ2
+β2
+1,i
+αi
+
+(cid:19)2
+
+∆2
+1
+
+.
+
+Proportional mode Following the same line of proof, gives
+
+prop(µ)−1 = sup
+T (cid:63)
+w∈Cprop
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+∆2
+1
+(cid:16) σ2
+
+0,i
+w0,i
+
+(cid:17) .
+
++
+
+σ2
+1,i
+w1,i
+
+The main difference is now on the constraints on the weights. In the proportional mode, following
+a=0 wa,i = αi. We consider the Lagrangian function:
+Lemma 3,
+
+J, (cid:80)1
+
+i
+∀
+
+≤
+
+L(w0, w1, q1, . . . , qJ ) =
+
+(cid:32)
+
+J
+(cid:88)
+
+i=1
+
+β2
+i
+
+σ2
+0,i
+w0,i
+
++
+
+σ2
+1,i
+w1,i
+
+(cid:33)
+
++
+
+J
+(cid:88)
+
+i=1
+
+
+
+qi
+
+
+
+(cid:88)
+
+a∈{0,1}
+
+
+
+wa,i
+
+−
+
+αi
+
+ .
+
+Differentiating with respect to w0,i and w1,i gives the constraints:
+
+−
+
+i σ2
+β2
+0,i
+w2
+0,i
+
++ qi = 0 and −
+
+i σ2
+β2
+1,i
+w2
+1,i
+
++ qi = 0 .
+
+From which we can deduce
+
+From w0,i + w1,i = αi, we deduce,
+
+w0,i
+σ0,i
+
+=
+
+w1,i
+σ1,i
+
+.
+
+q(cid:63)
+i =
+
+i (σ0,i + σ1,i)2
+β2
+α2
+i
+
+.
+
+Plugging this value in the ﬁrst constraint gives
+
+w(cid:63)
+
+0,i = αi
+
+σ0,i
+σ0,i + σ1,i
+
+and w(cid:63)
+
+1,i = αi
+
+σ1,i
+σ0,i + σ1,i
+
+.
+
+Using those weights,
+
+T (cid:63)
+prop(µ) =
+
+2 (cid:80)J
+
+i=1
+
+β2
+i
+αi
+
+(σ0,i + σ1,i)2
+∆2
+1
+
+.
+
+Active mode Following the proof of Proposition 2, one has
+
+active(µ)−1 =
+T (cid:63)
+
+sup
+w∈Σ(K+1)J
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+∆2
+1
+(cid:16) σ2
+
+0,i
+w0,i
+
+(cid:17) .
+
++
+
+σ2
+1,i
+w1,i
+
+Using the constraint w
+
+Σ(K+1)J , one gets
+
+∈
+
+w1,J = 1
+
+−
+
+(cid:88)
+
+J−1
+(cid:88)
+
+a={0,1}
+
+i=1
+
+wa,i
+
+−
+
+w0,J .
+
+(11)
+
+(12)
+
+We need to minimize the function (where w1,J has been replaced by the expression from Equation 12)
+
+f (w) =
+
+(cid:88)
+
+J−1
+(cid:88)
+
+a={0,1}
+
+i=1
+
+β2
+i
+
+σ2
+a,j
+wa,j
+
++ β2
+J
+
+σ2
+0,J
+w0,J
+
++ β2
+J
+
+(cid:80)1
+
+a=0
+
+1
+
+−
+
+σ2
+1,J
+(cid:80)J−1
+i=1 wa,i
+
+.
+
+w0,J
+
+−
+
+18
+
+For i
+
+J
+
+≤
+
+−
+
+1, taking the derivative with respect to w0,i and w1,i gives the following constraints
+
+i σ2
+β2
+0,i
+
+j σ2
+β2
+1,i
+
+(cid:32)
+1
+
+(cid:32)
+1
+
+1
+(cid:88)
+
+J−1
+(cid:88)
+
+a=0
+
+i=1
+
+1
+(cid:88)
+
+J−1
+(cid:88)
+
+a=0
+
+i=1
+
+−
+
+−
+
+wa,i
+
+w0,J
+
+−
+
+wa,i
+
+w0,J
+
+−
+
+(cid:33)2
+
+(cid:33)2
+
+= β2
+
+J σ2
+
+1,J w2
+
+0,i ,
+
+= β2
+
+J σ2
+
+1,J w2
+
+1,i .
+
+From which we deduce
+
+J
+
+i
+∀
+
+≤
+
+−
+
+1,
+
+w0,i
+σ0,i
+
+=
+
+w1,i
+σ1,i
+
+.
+
+Differentiating with respect to w1,J gives
+
+(cid:32)
+1
+
+σ0,J
+
+1
+(cid:88)
+
+J−1
+(cid:88)
+
+−
+
+a=0
+
+i=1
+
+wa,i
+
+−
+
+(cid:33)
+
+w0,J
+
+= σ1,J w0,J .
+
+Rearranging and using Equation 13 gives,
+
+w0,J =
+
+σ0,J
+
+σ0,J + σ1,J −
+
+J−1
+(cid:88)
+
+i=1
+
+w0,i
+σ0,i
+
+σ0,i + σ1,i
+σ0,J + σ1,J
+
+σ0,J .
+
+(13)
+
+(14)
+
+Using Equation 13 and Equation 14, we deﬁne the function
+
+g(w0,1, . . . , w0,J−1) =
+
+J−1
+(cid:88)
+
+i=1
+
+β2
+i
+
+σ0,i
+w0,i
+
+(σ0,i + σ1,i) +
+
+J (σ0,J + σ1,J )2
+β2
+(cid:80)J−1
+i=1
+
+w0,i(σ0,i+σ1,i)
+σ0,i
+
+.
+
+1
+
+−
+
+Differentiating with respect to w0,i for i
+
+1 brings
+
+J
+
+i
+∀
+
+≤
+
+−
+
+1,
+
+σ0,i
+
+βi
+|
+
+|
+σ0,J + σ1,J
+
+(cid:33)
+
+(σ0,i + σ1,i)
+
+=
+
+βJ
+
+w0,i .
+|
+
+|
+
+(15)
+
+w0,i
+σ0,i
+
+≤
+
+−
+
+J
+(cid:32)
+1
+
+J−1
+(cid:88)
+
+−
+
+i=1
+
+Multiplying both sides of this equation by (σ0,i + σ1,i)/σ0,i and summing for i
+
+J
+
+≤
+
+−
+
+1,
+
+J−1
+(cid:88)
+
+i=1
+
+w0,i
+σ0,i
+
+(σ0,i + σ1,i) =
+
+(cid:80)J−1
+i=1 |
+i=1 |
+
+(cid:80)J
+
+βi
+βi
+
+(σ0,i + σ1,i)
+|
+(σ0,i + σ1,i)
+|
+
+.
+
+Plugging this value back in Equation 15 one has:
+
+J
+
+i
+∀
+
+≤
+
+−
+
+1, w0,i =
+
+From Equation 13, we deduce,
+
+J
+
+i
+∀
+
+≤
+
+−
+
+1, w1,i =
+
+βi
+|
+βi
+
+σ0,i
+|
+(σ0,i + σ1,i)
+|
+
+(cid:80)J
+
+i=1 |
+
+βi
+|
+βi
+
+σ1,i
+|
+(σ0,i + σ1,i)
+|
+
+(cid:80)J
+
+i=1 |
+
+.
+
+.
+
+We obtain the value of w0,J using Equation 14 and that of w1,J using Equation 12. Plugging those
+weights in the expression given by Equation 11 yields the characteristic time.
+
+D General form of the optimal allocation in the Gaussian case
+
+Proposition 3 (Efﬁcient computation in the Gaussian case). With Gaussian distributions with a
+known variance σ2, letting (u(cid:63)
+(cid:17) , the optimal weights
+K) = argmaxu∈ΣK+1
+
+0, . . . , u(cid:63)
+
+minb(cid:54)=0
+
+for the active mode satisfy
+
+a
+
+∀
+
+0, . . . , K
+
+∈ {
+
+,
+}
+
+i
+∀
+
+≤
+
+J, w(cid:63)
+
+a,i = u(cid:63)
+a
+
+If, in addition α = β, the above also holds for the agnostic and the proportional modes.
+
+∆2
+b
++ 1
+ub
+
+(cid:16) 1
+2
+u0
+
+βi
+|
+|(cid:80)J
+i=1 |
+
+βi
+
+|
+
+.
+
+19
+
+Proof. From Lemma 5, when the distribution are Gaussian with a known variance σ2 one has
+
+active(µ)−1 =
+T (cid:63)
+
+sup
+w∈Σ(K+1)J
+
+min
+b(cid:54)=0
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+∆2
+1
+(cid:16) σ2
+w0,i
+
+(cid:17) .
+
++ σ2
+wb,i
+
+Using the same continuity argument than in [10], we know that the supremum of w is attained and is
+indeed a maximum. Let
+
+Λb(v, w) :=
+
+∆2
+b
+(cid:16) σ2
+vi
+
+(cid:17) .
+
++ σ2
+wi
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+Then
+
+max
+w∈Σ(K+1)J
+
+min
+b(cid:54)=0
+
+Λb(w0, wb) =
+
+max
+u∈ΣK+1
+i=1 wa,i=ua
+
+∀a,(cid:80)J
+
+min
+b(cid:54)=0
+
+Λb(w0, wb)
+
+= max
+
+u∈ΣK+1
+
+max
+w∈Σ(K+1)J
+
+min
+b(cid:54)=0
+
+Λb(w0, wb)
+
+max
+u∈ΣK+1
+
+min
+b(cid:54)=0
+
+≤
+
+Let b
+
+= 0,
+
+∀a,(cid:80)
+
+i wa,i=ua
+max
+w∈Σ(K+1)J
+
+∀a,(cid:80)
+
+i wa,i=ua
+
+Λb(w0, wb)
+
+(Max-min inequality) .
+
+max
+w∈Σ(K+1)J
+
+∀a,(cid:80)
+
+i wa,i=ua
+
+Λb(w0, wb) =
+
+max
+w∈Σ(K+1)J
+
+∀a,(cid:80)
+
+i wa,i=ua
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+∆2
+b
+(cid:16) σ2
+w0,i
+
+(cid:17) .
+
++ σ2
+wb,i
+
+Equivalently, we are interested in
+
+min
+w∈Σ(K+1)J
+
+∀a,(cid:80)
+
+i wa,i=ua
+
+J
+(cid:88)
+
+i=1
+
+β2
+i
+
+(cid:18) σ2
+w0,i
+
++
+
+(cid:19)
+
+.
+
+σ2
+wb,i
+
+We introduce the associated Lagrangian function
+
+f (w, q) =
+
+J
+(cid:88)
+
+i=1
+
+β2
+i
+
+(cid:18) 1
+w0,i
+
++
+
+1
+wb,i
+
+(cid:19)
+
++
+
+K
+(cid:88)
+
+a=0
+
+qa
+
+(cid:32) J
+
+(cid:88)
+
+i=1
+
+(cid:33)
+
+wa,i
+
+−
+
+ua
+
+.
+
+Taking the derivative with respect to w0,i and wb,i for the different values of i yields
+
+w0,i = |
+
+βi
+|
+√q0
+
+and wb,i = |
+
+βi
+|
+√qb
+
+.
+
+Summing over i implies that
+
+√q0 =
+
+(cid:80)J
+
+βi
+
+i=1 |
+u0
+
+|
+
+and √qb =
+
+(cid:80)J
+
+βi
+
+|
+
+,
+
+i=1 |
+ub
+
+and plugging the above in the expression of the weights yields
+
+w0,i =
+
+βi
+|
+|(cid:80)J
+i=1 |
+
+βi
+
+|
+
+u0
+
+and wb,i =
+
+βi
+|
+|(cid:80)J
+i=1 |
+
+βi
+
+|
+
+ub .
+
+In particular,
+
+max
+w∈Σ(K+1)J
+
+∀a,(cid:80)
+
+i wa,i=ua
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+∆2
+b
+(cid:16) σ2
+w0,i
+
+(cid:17) =
+
+2σ2
+
++ σ2
+wb,i
+
+(cid:16)(cid:80)J
+
+∆2
+b
+(cid:17)2 (cid:16) 1
+u0
+
+βi
+
+i=1 |
+
+|
+
+,
+
+(cid:17)
+
++ 1
+ub
+
+(16)
+
+yielding
+
+max
+w∈Σ(K+1)J
+
+min
+b(cid:54)=0
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+∆2
+b
+(cid:16) σ2
+w0,i
+
+(cid:17) ≤
+
++ σ2
+wb,i
+
+2σ2
+
+1
+(cid:16)(cid:80)J
+
+i=1 |
+
+(cid:17)2 max
+|
+
+u∈Σ(K+1)J
+
+βi
+
+min
+b(cid:54)=0
+
+∆2
+b
++ 1
+ub
+
+(cid:16) 1
+u0
+
+(cid:17) .
+
+20
+
+(cid:54)
+On the other hand, letting wa,i = |βi|
+
+(cid:80)J
+
+i=1 |βi|
+
+ua with (cid:80)
+
+a ua = 1 we have
+
+1
+(cid:16)(cid:80)J
+
+βi
+
+i=1 |
+
+(cid:17)2 max
+|
+
+u∈Σ(K+1)J
+
+min
+b(cid:54)=0
+
+∆2
+b
++ 1
+ub
+
+(cid:16) 1
+u0
+
+(cid:17) ≤
+
+max
+w∈Σ(K+1)J
+
+min
+b(cid:54)=0
+
+2 (cid:80)J
+
+i=1 β2
+i
+
+∆2
+b
+(cid:16) σ2
+w0,i
+
+(cid:17) ,
+
++ σ2
+wb,i
+
+2σ2
+
+showing that the two optimization programs are equivalent and that when denoting
+
+(u(cid:63)
+
+0, . . . , u(cid:63)
+
+K) = argmaxu∈Σ(K+1)J
+
+min
+b(cid:54)=0
+
+∆2
+b
++ 1
+ub
+
+(cid:16) 1
+u0
+
+(cid:17) ,
+
+one has
+
+a
+
+∀
+
+0, . . . , K
+
+∈ {
+
+,
+}
+
+i
+∀
+
+≤
+
+J, w(cid:63)
+
+a,i = u(cid:63)
+a
+
+βi
+|
+|(cid:80)J
+i=1 |
+
+βi
+
+|
+
+.
+
+This corresponds to the optimal allocation strategy in the active mode. Recalling that when α = β,
+the optimal weights for the active mode satisfy both
+
+agnostic completes the proof.
+
+prop and
+
+C
+
+C
+
+E Asymptotic Optimality: Proof of Theorem 2
+
+In this section we show that T-a-S with C-tracking and a certain threshold β(t, δ) is safely calibrated
+and asymptotically optimal. This is an important sanity check to validate our approach theoretically.
+Note that for the experimental validation we have explored a practically appealing variant of this
+algorithm: we employ an iterative scheme to approximate w∗( ˆµ(t)), use D-tracking, and stylise the
+threshold.
+
+Safe calibration follows from the deﬁnition of the recommendation rule (we report the answer
+β( ˆµ(t)) at the empirical estimate ˆµ(t) of the bandit instance), together with the computation of
+S
+the risk assessment ˆδt. It does not depend on the sampling rule. Our conﬁdence level ˆδt is obtained
+by inverting the threshold β(t, δ) at the GLR statistic (7). Safe calibration then follows from an
+anytime-valid GLR deviation inequality with boundary β(t, δ). We refer to [13, Proposition 23] for a
+boundary that is, in case of the ABC-S problem, of order ln 1
+
+O(ln ln t
+
+δ + K + 2J
+
+·
+
+δ ).
+
+It remains to argue that the T-a-S sampling rule converges to the oracle weights. The original T-a-S
+proof for the BAI problem is due to [10, Theorem 14]. An upgrade to any single-answer problem,
+including our ABC-S, is due to [6]. For active mode, their theorem applies directly, while for agnostic
+mode it applies with the pair (It, Xt) regarded as the observation. We get:
+in active mode and agnostic
+Theorem 3 ([6, Theorems 7 and 10]). For all ABC-S instances µ
+mode, Track-and-Stop with C-tracking and stopping threshold β(t, δ) = ln(t2/δ) + O(1) is δ-correct
+with asymptotically optimal sample complexity.
+
+∈ L
+
+In proportional mode, we have the additional constraint that the learner chooses its arm in response to
+seeing (but not controlling) the subpopulation It. Still, the tracking convergence result [6, Lemma 6]
+goes through, upon observing that the empirical distribution of It converges to α by the law of the
+large numbers, and hence our conditional tracking (see “sampling rule” in Section 3) adds the right
+conditional to the right marginal. All in all, the computed joint weights converge to the joint w∗
+prop(µ),
+and tracking makes the sampling proportions also converge there.
+
+We conclude with a remark on our use of D-tracking. Recall that D-tracking is the idea of advancing
+Na(t) towards t times the most current oracle weights, i.e. tw∗
+a( ˆµ(t)), while C-tracking makes Na(t)
+advance towards the sum of encountered oracle weights, i.e. (cid:80)t
+a( ˆµ(s)). As argued in [7,
+Appendix E], D-tracking can fail to make Na(t)/t converge to w∗
+a(µ). However, this requires that the
+maximiser of the lower bound problem is not unique at µ (as we are maximising a concave function,
+the set of maximisers is always convex). Here we argue that such a situation does not occur for the
+ABC-S problem. To see why, we argue that the lower bound objective, as a function of w, is strictly
+concave. It sufﬁces to show this for the active mode problem, as the problems for the other modes are
+further constrained maximisation problems of the same objective.
+Lemma 6. Fix a bandit instance µ
+∈ L
+arm a and subpopulation j. Then for the ABC-S problem with β such that βj
+weights w∗(µ) are unique.
+
+d(µa,j, λ) be a strongly convex function for each
+= 0 for all j, the oracle
+
+s=1 w∗
+
+. Let λ
+
+(cid:55)→
+
+21
+
+(cid:54)
+Proof. Let w∗(µ) be any oracle weights at µ. We will show the lower bound objective (4) is strictly
+concave as a function of w around w∗(µ), so that w∗(µ) was in fact unique. For each k > 0, let λk
+be the minimiser in Altk(µ) of the weighted divergence in (4).
+
+We perform a second-order Taylor expansion of the inner objective around λk, which is a good
+approximation near λk (which is, after all, what matters when reasoning about w near w∗(µ)). To
+this end, let us abbreviate the divergences, and their ﬁrst and second derivatives in their second
+argument by dk
+aj := d(cid:48)(µa,j, λk
+a,j), which all depend
+on λk. A second-order Taylor expansion of the inner objective of (4) around λk yields
+
+aj := d(cid:48)(cid:48)(µa,j, λk
+
+aj := d(µa,j, λk
+
+a,j) and hk
+
+a,j), gk
+
+inf
+λ∈Altk
+
+(cid:88)
+
+a,j
+
+wa,jd(µa,j, λa,j)
+
+(cid:88)
+
+≈
+
+a∈{0,k},j
+
+(cid:32)
+
+wa,j
+
+dk
+aj −
+
+(cid:33)
+
++
+
+(gk
+aj)2
+2hk
+aj
+
+(cid:18)
+
+(cid:80)
+
+j βj
+
+(cid:18) gk
+0j
+hk
+0j −
+
+gk
+kj
+hk
+kj
+
+(cid:19)(cid:19)2
+
+2 (cid:80)
+
+a∈{0,k},j
+
+β2
+j
+wa,j hk
+aj
+
+where the optimiser is given by
+
+λa,j = λk
+
+a,j −
+
+gk
+aj
+hk
+aj
+
++
+
+βj(δa=0
+
+δa=k)
+
+−
+wa,jhk
+aj
+
+(cid:80)
+
+j βj
+
+(cid:19)
+
+(cid:18) gk
+0j
+hk
+0j −
+
+gk
+kj
+hk
+kj
+
+(cid:80)
+
+a∈{0,k},j
+
+β2
+j
+wa,j hk
+aj
+
+.
+
+= 0 and strong convexity hk
+
+Due to the last term, each of these is a strictly concave function of wa,j for a
+aj > 0).
+(here we use βj
+Now we still need to consider the maxw∈Σ(K+1)×J
+inside ﬁnite min, and min-max swap to get a problem of the form minq∈ΣK maxw∈Σ(K+1)×J
+the minimax outer strategy for q, we ﬁnd that w is the maximiser of the strictly concave function
+
+mink>0 problem. Let’s convexify this for the
+. Fixing
+
+and all j
+
+0, k
+
+∈ {
+
+≤
+
+J
+
+}
+
+w
+
+(cid:55)→
+
+(cid:88)
+
+k>0
+
+qk
+
+
+
+
+
+
+
+
+(cid:88)
+
+a∈{0,k},j
+
+(cid:32)
+
+wa,j
+
+dk
+aj −
+
+(cid:33)
+
++
+
+(gk
+aj)2
+2hk
+aj
+
+(cid:18)
+
+(cid:80)
+
+j βj
+
+(cid:18) gk
+0j
+hk
+0j −
+
+gk
+kj
+hk
+kj
+
+2 (cid:80)
+
+a∈{0,k},j
+
+β2
+j
+wa,j hk
+aj
+
+(cid:19)(cid:19)2
+
+
+
+
+
+
+
+
+To complete the argument, we argue that qk > 0 for all k > 0, or, equivalently, that at w∗ the mink>0
+are all equalised. For if not, we can move mass from wk,j for the higher k > 0 to wk(cid:48),j for the lower
+k(cid:48) and increase the objective value. This then proves that w∗(µ) is unique, as the objective function
+is bounded above by a strictly concave function itself maximised at w = w∗(µ).
+
+F Algorithm Details
+
+In this section we go into more details on the algorithm for each mode. Let us start with some notation.
+Let β(δ, t) be a threshold function. We denote the inverse of β(t, δ) in its second argument by
+
+We extend the deﬁnition of the GLR statistic to sample frequencies w and bandit µ by
+
+β−1(t, Λ) = min
+
+δ
+{
+
+∈
+
+(0, 1)
+
+Λ
+|
+
+β(t, δ)
+}
+
+.
+
+≥
+
+Λ(w, µ) := min
+b(cid:54)=0
+
+inf
+λ∈L:λ0=λb
+
+(cid:88)
+
+J
+(cid:88)
+
+a∈{0,b}
+
+i=1
+
+wa,id(µa,i, λa,i) ,
+
+so that the original deﬁnition (7) is Λ(t) = Λ(N (t)/t, ˆµ(t)). For any µ, we denote by
+any sub-gradient of w
+minimiser of Λ(w, µ), and constructing the vector with entry (a, i) given by
+
+wΛ(w, µ)
+Λ(w, µ). We can obtain one such a sub-gradient by letting (b, λ) be any
+
+(cid:55)→
+
+∇
+
+(a, i)
+
+(cid:26)d(µa,i, λa,i)
+
+(cid:55)→
+
+0
+
+if a
+∈ {
+otherwise
+
+0, b
+}
+
+.
+
+Our algorithms will make use of an online learning method (called
+below) for linear losses deﬁned
+on the simplex. This online learning task is known as the Hedge or Experts setting in the literature.
+
+A
+
+22
+
+(cid:54)
+We will make use of AdaHedge [5], as it adapts automatically to the range of the losses and does
+not require tuning. Our methods for the active, proportional and agnostic modes are displayed as
+Algorithms 1, 2 and 3. Each algorithm consists of a Forced Exploration part, which serves to ensure
+that the empirical estimate of the bandit model converges, i.e. ˆµ(t)
+µ. By forcing exploration sub-
+linearly often, the main term in the sample complexity is unaffected asymptotically. Each algorithm
+further makes use of online learning to compute w∗(µ). In the notation of this section, we have
+
+→
+
+w∗(µ) = argmax
+
+Λ(w, µ) .
+
+w∈C
+
+C ⊆
+
+Our approach to learning w∗(µ) is to perform gradient steps on the plug-in loss function w
+
+Λ(w, ˆµ(t)). It is in the convex domain
+
+(cid:55)→
+Σ(K+1)×J that we see the main difference between
+−
+the three modes. Recall from Section 2.3 that in the active mode w is not constrained further, in
+= α, and in the
+the proportional mode the subpopulation marginal of w must equal α, i.e.
+ΣK+1 and
+agnostic mode w must be the independent product w = vα of some arm marginal v
+the subpopulation frequencies α. We hence need to design online learners for each of the three
+. In
+that learns the full joint w∗(a, j) directly, in the proportional
+the active case, we have one learner
+[J] to learn the conditional distribution
+case we use one learner
+w∗(a
+j), and in the agnostic case we again use one learner to learn the common marginal w∗(a).
+|
+This difference is reﬂected in the loss function used in each mode, and hence in the gradient that is
+fed to each learner. In the active case we use the full (K + 1)
+
+j for each subpopulation j
+
+J gradients
+
+1, w
+
+A
+
+A
+
+∈
+
+∈
+
+C
+
+(cid:105)
+
+(cid:104)
+
+×
+
+In the proportional case we have w(a, i) = w(a
+|
+
+i)αi, and by the chain rule we hence have gradients
+
+(cid:96)active
+t
+
+:=
+
+− ∇
+
+wΛ(wt, ˆµ(t)) .
+
+(cid:96)i, proportional
+t
+
+− ∇w(a|i)Λ(wt, ˆµ(t)) =
+Finally, in the agnostic case we have w(a, i) = w(a)αi, and again by the chain rule we have
+
+wΛ(wt, ˆµ(t))ei .
+
+:=
+
+αi
+
+∇
+
+−
+
+(cid:96)agnostic
+t
+
+:=
+
+− ∇w(a)Λ(wt, ˆµ(t)) =
+
+− ∇
+
+wΛ(wt, ˆµ(t))α .
+
+In each of the three modes, our algorithms evaluate Λ for the conﬁdence in the rec-
+Run Time
+ommendation, compute one sub-gradient of Λ for the loss function, and spend O(K
+J) time
+bookkeeping. Evaluation and sub-gradient computation for Λ boil down to solving a convex minimi-
+sation problem with an equality constraint. We use Newton’s method with backtracking line search
+to ﬁnd the minimiser given b. Each Newton iteration takes O(J 2) time (recall that only 2 arms are
+involved), and we never needed more than 40. Doing this K times for the explicit minimum over b
+yields a total per iteration run time of O(KJ 2).
+
+×
+
+23
+
+J experts.
+
+×
+√t then
+
+Algorithm 1 Algorithm for Active Mode.
+Require: Online learner
+for t = 1, 2, . . . do
+
+for (K + 1)
+
+A
+
+if any pair (a, i) has Na,i(t
+
+1)
+
+−
+≤
+Pick At, It any such pair
+Obtain sample Xt from νAt,It.
+
+else
+
+Get wt from online learner
+A
+Pick (At, It)
+argmina,iNa,i(t
+∈
+Obtain sample Xt from νAt,It.
+Send loss vector (cid:96)t =
+
+(cid:46) Forced Exploration
+
+1)
+
+−
+
+−
+
+twt(a, i)
+
+(cid:46) Direct Tracking
+
+end if
+Recommend ˆ
+S
+
+t =
+
+end for
+
+wΛ(wt, ˆµ(t)) to
+
+−∇
+
+A
+β( ˆµ(t)) at conﬁdence δt = β−1(t, Λ(N (t)/t, ˆµ(t))).
+S
+
+Algorithm 2 Algorithm for Proportional Mode.
+
+Require: J online learners
+
+for t = 1, 2, . . . do
+
+(1), . . . ,
+
+A
+
+(J) for (K + 1) experts each.
+
+A
+
+∼
+
+α.
+See It
+if any arm a has Na,It(t
+−
+Pick At any such arm
+Obtain sample Xt from νAt,It.
+
+1)
+
+≤
+
+else
+
+from each online learner
+argminaNa,It(t
+
+Get w(j)
+t
+Pick At
+1)
+Obtain sample Xt from νAt,It.
+For j
+
+∈
+−
+[J], send loss vector (cid:96)(j)
+
+−
+
+t =
+
+∈
+
+end if
+Recommend ˆ
+S
+
+end for
+
+(cid:112)(cid:80)
+
+a Na,It(t
+
+1) then
+
+−
+
+(cid:46) Forced Exploration
+
+(j)
+A
+tw(It)
+t
+
+(a)
+
+(cid:46) Direct Tracking
+
+αj
+
+−
+
+∇
+
+wΛ
+
+(cid:16)
+
+[α1w(1)
+
+t
+
+· · ·
+
+αJ w(J)
+t
+
+(cid:17)
+
+], ˆµ(t)
+
+ej to
+
+(j)
+
+A
+
+t =
+
+β( ˆµ(t)) at conﬁdence δt = β−1(t, Λ(N (t)/t, ˆµ(t))).
+S
+
+Algorithm 3 Algorithm for Agnostic Mode.
+Require: Online learner
+for t = 1, 2, . . . do
+
+A
+if any arm a has (cid:80)J
+j=1 Na,j(t
+
+1)
+
+for (K + 1) experts.
+
+else
+
+Pick At any such arm
+α.
+See It
+Obtain sample Xt from νAt,It.
+
+∼
+
+(cid:80)J
+
+Get wt from online learner
+Pick At
+argmina
+Obtain sample Xt from νAt,It .
+See It
+α.
+Send loss vector (cid:96)t =
+
+A
+j=1 Na,j(t
+
+∼
+
+∈
+
+−∇
+
+end if
+Recommend ˆ
+S
+
+t =
+
+end for
+
+−
+
+√t then
+
+≤
+
+(cid:46) Forced Exploration
+
+1)
+
+−
+
+−
+
+twt(a)
+
+(cid:46) Direct Tracking
+
+wΛ (cid:0)wtα(cid:62), ˆµ(t)(cid:1) α to
+
+.
+A
+
+β( ˆµ(t)) at conﬁdence δt = β−1(t, Λ(N (t)/t, ˆµ(t))).
+S
+
+24
+
+G Details of A/B/n experiment
+
+1
+0.0296
+0.0300
+0.0295
+
+2
+0.0372
+0.0373
+0.0373
+
+3
+0.0588
+0.0596
+0.0591
+
+4
+0.0620
+0.0626
+0.0630
+
+0
+1
+2
+
+(a) Estimated click probabilities for the different op-
+tions and seasons
+1
+0.0719
+0.0215
+0.0614
+
+4
+0.1238
+0.0352
+0.1078
+
+3
+0.1311
+0.0340
+0.1377
+
+2
+0.1222
+0.0475
+0.1060
+
+0
+1
+2
+
+(c) w∗ for active, T ∗ = 3.98 · 106
+4
+1
+0.0889
+0.0814
+0.0277
+0.0230
+0.1113
+0.0914
+
+3
+0.1289
+0.0457
+0.1067
+
+2
+0.1269
+0.0355
+0.1326
+
+0
+1
+2
+
+1
+0.1958
+0.2950
+0.2813
+0.2279
+
+0
+1
+2
+3
+
+(b) frequency and importance vector (α = β)
+
+1
+0.0740
+0.0108
+0.0727
+
+2
+0.1246
+0.0179
+0.1228
+
+3
+0.1476
+0.0214
+0.1460
+
+4
+0.1226
+0.0178
+0.1218
+
+(d) Sampling proportions active
+4
+0.1056
+0.0173
+0.1048
+
+2
+0.1374
+0.0223
+0.1353
+
+3
+0.1307
+0.0214
+0.1293
+
+1
+0.0912
+0.0148
+0.0898
+
+0
+1
+2
+
+0
+1
+2
+
+(e) w∗ for proportional, T ∗ = 4.06 · 106
+1
+0.44482
+0.11111
+0.44406
+
+0
+1
+2
+
+(g) w∗ for agnostic, T ∗ = 4.61 · 106
+1
+0.44480
+0.11111
+0.44409
+
+0
+1
+2
+
+(i) w∗ for oblivious, T ∗ = 4.63 · 106
+1
+0.500
+0.076
+0.424
+
+0
+1
+2
+
+(k) Sampling proportions BC-ABC
+
+(f) Sampling proportions proportional
+1
+0.4648
+0.0766
+0.4587
+
+0
+1
+2
+
+(h) Sampling proportions agnostic
+1
+0.4647
+0.0764
+0.4589
+
+0
+1
+2
+
+(j) Sampling proportions oblivious
+
+Figure 4: Summary of oracle weights and sampling proportions for A/B/n experiment
+
+25
+
+

@@ -1,0 +1,3844 @@
+One-Shot Federated Conformal Prediction
+Pierre Humbert, Batiste Le Bars, Aurélien Bellet, Sylvain Arlot
+
+To cite this version:
+
+Pierre Humbert, Batiste Le Bars, Aurélien Bellet, Sylvain Arlot. One-Shot Federated Conformal
+ICML 2023 - 40th International Conference on Machine Learning, Jul 2023, Honolulu
+Prediction.
+(Hawai), United States. ￿hal-03981605v2￿
+
+HAL Id: hal-03981605
+
+https://hal.science/hal-03981605v2
+
+Submitted on 13 Jun 2023
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+One-Shot Federated Conformal Prediction
+
+Pierre Humbert 1 Batiste Le Bars 2 Aur´elien Bellet 2 Sylvain Arlot 1
+
+Abstract
+
+In this paper, we introduce a conformal predic-
+tion method to construct prediction sets in a one-
+shot federated learning setting. More specifically,
+we define a quantile-of-quantiles estimator and
+prove that for any distribution, it is possible to
+output prediction sets with desired coverage in
+only one round of communication. To mitigate
+privacy issues, we also describe a locally differ-
+entially private version of our estimator. Finally,
+over a wide range of experiments, we show that
+our method returns prediction sets with coverage
+and length very similar to those obtained in a
+centralized setting. Overall, these results demon-
+strate that our method is particularly well-suited
+to perform conformal predictions in a one-shot
+federated learning setting.
+
+1. Introduction
+
+Federated Learning (FL) is a recent paradigm that allows to
+learn from decentralized data sets stored locally by multiple
+agents (Kairouz et al., 2021). FL is particularly appealing
+when data are highly sensitive and cannot be centralized for
+privacy or security reasons. So far, the design of FL algo-
+rithms has mainly focused on the training phase of machine
+learning: the goal is to fit models on decentralized data sets
+while minimizing the amount of communication or optimiz-
+ing the privacy-utility trade-off (see e.g. McMahan et al.,
+2017; Geyer et al., 2017; Li et al., 2020; Karimireddy et al.,
+2020; Noble et al., 2022). However, FL poses further chal-
+lenges regarding model evaluation, as this step must also be
+done without access to centralized data. In particular, with
+the increasing popularity of black-box methods, deploying
+machine learning models in real-world applications often
+requires to appropriately quantify the uncertainty of their
+
+1Universit´e Paris-Saclay, CNRS,
+
+Inria, Laboratoire de
+math´ematiques d’Orsay, 91405, Orsay, France. 2Universit´e Lille,
+Inria, CNRS, Centrale Lille, UMR 9189, CRIStAL, F-59000 Lille.
+Correspondence to: Pierre Humbert <pierre.humbert@universite-
+paris-saclay.fr>.
+
+Proceedings of the 40 th International Conference on Machine
+Learning, Honolulu, Hawaii, USA. PMLR 202, 2023. Copyright
+2023 by the author(s).
+
+1
+
+predictions. Unfortunately, models trained with the above
+supervised FL algorithms only provide point predictions
+(e.g., class labels or regression targets). This is not suffi-
+cient in high-stakes applications like medicine (Begoli et al.,
+2019), where decisions may impact human lives.
+
+(1)
+
+In this work, we investigate the task of outputting a pre-
+diction set rather than a single point prediction in a FL
+setting. Formally, given some data stored by multiple agents
+and an additional test point (X, Y ), we want to construct a
+marginally valid set which is likely to contain the unknown
+response Y . In other words, we want a set ˆ︁C(X) such that
+P(︁Y ∈ ˆ︁C(X))︁ ⩾ 1 − α ,
+where α ∈ (0, 1) is a desired miscoverage rate. Although
+there exist several methods to construct such a set (Pa-
+padopoulos et al., 2002; Vovk et al., 2005; Romano et al.,
+2019), they require access to a centralized data set. They
+are thus incompatible with the constraints of FL, in which
+agents process their data locally and only interact with a
+central server by sharing some aggregate statistics. Con-
+structing a valid prediction set is even more challenging
+in the one-shot FL (Zhang et al., 2012; Guha et al., 2019;
+Yurochkin et al., 2019; Li et al., 2021; Dennis et al., 2021;
+Salehkaleybar et al., 2021) that we consider in this work,
+where the communication between the agents and the server
+is further restricted to a single round. One-shot FL is moti-
+vated by the fact that the number of communication rounds
+is often the main bottleneck in FL (Kairouz et al., 2021).
+
+Contributions.
+In this paper, we present an intuitive
+one-shot FL method based on Conformal Prediction (CP)
+(Vovk et al., 2005; Papadopoulos et al., 2002) to construct
+distribution-free prediction sets satisfying (1). The key step
+of CP methods is the ordering of scores computed for each
+calibration data point. In the FL setting, this ordering step
+is not possible without exchanging the local data sets or
+performing many agent-server communication rounds. To
+circumvent this problem, we define a quantile-of-quantiles
+estimator: each agent sends to the server a local empirical
+quantile and the server aggregates them by computing a
+quantile of these quantiles. We describe how to choose the
+order of the quantiles (depending on the number of agents
+and the size of their local data sets) to obtain a prediction set
+that satisfies (1). We also prove that property (1) can be ver-
+ified conditionally to the observed data with a modification
+
+One-Shot Federated Conformal Prediction
+
+of the selected quantiles. While the previous results rely on
+certain data homogeneity assumptions, we further quantify
+the impact of heterogeneous (non-identically distributed)
+data on the performance of our algorithm. To address use
+cases with strong privacy constraints, we derive a version
+of our approach that satisfies differential privacy (Dwork
+et al., 2014), in which agents run the exponential mecha-
+nism to privately select their local quantile. Finally, we
+empirically evaluate the performance of our method on stan-
+dard CP benchmarks and show that it produces prediction
+sets that are very close to the ones obtained when data are
+centralized.
+
+2. Background and Related Work
+
+2.1. Split Conformal Prediction
+
+Conformal Prediction (CP) is a framework to construct
+distribution-free prediction sets satisfying (1) (Vovk et al.,
+2005). One of the most popular methods to perform CP in
+a centralized setting is the split conformal (Papadopoulos
+et al., 2002) which is at the core of our main contribution
+described in Section 3.
+
+To use the split conformal method (split CP), we first need to
+choose a score function s : X ×Y → R, which measures the
+magnitude of a predictor error for a given point. Whether we
+are in the regression or classification setting, many different
+score functions exist in the literature (see e.g. Angelopou-
+los & Bates, 2023). In regression, for instance, a common
+choice is the fitted absolute residual Si ≜ s(Xi, Yi) =
+|Yi − ˆ︁f (Xi)| where ˆ︁f is some predictor learned on a train-
+ing data set. Note that our approach does not assume a
+particular choice of score function, so throughout the paper,
+we keep the function s abstract. Then, we split the data
+Dn+ntr = {(X1, Y1), . . . , (Xn+ntr , Yn+ntr )} into a cali-
+bration set Dcal
+n = {(X1, Y1), . . . , (Xn, Yn)} and a train-
+ing set Dtr
+= {(Xn+1, Yn+1), . . . , (Xn+ntr , Yn+ntr )}
+ntr
+with n, ntr ⩾ 1. The predictor ˆ︁f is fitted on Dtr
+ntr and
+≜ {S1, . . . , Sn} are calculated on
+conformity scores S cal
+Dcal
+n via the previously chosen score function s. Finally,
+given a test point X and α ∈ (0, 1), we construct the con-
+formal set
+
+n
+
+ˆ︁C(X) =
+
+{︂
+y ∈ R : s(X, y) ⩽ ˆ︁Q(⌈(n+1)(1−α)⌉)(S cal
+n )
+
+}︂
+
+,
+
+where ˆ︁Q(·)(·) is defined by
+
+ˆ︁Q(k)(S ′) = ˆ︁Q(k) ≜
+
+{︄
+
+(k)
+
+if k ⩽ |S ′|
+S′
+∞ otherwise ,
+
+(2)
+
+⩽ . . . ⩽ S′
+with |S ′| the size of the sample S ′, and S′
+(|S ′|)
+(1)
+the order statistics of the scores S′
+|S ′| in S ′. In other
+1, . . . , S′
+words, ˆ︁Q(k) outputs the k-th smallest value in a given set of
+
+scores. The following theorem proves that the set returned
+by the split CP method satisfies (1) under mild assumptions.
+
+Theorem 2.1 (Vovk et al., 2005; Lei et al., 2018). For any
+n, ntr ⩾ 1, let us consider n + ntr i.i.d. (or only exchange-
+able) random variables (X1, Y1), . . . , (Xn+ntr , Yn+ntr )
+from X × Y and an additional test point (X, Y ). For any
+score function s and any α ∈ (0, 1), the set returned by the
+split CP method satisfies
+
+(︂
+
+P
+
+)︂
+
+Y ∈ ˆ︁C(X)
+
+⩾ 1 − α .
+
+Furthermore, if S1, . . . Sn are almost surely distinct, this
+probability is upper bounded by 1 − α + 1/(n + 1).
+
+Although the first CP methods were the split and the re-
+lated full methods (Papadopoulos et al., 2002; Vovk et al.,
+2005), many extensions based upon them have been pro-
+posed recently. In regression, Lei et al. (2018) present a
+method called locally weighted CP and provide theoretical
+insights for conformal inference. More recently, Romano
+et al. (2019) have developed a variant of the split CP called
+Conformal Quantile Regression (CQR). Other recent alter-
+natives have been proposed (Kivaranovic et al., 2020; Sesia
+& Romano, 2021; Gupta et al., 2022; Ndiaye, 2022). We
+refer to Vovk et al. (2005), Angelopoulos & Bates (2023)
+and Fontana et al. (2023) for in-depth presentations of CP.
+
+2.2. Related Work in Federated Learning
+
+As already mentioned, FL methods are today mostly focused
+on the training part of the learning process (i.e., fitting ˆ︁f
+to the data). Nevertheless, a few recent works have consid-
+ered other types of FL problems that can be related to our
+work. The closest related work is the one of Lu & Kalpathy-
+Cramer (2021) which, to the best of our knowledge, is the
+only paper claiming to perform conformal prediction in
+the FL setting. Their idea is to locally calculate the quan-
+tiles ˆ︁Q(⌈(n+1)(1−α)⌉) for all agents and to average them in
+the central server. Unfortunately, they do not prove that
+their prediction set has valid coverage. Furthermore, their
+method is non-robust, especially when the size of local data
+sets is small, and their experiments (and ours, in Section
+5) suggest that this set is generally too large. We show in
+the next sections that by considering a quantile-of-quantiles
+instead of an average of quantiles, the method we propose
+addresses these limitations. Gauraha & Spjuth (2021) pro-
+pose an ensemble-based CP approach that can be performed
+in a distributed setting. However, they assume that a shared
+calibration set is available on the central server, which is
+unrealistic in FL. Finally, we can also mention recent works
+on federated evaluation of classifiers (Cormode & Markov,
+2022), federated quantile computation (Andrew et al., 2021;
+Pillutla et al., 2022), and on uncertainty quantification with
+Bayesian FL (El Mekkaoui et al., 2021; Kotelevskii et al.,
+
+2
+
+One-Shot Federated Conformal Prediction
+
+2022) which, although related to our work, do not study CP
+and do not allow to obtain coverage guarantees.
+
+3. Quantile-of-Quantiles for Federated CP
+
+In this section, we present a method to perform conformal
+prediction in a one-shot FL setting (Guha et al., 2019; Zhang
+et al., 2012), where only one round of communication from
+the agents to the central server is allowed.
+
+3.1. Setup and Objective
+
+Consider a set of m ∈ N∗ agents, with their own local data,
+that seek to collaborate in order to compute a valid predic-
+tion set. For simplicity, we suppose that each agent has
+exactly n calibration data points, and refer to Appendix A.1
+for the case where agents have calibration sets of different
+sizes. We also assume that the predictor ˆ︁f is given in ad-
+vance: for instance, it could be learned on a separate set of
+data points using standard FL algorithms such as FedAvg
+(McMahan et al., 2017). We therefore only focus on the cal-
+ibration of the prediction set and not on the training step. As
+a consequence, in the following, all theoretical statements
+are made conditionally on ˆ︁f (often implicitly).
+
+i
+
+i = s(X (j)
+
+Formally, each agent j ∈ {1, . . . , m} holds a local calibra-
+1 , . . . , S(j)
+tion data set S (j) ≜ (S(j)
+n ) composed of n scores,
+where S(j)
+, Y (j)
+) is the score associated to the
+i
+i-th calibration data point of agent j and we want to find
+a particular value ˆ︁q such that for a test point (X, Y ), the
+set ˆ︁C(X) = {y ∈ R : s(X, y) ⩽
+ˆ︁q} contains the unknown
+response Y with probability at least 1−α. In the centralized
+case, the split CP method presented in Section 2.1 requires to
+order all the scores and to choose ˆ︁q as the ⌈(mn+1)(1−α)⌉
+smallest score. In one-shot FL, this global ordering step
+is only possible if the agents send their whole list of local
+scores to the server. This naive implementation of the split
+CP method is impractical, due to both privacy concerns and
+unacceptable communication costs, requiring us to design
+another strategy. As a single round of communication is
+allowed, the main difficulty is to choose what should be sent
+from the agents to the server, and what kind of aggregation
+should be done by the server to yield the desired coverage.
+
+3.2. Main Contribution: FedCP-QQ
+
+Our method is based on the idea that each agent j should
+return a quantile of its local scores S (j), in the same way as
+for the split CP method described in Section 2.1. The main
+questions that then arise are (i) which quantile of the scores
+the agents should send, and (ii) how to aggregate them at the
+central server level. Lu & Kalpathy-Cramer (2021) propose
+to use an empirical average, but this aggregation strategy is
+not satisfactory. This is obvious in the extreme case where
+
+n = 1 (a single data point per agent): it amounts to calcu-
+lating the average of the local scores, which typically fails
+to provide the desired coverage (1). Instead, we propose
+to select a quantile of the locally computed quantiles. This
+quantile-of-quantiles estimator is defined below.
+
+Definition 3.1 (Quantile-of-quantiles). For any (ℓ, k) in
+, the Quantile-of-Quantiles (QQ) estimator
+×
+1, n
+(cid:74)
+(cid:75)
+is defined by
+
+1, m
+(cid:75)
+
+(cid:74)
+
+ˆ︁Q(ℓ,k) ≜ ˆ︁Q(k)
+
+(︂
+ˆ︁Q(ℓ)(S (1)), . . . , ˆ︁Q(ℓ)(S (m))
+
+)︂
+
+,
+
+(3)
+
+where ˆ︁Q(·)(·) is defined by Equation (2).
+
+In words, QQ takes for each agent the ℓ-th smallest local
+score and then takes the k-th smallest value of these scores.
+This requires a single round of communication and thus
+fits the constraints of one-shot FL. The associated plug-in
+prediction set is
+
+ˆ︁Cℓ,k(X) =
+
+{︂
+y ∈ R : s(X, y) ⩽ ˆ︁Q(ℓ,k)
+
+}︂
+
+.
+
+(4)
+
+Our objective is now to find (ℓ, k) such that P(Y ∈ ˆ︁Cℓ,k(X))
+is closest possible to 1 − α while being guaranteed to be
+above. To this aim, we derive the following result.
+Theorem 3.2. Let {(X (j)
+i
+random variables (given ˆ︁f ). For any (ℓ, k) ∈
+1, m
+(cid:75)
+(︂
+Y ∈ ˆ︁Cℓ,k(X)
+
+i,j=1 and (X, Y ) be i.i.d.
+×
+
+⩾ Mℓ,k ≜
+
+1, n
+(cid:75)
+
+we have:
+
+, Y (j)
+i
+
+)}m,n
+
+P
+
+)︂
+
+(cid:74)
+
+(cid:74)
+
+1 −
+
+1
+mn + 1
+
+m
+∑︂
+
+j=k
+
+(︃m
+j
+
+)︃ n
+∑︂
+
+ℓ−1
+∑︂
+
+I1,j =ℓ
+
+I c
+1,j =0
+
+)︁ · · · (︁ n
+im
+
+(︁ n
+i1
+(︁ mn
+i1+···+im
+
+)︁
+)︁ ,
+
+(5)
+
+where I1,j = {i1, . . . , ij} and I c
+1,j = {ij+1, . . . , im}.
+Moreover, when the associated scores {S(j)
+i }n,m
+i,j=1 and
+S ≜ s(X, Y ) have continuous c.d.f, (5) is an equality.
+
+The proof is given in Appendix C.1. This theorem shows
+that we can lower bound the probability of coverage of our
+quantile-of-quantiles prediction set by a quantity Mℓ,k that
+does not depend on the data distribution but only on m, n, ℓ
+and k. Furthermore, the lower bound becomes an equality
+when scores have a continuous c.d.f. This is the case, for
+instance, with the fitted absolute residual when the condi-
+tional distribution of Y given X has a continuous c.d.f., i.e.,
+when the noise distribution is atomless. Note that although
+the theorem requires the data points to be i.i.d., in fact only
+the scores need to satisfy this hypothesis (conditionally to
+ˆ︁f ). This is interesting since there are situations where the
+scores are i.i.d. even though data distributions are different
+across agents. In Section 3.5, we further discuss the impact
+of data heterogeneity across agents, an important aspect of
+many FL applications.
+
+3
+
+Algorithm 1 FedCP-QQ
+
+One-Shot Federated Conformal Prediction
+
+Input: Local scores {S (j)}m
+(ℓ∗, k∗) ←− arg min
+ℓ,k
+
+{Mℓ,k : Mℓ,k ⩾ 1 − α}
+
+j=1, α, M (see Equation (5))
+
+for j = 1, . . . , m do
+
+Agent j sends ˆ︁Q(ℓ∗)(S (j)) to the central server
+
+end for
+Central server returns ˆ︁Q(k∗)
+
+(︂
+
+ˆ︁Q(ℓ∗)(S (1)), . . . , ˆ︁Q(ℓ∗)(S (m))
+
+)︂
+
+Based on Theorem 3.2, our algorithm returns ˆ︁Q(ℓ∗,k∗) with
+
+(ℓ∗, k∗) = arg min
+ℓ,k
+
+{Mℓ,k : Mℓ,k ⩾ 1 − α} .
+
+(6)
+
+By construction, the associated set (4) is marginally valid,
+in the sense that it satisfies the desired coverage (1). The
+full procedure, called Federated Conformal Prediction with
+Quantile-of-Quantiles (FedCP-QQ), is summarized in Al-
+gorithm 1.
+
+Particular cases. To gain more intuition on our
+FedCP-QQ procedure, let us consider the two extreme cases
+n = 1 and n → ∞. When n = 1, each agent sends its
+unique score to the server. Thus, by Theorem 2.1, it suf-
+fices for the server to compute the k-th smallest score with
+k = ⌈(m + 1)(1 − α)⌉ to obtain a valid set. In the other
+extreme case where n → ∞, if the agents send their ℓ-th
+smallest score with ℓ = ⌈(n + 1)(1 − α)⌉, each agent has in
+fact sent the true quantile of order (1 − α) of the distribution
+of S. The server can therefore choose any of these values
+and obtains a valid set. We see that in both cases, if both
+the agents and the server compute appropriate quantiles, we
+can obtain a valid set. Our method extends this idea to any
+values of m and n using Theorem 3.2 and Equation (6). In
+Appendix A.3, we study another interesting specific case
+where each machine sends its maximum value, i.e., ℓ = n.
+
+Computational optimizations. The brute-force compu-
+tation of Mℓ,k in Equation (5) for all (ℓ, k) can be quite
+costly in practice. To accelerate this step, we describe in
+Appendix A.2 an efficient way to compute Mℓ,k, based on
+the calculation of rectangular probabilities of a multivariate
+hypergeometric distribution.
+
+(cid:75)
+
+1,m
+(cid:74)
+
+×
+1,n
+(cid:75)
+(cid:74)
+
+or (ℓ∗, k∗)
+We also note that M = (Mℓ,k)(ℓ,k)∈
+can be precomputed and reused across multiple executions
+of FedCP-QQ. Indeed, as M and (ℓ∗, k∗) are independent
+from the distribution of the data (Theorem 3.2), they do not
+change as long as m (the number of agents) and n (the size
+of local data sets) remain fixed. This is the case for instance
+when computing prediction sets for multiple score functions
+s, predictors ˆ︁f , and miscoverage rates α on the same data.
+
+Figure 1. Comparison of the exact value of P(Y ∈ ˆ︁Cℓ∗,k∗ (X)) =
+Mℓ∗,k∗ (blue) with the upper bound either when data are central-
+ized (orange) or when there is only one agent (red). Parameters
+are α = 0.1, m = {5, 20}, and n = {10, . . . , 100}.
+
+3.3. Upper Bound on the Probability of Coverage
+
+While by construction our probability of coverage is nec-
+essarily lower bounded by 1 − α, it is also interesting to
+have an upper bound, guaranteeing that the coverage of our
+prediction set is not too large. In the centralized case, if
+the scores have a continuous c.d.f., the split CP method
+with a calibration set of size mn gives P(Y ∈ ˆ︁C(X)) ⩽
+1 − α + 1/(mn + 1) (Theorem 2.1). This means that when
+there is only one agent (or when agents do not collaborate),
+this probability is upper bounded by 1 − α + 1/(n + 1).
+
+Assuming that the scores have a continuous c.d.f., in Fig-
+ure 1 we compare the two upper bounds with the value
+of Mℓ∗,k∗ = P(Y ∈ ˆ︁Cℓ∗,k∗ (X)) returned by FedCP-QQ.
+Recall that, by Theorem 3.2, Mℓ∗,k∗ is equal to the exact
+coverage of ˆ︁Cℓ∗,k∗ (X). Figure 1 shows that FedCP-QQ re-
+turns prediction sets with coverage (in blue) comparable
+to the (tight) upper bound of the centralized case with mn
+calibration points (in orange). We also see that the coverage
+is much larger if we consider the data of a single agent (in
+red), which illustrates the advantage of our method and the
+need for collaboration between the agents.
+
+The form of our quantile-of-quantiles estimator does not
+allow us to extend the proof techniques of the centralized
+framework and obtain a theoretical upper bound similar to
+the one of Theorem 2.1. Nevertheless, the results obtained
+in Figure 1 make us conjecture that an upper bound could
+be of the same order as in the centralized framework, i.e., in
+1 − α + O(1/(mn + 1)).
+
+3.4. Conditional Coverage Guarantee
+
+In practice, we are interested in the coverage rate for test
+points when the data set is fixed. However, the guarantee
+in (1) does not address this as the probability is also taken
+over the (calibration) data. In other words, it bounds the
+miscoverage rate on average over all possible calibration
+data points (and over a training set if ˆ︁f is learned). Instead,
+we can define the conditional miscoverage rate as a function
+
+4
+
+One-Shot Federated Conformal Prediction
+
+of the calibration data:
+
+αP (Dmn) = P
+
+(︂
+
+Y /∈ ˆ︁Cℓ,k(X) | ˆ︁f , Dmn
+
+)︂
+
+,
+
+(7)
+
+with Dmn the full calibration set without the test point
+(Y, X). While, by construction of ˆ︁Cℓ,k(X), the expecta-
+tion of αP (Dmn) is smaller than α, the random variable
+αP (Dmn) may have a high variance. In particular, it is pos-
+sible to construct a scenario where P (αP (Dmn) = 1) =
+α and P (αP (Dmn) = 0) = 1 − α (Bian & Barber, 2022).
+Here, we have E[αP (Dmn)] = α but a non-negligible pro-
+portion of calibration data sets might result in a poor con-
+ditional coverage even though the average coverage is still
+1 − α. In practice, we want to have αP (Dmn) ≈ α with a
+probability close to 1 to avoid this unfavorable scenario.
+
+In the following theorem, we show that it is possible to
+control the conditional miscoverage of FedCP-QQ.
+
+Theorem 3.3. In the framework of Theorem 3.2, if δ ∈
+(0, 0.5] and ℓ · k ⩾ (1 − α) · mn, then the conditional mis-
+coverage rate—defined by Eq. (7)—is controlled as follows:
+
+(︄
+
+P
+
+αP (Dmn) ⩽ α +
+
+√︃
+
+)︄
+
+log(1/δ)
+2mn
+
+⩾ 1 − δ .
+
+(8)
+
+Theorem 3.3 is proved in Appendix C.2. It states that the
+probability that a particular data set results in a conditional
+miscoverage rate much higher than α vanishes with the
+number of data points used for calibration. A similar bound
+is obtained in the centralized setting (Vovk, 2012; Bian &
+Barber, 2022) for the split method. However, note that
+Theorem 3.3 holds only for couples (ℓ, k) verifying a condi-
+tion not necessarily verified by the couple (ℓ∗, k∗) used by
+FedCP-QQ. Nevertheless, our experiments suggest that this
+could still be true for (ℓ∗, k∗), up to a slight modification of
+the bound. However, similarly to the upper bound on the
+probability of coverage (see Section 3.3), the proof of this
+statement is difficult because it requires to study the rank of
+ˆ︁Q(ℓ,k) in the full data set which, contrary to the centralized
+case, is a random variable. In the proof of Theorem 3.3,
+we rely on an almost sure lower bound for this rank, which
+is conservative and negatively impacts the final result. In
+the centralized case, the rank is almost surely fixed and this
+greatly simplifies the theoretical analysis.
+
+3.5. Impact of Heterogeneous Data
+
+An important challenge in FL is to deal with data hetero-
+geneity across agents (Li et al., 2020; Kairouz et al., 2021;
+Le Bars et al., 2023). This heterogeneity can yield differ-
+ent distributions of scores across agents and thus affects
+the coverage of the set returned by CP methods. To better
+understand these effects, we no longer assume that all the
+variables are drawn from the same distribution. Instead, we
+
+only suppose that the local data points of agent j are drawn
+i.i.d. from an agent-specific distribution with a test point
+also drawn from a potentially different distribution.
+
+As we do not have any information on the underlying dis-
+tributions of the scores, we study how data heterogeneity
+affects the coverage of the set returned by FedCP-QQ, i.e.,
+we quantify how much we lose in coverage if we apply the
+same strategy as in the i.i.d. case. Intuitively, the more the
+distributions of the scores {S(j)}j are similar and close to
+the one of S, the less we lose in coverage. This is made
+precise in the following result.
+
+, Y (j)
+i
+
+the calibration data
+i,j=1 and the test point (X, Y ) are such that,
+i }n,m
+i,j=1, S are inde-
+, {S(j)
+i }n
+i=1 are i.i.d.
+1, m
+(cid:75)
+i,j=1, ˜︁S be i.i.d. random variables (given ˆ︁f ). De-
+j (S) = P(S(j)
+⩽ S|S) and
+
+Proposition 3.4. Assume that
+{(X (j)
+)}m,n
+i
+given ˆ︁f , the corresponding scores {S(j)
+pendent, and that for every j ∈
+Let { ˜︁S(j)
+i }n,m
+fine, for every j ∈
+p˜∗( ˜︁S) = P( ˜︁S(1)
+(ℓ⋆)
+
+, p∗
+1, m
+(cid:75)
+⩽ ˜︁S| ˜︁S). Then, we have
+
+(ℓ⋆)
+
+(cid:74)
+
+(cid:74)
+
+P(︁Y ∈ ˆ︁Cℓ⋆,k⋆ (X))︁ ⩾ 1 − α
+(︂
+
+[︃
+− E
+dTV
+
+PoisBin(︁p∗(S))︁ , Bin(︁m, p˜∗( ˜︁S))︁)︂]︃
+
+,
+
+where dTV(·, ·) is the total-variation (TV) distance, PoisBin
+the Poisson-Binomial distribution and Bin the binomial
+distribution.
+
+Proposition 3.4 is proved in Appendix C.3. The general
+idea of this result is that when variables are i.i.d., probabil-
+ities on order statistics only depend on the c.d.f. of a cer-
+tain binomial distribution, whereas when the variables are
+independent but with different distributions, the binomial
+needs to be replaced by a Poisson-Binomial distribution.
+The inequality indicates that, in the heterogeneous case, the
+coverage is reduced by the TV distance between the two dis-
+tributions. We note that this distance can be upper bounded
+in specific cases (see Appendix C.3) and that it is equal to
+0 when all the data are i.i.d and S = ˜︁S. We leave to future
+work the precise characterization of cases where the TV
+distance is negligible in front of 1 − α.
+
+4. Differentially Private FedCP-QQ
+
+While FL methods are often informally claimed to mitigate
+privacy issues, they still leak information about the local
+data sets during the execution of the algorithm. In the case
+of FedCP-QQ, it is easy to see how revealing a particular
+quantile of the local score distribution may leak sensitive in-
+formation. In this section, we propose a privacy-preserving
+version of FedCP-QQ based on Differential Privacy (DP)
+(Dwork et al., 2014), a mathematical notion of privacy that
+essentially requires that the output distribution of a random-
+
+5
+
+One-Shot Federated Conformal Prediction
+
+Algorithm 2 Differentially Private Quantile
+
+Input: Scores (S1, . . . , Sn) ∈ Rn, quantile q ∈ (0, 1), privacy
+level ε > 0, bins {I1, . . . , IB}
+for i = 1, . . . , n do
+
+Compute the discretized score S¯ i = eb such that Si ∈ Ib
+
+end for
+for b = 1, . . . , B do
+
+Compute the weight wb = max
+
+{︂ |{i:S¯
+
+i<eb}|
+q
+
+, |{i:S¯
+
+i>eb}|
+1−q
+
+}︂
+
+end for
+∆q ←− max{ 1
+q ,
+
+1
+1−q }
+
+Output: Bin eb with probability e
+
+−
+
+εwb
+2∆q / ∑︁B
+
+b′=1 e
+
+−
+
+εw
+b′
+2∆q
+
+Algorithm 3 FedCP2-QQ
+
+Input: Local scores {S (j)}m
+j=1, miscoverage level α, M (see
+Equation (5)), privacy level ε > 0, bins {I1, . . . , IB}, γ ∈
+(0, 1)
+
+The server finds (ℓγ, kγ) as in FedCP-QQ (Algorithm 1) with
+coverage level 1−α
+1−γα
+{︂ ℓγ +ℓcor
+n
+
+with ℓcor from Eq. (10)
+
+, 1
+2
+
+}︂
+
+q ←− max
+for j = 1, . . . , m do
+Agent j sends ˆ︁Qε
+
+server.
+end for
+Output: The server orders ˆ︁Qε
+value denoted ˆ︁Qε
+
+(kγ ).
+
+j , the output of Alg. 2 with S (j), to the
+
+1, . . . , ˆ︁Qε
+
+m and outputs the kγ-th
+
+ized algorithm is not too sensitive to a small modification
+of the input data set. In particular, we consider the strong
+Local DP (LDP) model where agents do not trust the central
+server and must locally privatize the messages they send.
+
+Formally, for any ε > 0, a randomized algorithm A is said
+to be ε-LDP if for any two local data sets S and S ′ that
+differ in a single data point (we call them neighboring), and
+any set of possible outputs O, we have:
+
+P(︁A(S) ∈ O)︁ ⩽ exp (ε)P(︁A(S ′) ∈ O)︁ .
+
+(9)
+
+A smaller ε therefore yields a better privacy. In our specific
+framework, S and S ′ correspond to two neighboring cali-
+bration data sets of an agent j and A(S) to the information
+sent by j to the central server.
+
+Our approach builds upon the (centralized) differentially pri-
+vate quantile mechanism recently introduced by Angelopou-
+los et al. (2022) and summarized in Algorithm 2. The main
+idea is to apply the exponential mechanism (McSherry &
+Talwar, 2007) to a discretization of the scores into bins and
+with an appropriate choice of utility function. It requires
+to fix a number of bins B ∈ N, an upper bound on the
+scores Smax and a set of points 0 = e0 < e1 < · · · <
+eB−1 < eB = Smax defining the bins Ib = (eb−1, eb]. Al-
+gorithm 2 is ε-DP by a direct application of the exponential
+mechanism with utility function wb and sensitivity ∆q.
+
+6
+
+FedCP2-QQ method. Our private algorithm, called Fed-
+erated Conformal Private Prediction (FedCP2)-QQ, is an
+extension of FedCP-QQ (Algorithm 1) with two key modi-
+fications: (i) exact local quantile computations are replaced
+by calls to DP Quantile (Algorithm 2), and (ii) the orders of
+client and server-level quantiles are adjusted to guarantee
+the desired coverage. More precisely, if the central server
+asks for the ℓ-th smallest score of each agent, then the agents
+use Algorithm 2 to return a randomized bin around the true
+quantile ˆ︁Q(ℓ)(S (j)). To achieve the desired coverage 1 − α
+despite the randomness due to privacy, the server computes
+(ℓγ, kγ) such that P(S ⩽ ˆ︁Q(ℓγ ,kγ )) is above but close to
+1−α
+1−γα , where γ ∈ (0, 1) is a free parameter. Because the
+agents might return bins smaller than the one of the re-
+quested ℓγ-th score, the central server further compensates
+by asking agents for their (ℓγ + ℓcor)-th smallest score with
+
+ℓcor =
+
+(︃
+
+log
+
+⌈︃ 2
+ε
+
+B
+1 − (1 − γα) 1
+
+m
+
+)︃⌉︃
+
+.
+
+(10)
+
+Note that the smaller the privacy parameter ε (more privacy),
+the bigger the correction ℓcor. At first sight, one could think
+that B should be taken small to reduce the correction. In
+practice, it should also be taken sufficiently large to avoid
+aggressive rounding that could lead to a large final prediction
+set. We refer to Angelopoulos et al. (2022, Section 4.2) for
+an in-depth discussion on the selection of the number of
+bins B. The following theorem ensures that Algorithm 3
+preserves privacy and allows to construct prediction sets
+that satisfy the desired coverage. The proof is given in
+Appendix C.4.
+
+Theorem 4.1. For any ε > 0, Algorithm 3 satisfies ε-LDP.
+Moreover, denoting ˆ︁Cε(X) = {y ∈ R : s(X, y) ⩽ ˆ︁Qε}
+with ˆ︁Qε the output of the algorithm, we have
+
+P(︁Y ∈ ˆ︁Cε(X))︁ ⩾ 1 − α .
+
+Choosing γ. Intuitively, in order to be equivalent to the
+non-private FedCP-QQ, γ should tend to 0 and the privacy
+parameter ε should tend to infinity. To select γ automatically
+for any given ε > 0, we propose a grid-search strategy. We
+look for the γ that brings the smallest amount of correction,
+which we evaluate using the pre-computed table M . More
+precisely, for a given γ, we evaluate Mℓγ +ℓcor,kγ which is
+the coverage obtained by the non-private FedCP-QQ esti-
+mator ˆ︁Q(ℓγ +ℓcor,kγ ). Note that this coverage is not the one of
+our private estimator since each agent might return a score
+smaller than the (ℓγ +ℓcor)-th smallest. To find the best γ, we
+look at the one that brings the smaller coverage Mℓγ +ℓcor,kγ
+over the grid. To gain more intuition on the degree of correc-
+tion brought by the additional randomness of the private set-
+ting, we represent in Figure 2 the quantity Mℓγ +ℓcor,kγ found
+for the best γ and for different values of n and ε. This plot
+shows how fast the correction decreases as n and ε increase.
+
+One-Shot Federated Conformal Prediction
+
+Figure 2. Degree of compensation Mℓγ +ℓcor,kγ for different values
+of α, n and ε when m = 10. We clearly observe that Mℓγ +ℓcor,kγ
+tends to the desired coverage 1 − α (dashed lines) as n and ε tends
+to +∞, which means that the compensation vanishes.
+
+Privacy amplification by shuffling or aggregation. To
+achieve better privacy-utility trade-offs, it is common in FL
+to relax the LDP model and instead assume that the agents’
+messages are sent to a secure computation function whose
+output is received by the central server. This is sometimes
+referred to as Distributed DP (Kairouz et al., 2021). Two
+standard secure computation primitives are compatible with
+FedCP2-QQ: secure shuffling (Feldman et al., 2021) and
+secure aggregation (Bonawitz et al., 2017). Secure shuffling
+outputs a random permutation of the messages, which still
+allows the server to compute the desired quantile. For secure
+aggregation (which outputs the sum of the messages), each
+agent can encode its private quantile as a one-hot vector
+of size B indicating the corresponding bin. The sum of
+these vectors is then sufficient for the server to find the bin
+corresponding to the kγ-th smallest score. In both cases,
+ε is reduced by a factor of O(1/
+m). In other words, if
+one of the previous privacy amplification schemes is used,
+m (up to a constant) and therefore
+we can replace ε by ε
+reduce the correction ℓcor by a factor O(
+m), while still
+satisfying the same privacy guarantees. Detailed privacy
+amplification formulas are provided by Feldman et al. (2021)
+and McMillan et al. (2022).
+
+√
+
+√
+
+√
+
+Remark 4.2. FedCP2-QQ provides privacy guarantees
+with respect to the calibration data. To provide privacy
+guarantees with respect to the data used to train the model,
+one should train the model using locally differentially pri-
+vate algorithms (see e.g. Geyer et al., 2017; McMahan et al.,
+2018; Noble et al., 2022). Note that the training and cal-
+ibration data sets are disjoint, and that FedCP2-QQ only
+post-processes the private model to compute the calibra-
+tion scores. Therefore, if model training satisfies ε1-LDP
+and FedCP2-QQ satisfies ε2-LDP, the full pipeline satisfies
+max(ε1, ε2)-LDP thanks to parallel composition.
+
+5. Experiments
+
+In this section, we evaluate FedCP-QQ on synthetic and real
+regression data sets. Additional experiments on unbalanced
+data sets and on FedCP2-QQ are presented in Appendices
+A.1 and B.2. The code of our two methods is available at
+https://github.com/pierreHmbt/FedCP-QQ.
+
+7
+
+data with
+Figure 3. Prediction
+FedCP-QQ (ours),
+and FedCP-Avg calibra-
+tions. The lower bound of the set returned by FedCP-Avg is
+beyond the figure.
+
+intervals
+centralized,
+
+simulated
+
+on
+
+Depending on the experiments, we use the split CP method
+presented in Section 2 or its popular variant Conformalized
+Quantile Regression (CQR) (Romano et al., 2019), which
+is directly compatible with our approach. For split CP, ˆ︁f
+is a standard regressor, the score function s is s(X, Y ) =
+|Y − ˆ︁f (X)|, and the resulting prediction set is an interval
+of constant length [ ˆ︁f (X) ± qˆ]. In CQR, ˆ︁f is replaced by
+a couple ( ˆ︁fα/2, ˆ︁f1−α/2) where ˆ︁fβ is a quantile regressor
+of order β (Koenker & Bassett Jr, 1978) and s(X, Y ) =
+max( ˆ︁fα/2(X)−Y, Y − ˆ︁f1−α/2(X)). In contrast to split CP,
+CQR returns sets of the form [ ˆ︁fα/2(X) − qˆ, ˆ︁f1−α/2(X) + qˆ]
+which have a size adaptive to heteroscedasticity.
+
+For both split CP and CQR, we use FedCP-QQ to find the
+value of ˆ︁q (calibration step). We compare it with the central-
+ized baseline (Equation 2) and FedCP-Avg, the federated
+approach proposed by Lu & Kalpathy-Cramer (2021). Re-
+call that the latter simply averages the m quantiles of order
+⌈(n + 1)(1 − α)⌉/n sent by the agents (see Section 2.2).
+
+5.1. Synthetic Data
+
+Data set. We draw 2000 independent, univariate random
+variables Xi from a uniform distribution on [1, 5]. Following
+Romano et al. (2019), the response variable is sampled as
+
+Yi | Xi ∼ Pois(sin2(Xi) + 0.1) + 0.03 · Xiε1,i
+
++ 25 · 1 {Ui < 0.01} ε2,i ,
+
+where Pois(λ) is the Poisson distribution with mean λ, ε1,i
+and ε2,i are i.i.d. standard Gaussian variables, and Ui is
+uniform on the interval [0, 1]. Note that the last term of
+the equation can generate outliers. Then, we split the data
+set into two disjoint subsets: one for training and one for
+calibration. To simulate a FL scenario, the calibration set
+is divided into m = 50 disjoint subsets of size n = 20.
+Finally, we generate a test set of size 5000 with the same
+properties.
+
+We construct the prediction sets using the CQR approach
+where the estimation of the (quantile) regression function
+
+One-Shot Federated Conformal Prediction
+
+Figure 4. Empirical coverages of prediction intervals (α = 0.1) constructed by various methods. On the left, when m ≫ n. On the right,
+when m ≪ n. Our method FedCP-QQ is shown in bold font. The white circle represents the mean.
+
+is made with quantile regression forests (Meinshausen &
+Ridgeway, 2006). The number of trees in the forest is set
+to 1000, the two parameters controlling the coverage rate
+on the training data are tuned using cross-validation and
+the remaining hyperparameters are set as done by Romano
+et al. (2019).
+
+Results. Figure 3 illustrates the performance of the differ-
+ent methods when α = 0.1. We see that the set returned
+by FedCP-QQ when the data are decentralized is almost
+identical to the one obtained when the data are central-
+ized. This is not the case for FedCP-Avg which outputs
+a larger set. This may be due to the presence of outliers
+in the data and because the mean (the server aggregation
+strategy for FedCP-Avg) is not robust. On the contrary, by
+using a quantile function to aggregate the agents’ quantiles,
+FedCP-QQ is robust to outliers and produces smaller yet
+valid sets. In the next subsection, we show that the same
+behavior is observed on real data sets.
+
+5.2. Real Data
+
+Data sets. We evaluate our method on five public-domain
+regression data sets also considered by Romano et al. (2019)
+and Sesia & Romano (2021): physicochemical properties
+of protein tertiary structure (bio) (Rana, 2013); bike sharing
+(bike) (Fanaee-T & Gama, 2013); communities and crimes
+(community) (Redmond, 2011); Tennessee’s student teacher
+achievement ratio (star) (Achilles et al., 2008); and concrete
+compressive strength (concrete) (Yeh, 1998).
+
+In this section, we use (i) split-CP with ridge regression—
+the regularization parameter is tuned by cross-validation;
+(ii) CQR with quantile Regression Forests (RF)—the hyper-
+parameters are the ones used in Section 5.1; and (iii) CQR
+with Neural Networks (NN) for quantile regression (Taylor,
+2000)—the architecture and the parameters are those used
+
+by Romano et al. (2019).
+
+The prediction sets, with a miscoverage rate fixed to α =
+0.1, are either calibrated with CP in the centralized setting
+or in a FL setting using FedCP-QQ and FedCP-Avg. For
+each experiment, we split the full data set into three parts:
+a training set (40%), a calibration set (40%), and a test
+set (20%). To simulate a FL scenario, we also split the
+calibration set in m disjoint subsets of equal size n. We
+consider scenarios where m ≫ n, and m ≪ n. Their
+exact values for each data set are given in Appendix B.1.
+All features are then standardized to have zero mean and
+unit variance. For each method, we compute the empirical
+coverage obtained on the test set and the average length of
+the conformal set. These two metrics are collected over 20
+different training-calibration-test random splits.
+
+Results. Figure 4 displays the boxplots of the empirical
+coverages obtained by each method over all the data sets
+and all the 20 different random splits (one point represents
+the empirical coverage obtained on one random split of one
+data set). Results on individual data sets are presented in
+Appendix B.1, as well as boxplots of the lengths of the
+intervals obtained. The first observation we can make is
+that, on average (white circle), FedCP-QQ does return in-
+tervals whose coverage is greater than 0.90 (the desired
+coverage), without being too far from it. More importantly,
+our method returns prediction sets with coverage and length
+very similar to those returned by centralized calibration. In
+Figure 4 for instance, we see that the mean (white circle)
+and standard-deviation (size of the box) of the coverages
+obtained with FedCP-QQ and the centralized baseline have
+comparable values, with a slightly larger standard-deviation
+for FedCP-QQ. The same kind of observation can be made
+concerning the length of the prediction sets (see figures
+in Appendix B.1). Finally, it is interesting to note that,
+
+8
+
+0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-AvgAll data sets0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-AvgAll data setsOne-Shot Federated Conformal Prediction
+
+with FedCP-QQ, we obtain similar results for m ≫ n and
+m ≪ n. This is in contrast to FedCP-Avg, which yields
+sets with higher coverages and lengths on all data sets and
+is therefore strictly inferior to our method. Note that Ap-
+pendix B.2 provides additional results about our DP algo-
+rithm FedCP2-QQ, showing how the coverage varies with
+the privacy parameter ε. Overall, these experiments support
+the fact that FedCP-QQ is a well-suited method to perform
+the calibration step of CP in a decentralized setting, placing
+it as the only one adapted to the context of (one-shot) FL.
+
+6. Discussion
+
+This paper introduces the method Federated Conformal Pre-
+diction with Quantile-of-Quantiles (FedCP-QQ) to output
+valid distribution-free prediction sets in a one-shot Federated
+Learning context. In addition to the analysis and discussion
+about the different properties of our method, we also intro-
+duce FedCP2-QQ, a private version of FedCP-QQ based on
+Local Differential Privacy. Multiple experiments highlight
+that our method returns prediction sets with coverage and
+length close to those returned in a centralized setting, sup-
+porting the fact that FedCP-QQ is a well-suited method for
+(one-shot) FL scenarios.
+
+This work brings many important future research directions.
+Among them, we expect that new proof techniques could
+lead to better theoretical guarantees, notably regarding con-
+ditional coverage and the private estimator. Our paper fo-
+cuses on the calibration step, making it particularly suited
+for split-based conformal methods. However, it would be in-
+teresting to study how our FL approach could be extended to
+the full conformal or the nested conformal methods (Gupta
+et al., 2022). Finally, an interesting line of research is the
+derivation of specific estimators for cases where local data
+sets are not identically distributed.
+
+Acknowledgements
+
+This work was supported in part by the French Agence
+Nationale de la Recherche under grants ANR-20-CE23-
+0015 (Project PRIDE) and ANR-17-CE23-0011 (FAST-
+BIG). Batiste Le Bars is supported by an Inria-EPFL fellow-
+ship. Sylvain Arlot is also supported by Institut Universitaire
+de France (IUF).
+
+References
+
+Achilles, C. M., Bain, H. P., Bellott, F., Boyd-Zaharias, J.,
+Finn, J., Folger, J., Johnston, J., and Word, E. Tennessee’s
+student teacher achievement ratio (star) project. Harvard
+Dataverse, 1:2008, 2008.
+
+Andrew, G., Thakkar, O., McMahan, B., and Ramaswamy,
+
+S. Differentially private learning with adaptive clipping.
+Advances in Neural Information Processing Systems, 34:
+17455–17466, 2021.
+
+Angelopoulos, A. N. and Bates, S. Conformal prediction: A
+gentle introduction. Foundations and Trends® in Machine
+Learning, 16(4):494–591, 2023.
+
+Angelopoulos, A. N., Bates, S., Zrnic, T., and Jordan, M. I.
+Private prediction sets. Harvard Data Science Review,
+apr 2022.
+
+Balakrishnan, N. Permanents, order statistics, outliers, and
+robustness. Revista matem´atica complutense, 20(1):7–
+107, 2007.
+
+Begoli, E., Bhattacharya, T., and Kusnezov, D. The need for
+uncertainty quantification in machine-assisted medical
+decision making. Nature Machine Intelligence, 1(1):20–
+23, 2019.
+
+Bian, M. and Barber, R. F. Training-conditional coverage
+for distribution-free predictive inference. arXiv preprint
+arXiv:2205.03647, 2022.
+
+Bonawitz, K., Ivanov, V., Kreuter, B., Marcedone, A.,
+McMahan, H. B., Patel, S., Ramage, D., Segal, A.,
+and Seth, K. Practical secure aggregation for privacy-
+preserving machine learning. In proceedings of the 2017
+ACM SIGSAC Conference on Computer and Communica-
+tions Security, pp. 1175–1191, 2017.
+
+Cormode, G. and Markov,
+
+I.
+
+and evaluation of binary classifiers.
+arXiv:2210.12526, 2022.
+
+Federated calibration
+arXiv preprint
+
+David, H. A. and Nagaraja, H. N. Order statistics. John
+
+Wiley & Sons, 2004.
+
+Davis, P. J. Leonhard euler’s integral: A historical profile of
+the gamma function: In memoriam: Milton abramowitz.
+The American Mathematical Monthly, 66(10):849–869,
+1959.
+
+Dennis, D. K., Li, T., and Smith, V. Heterogeneity for the
+win: One-shot federated clustering. In ICML, 2021.
+
+Dvoretzky, A., Kiefer, J., and Wolfowitz, J. Asymptotic
+minimax character of the sample distribution function
+and of the classical multinomial estimator. The Annals of
+Mathematical Statistics, pp. 642–669, 1956.
+
+Dwork, C., Roth, A., et al. The algorithmic foundations of
+differential privacy. Foundations and Trends® in Theo-
+retical Computer Science, 9(3–4):211–407, 2014.
+
+Ehm, W. Binomial approximation to the poisson binomial
+distribution. Statistics & Probability Letters, 11(1):7–16,
+1991.
+
+9
+
+One-Shot Federated Conformal Prediction
+
+El Mekkaoui, K., Mesquita, D., Blomstedt, P., and Kaski, S.
+Federated stochastic gradient langevin dynamics. In Un-
+certainty in Artificial Intelligence, pp. 1703–1712. PMLR,
+2021.
+
+Lebrun, R. Efficient time/space algorithm to compute rect-
+angular probabilities of multinomial, multivariate hyper-
+geometric and multivariate P´olya distributions. Statistics
+and Computing, 23(5):615–623, 2013.
+
+Fanaee-T, H. and Gama, J. Event labeling combining en-
+semble detectors and background knowledge. Progress in
+Artificial Intelligence, pp. 1–15, 2013. ISSN 2192-6352.
+
+Feldman, V., McMillan, A., and Talwar, K. Hiding among
+the clones: A simple and nearly optimal analysis of pri-
+vacy amplification by shuffling. In FOCS, 2021.
+
+Fontana, M., Zeni, G., and Vantini, S. Conformal prediction:
+a unified review of theory and new challenges. Bernoulli,
+29(1):1–23, 2023.
+
+Gauraha, N. and Spjuth, O. Synergy conformal prediction.
+In Symposium on Conformal and Probabilistic Prediction
+and Applications, pp. 91–110. PMLR, 2021.
+
+Geyer, R. C., Klein, T., and Nabi, M. Differentially private
+federated learning: A client level perspective. arXiv
+preprint arXiv:1712.07557, 2017.
+
+Guha, N., Talwalkar, A., and Smith, V. One-shot federated
+
+learning. arXiv preprint arXiv:1902.11175, 2019.
+
+Gupta, C., Kuchibhotla, A. K., and Ramdas, A. Nested
+conformal prediction and quantile out-of-bag ensemble
+methods. Pattern Recognition, 127:108496, 2022.
+
+Kairouz, P., McMahan, H. B., Avent, B., Bellet, A., Bennis,
+M., Bhagoji, A. N., Bonawitz, K., Charles, Z., Cormode,
+G., Cummings, R., et al. Advances and open problems in
+federated learning. Foundations and Trends® in Machine
+Learning, 14(1–2):1–210, 2021.
+
+Karimireddy, S. P., Kale, S., Mohri, M., Reddi, S. J., Stich,
+S. U., and Suresh, A. T. SCAFFOLD: Stochastic Con-
+trolled Averaging for On-Device Federated Learning. In
+ICML, 2020.
+
+Kivaranovic, D., Johnson, K. D., and Leeb, H. Adaptive,
+distribution-free prediction intervals for deep networks.
+In International Conference on Artificial Intelligence and
+Statistics, pp. 4346–4356. PMLR, 2020.
+
+Koenker, R. and Bassett Jr, G. Regression quantiles. Econo-
+metrica: journal of the Econometric Society, pp. 33–50,
+1978.
+
+Kotelevskii, N., Vono, M., Moulines, E., and Durmus, A.
+Fedpop: A bayesian approach for personalised federated
+learning. arXiv preprint arXiv:2206.03611, 2022.
+
+Le Bars, B., Bellet, A., Tommasi, M., Lavoie, E., and Ker-
+marrec, A.-M. Refined convergence and topology learn-
+ing for decentralized SGD with heterogeneous data. In
+AISTATS, 2023.
+
+Lei, J., G’Sell, M., Rinaldo, A., Tibshirani, R. J., and
+Wasserman, L. Distribution-free predictive inference for
+regression. Journal of the American Statistical Associa-
+tion, 113(523):1094–1111, 2018.
+
+Li, Q., He, B., and Song, D. Practical one-shot federated
+
+learning for cross-silo setting. In IJCAI, 2021.
+
+Li, T., Sahu, A. K., Zaheer, M., Sanjabi, M., Talwalkar, A.,
+and Smith, V. Federated optimization in heterogeneous
+networks. Proceedings of Machine Learning and Systems,
+2:429–450, 2020.
+
+Lu, C. and Kalpathy-Cramer, J. Distribution-free feder-
+ated learning with conformal predictions. arXiv preprint
+arXiv:2110.07661, 2021.
+
+Massart, P. The tight constant in the Dvoretzky-Kiefer-
+Wolfowitz inequality. The Annals of Probability, pp.
+1269–1283, 1990.
+
+McMahan, B., Moore, E., Ramage, D., Hampson, S., and
+y Arcas, B. A. Communication-efficient learning of deep
+networks from decentralized data. In Artificial intelli-
+gence and statistics, pp. 1273–1282. PMLR, 2017.
+
+McMahan, H. B., Ramage, D., Talwar, K., and Zhang, L.
+Learning differentially private recurrent language models.
+In International Conference on Learning Representations,
+2018.
+
+McMillan, A., Javidbakht, O., Talwar, K., Briggs, E., Chatzi-
+dakis, M., Chen, J., Duchi, J., Feldman, V., Goren, Y.,
+Hesse, M., Jina, V., Katti, A., Liu, A., Lyford, C., Meyer,
+J., Palmer, A., Park, D., Park, W., Parsa, G., Pelzl, P.,
+Rishi, R., Song, C., Wang, S., and Zhou, S. Private fed-
+erated statistics in an interactive setting. arXiv preprint
+arXiv:2211.10082, 2022.
+
+McSherry, F. and Talwar, K. Mechanism design via dif-
+ferential privacy. In 48th Annual IEEE Symposium on
+Foundations of Computer Science (FOCS’07), pp. 94–
+103. IEEE, 2007.
+
+Meinshausen, N. and Ridgeway, G. Quantile regression
+forests. Journal of machine learning research, 7(6), 2006.
+
+Ndiaye, E. Stable conformal prediction sets.
+
+In Inter-
+national Conference on Machine Learning, pp. 16462–
+16479. PMLR, 2022.
+
+Noble, M., Bellet, A., and Dieuleveut, A. Differentially
+Private Federated Learning on Heterogeneous Data. In
+AISTATS, 2022.
+
+10
+
+One-Shot Federated Conformal Prediction
+
+Papadopoulos, H., Proedrou, K., Vovk, V., and Gammerman,
+In
+Inductive confidence machines for regression.
+A.
+European Conference on Machine Learning, pp. 345–356.
+Springer, 2002.
+
+Pillutla, K., Laguel, Y., Malick, J., and Harchaoui, Z. Dif-
+ferentially private federated quantiles with the distributed
+In International Work-
+discrete Gaussian mechanism.
+shop on Federated Learning: Recent Advances and New
+Challenges, 2022.
+
+Rana, P. Physicochemical properties of protein tertiary
+structure data set. UCI Machine Learning Repository,
+2013.
+
+Redmond, M. Communities and crime unnormalized data
+
+set. UCI Machine Learning Repository, 2011.
+
+Romano, Y., Patterson, E., and Candes, E. Conformalized
+quantile regression. Advances in neural information pro-
+cessing systems, 32, 2019.
+
+Salehkaleybar, S., Sharif-Nassab, A., and Golestani, S. J.
+One-shot federated learning: Theoretical limits and al-
+gorithms to achieve them. Journal of Machine Learning
+Research, 22(189):1–47, 2021.
+
+Sesia, M. and Romano, Y. Conformal prediction using
+conditional histograms. Advances in Neural Information
+Processing Systems, 34:6304–6315, 2021.
+
+Taylor, J. W. A quantile regression neural network approach
+to estimating the conditional density of multiperiod re-
+turns. Journal of Forecasting, 19(4):299–311, 2000.
+
+Vovk, V. Conditional validity of inductive conformal pre-
+dictors. In Asian conference on machine learning, pp.
+475–490. PMLR, 2012.
+
+Vovk, V., Gammerman, A., and Shafer, G. Algorithmic
+learning in a random world. Springer Science & Business
+Media, 2005.
+
+Yeh, I.-C. Modeling of strength of high-performance con-
+crete using artificial neural networks. Cement and Con-
+crete research, 28(12):1797–1808, 1998.
+
+Yurochkin, M., Agarwal, M., Ghosh, S., Greenewald, K.,
+Hoang, T. N., and Khazaeni, Y. Bayesian nonparametric
+federated learning of neural networks. In ICML, 2019.
+
+Zhang, Y., Wainwright, M. J., and Duchi,
+
+J. C.
+Communication-efficient algorithms for statistical opti-
+mization. Advances in neural information processing
+systems, 25, 2012.
+
+11
+
+One-Shot Federated Conformal Prediction
+
+Appendix
+
+A. Supplementary Discussions
+
+A.1. FedCP-QQ with Different ni
+
+In the main article, we assumed for simplicity that all agents had the same amount of data n. Our method is in fact
+generalizable to the case where the agents have data sets of different sizes n1, . . . , nm. In this case, the random variables
+( ˆ︁Q(ℓ)(S (1)), . . . , ˆ︁Q(ℓ)(S (m))) are no longer identically distributed as they are computed on data sets of different sizes.
+Hence, we need to use the cdf of INID data—see (Balakrishnan, 2007, Equation (16)). The right-hand side of Equation (5)
+becomes
+
+Mℓ1,...,ℓm,k = 1 −
+
+1
+n1 + · · · + nm + 1
+
+m
+∑︂
+
+∑︂
+
+na1∑︂
+
+naj
+∑︂
+
+ℓaj+1 −1
+∑︂
+
+ℓam −1
+∑︂
+
+· · ·
+
+· · ·
+
+j=k
+
+A∈Pj
+
+i1=ℓa1
+
+ij =ℓaj
+
+ij+1=0
+
+im=0
+
+)︁
+
+)︁ · · · (︁nam
+(︁na1
+im
+i1
+)︁
+(︁n1+···+nm
+i1+···+im
+
+,
+
+where Pj is the set of subsets of {1, . . . , m} of size j, A = {a1, . . . , aj} ∈ Pj, and Ac = {aj+1, . . . , am} such that
+a1 < a2 < . . . < aj and aj+1 < aj+2 < . . . < am. It can be computed in the same way as for the case where
+n1 = · · · = nm = n (see Appendix A.2). An important difference that appears if we want to apply the methodology of
+FedCP-QQ presented in the paper is that we now have to find different values for ℓ1, . . . , ℓm since the local sample sizes are
+different. Although possible, computing Mℓ1,...,ℓm,k for all possible values of (ℓ1, . . . , ℓm, k) to find the smallest one above
+1 − α can be very time-consuming.
+
+In practice, we propose to directly fix ℓj = ⌈(1 − α)(nj + 1)⌉ as it would be similarly done in the classical (centralized) split
+methodology. Hence, the previous probability function only needs to be computed for the different values of k = 1, . . . , m,
+thereby reducing significantly the computation at the cost of being slightly less close to 1 − α. Note that this strategy can
+also be used in the context of the main paper, i.e., when nj = n and ℓj = ℓ.
+
+We made an additional experiment with such unbalanced data sets using the setting of the synthetic experiments but with
+different sizes for each local data set. We set ℓj = ⌈(1 − α)(nj + 1)⌉ and find the value of k such that the coverage is
+greater than 0.9. Results are displayed in Figure 5 and, as expected, the coverage is respected.
+
+Figure 5. Prediction intervals on simulated data (unbalanced case) with FedCP-QQ (ours), centralized, and FedCP-Avg calibrations. The
+lower bound of the set returned by FedCP-Avg is beyond the figure.
+
+A.2. Computation of Equation (5)
+
+Let us recall that the right-hand side of Equation (5) is
+
+Mℓ,k = 1 −
+
+1
+mn + 1
+
+m
+∑︂
+
+j=k
+
+(︃m
+j
+
+)︃ n
+∑︂
+
+· · ·
+
+n
+∑︂
+
+ℓ−1
+∑︂
+
+ℓ−1
+∑︂
+
+· · ·
+
+i1=ℓ
+
+ij =ℓ
+
+ij+1=0
+
+im=0
+
+)︁ · · · (︁ n
+im
+
+(︁ n
+i1
+(︁ mn
+i1+···+im
+
+)︁
+)︁ = 1 −
+
+1
+mn + 1
+
+m
+∑︂
+
+j=k
+
+(︃m
+j
+
+)︃ n
+∑︂
+
+ℓ−1
+∑︂
+
+I1,j =ℓ
+
+I c
+1,j =0
+
+)︁ · · · (︁ n
+im
+
+(︁ n
+i1
+(︁ mn
+i1+···+im
+
+)︁
+)︁ ,
+
+where I1,j = {i1, . . . , ij} and I c
+1,j = {ij+1, . . . , im}. The time complexity of its brute-force computation is too high. In
+this section, we therefore provide an efficient algorithm to compute it. In the first step, we rewrite the summations to bring
+
+12
+
+One-Shot Federated Conformal Prediction
+
+Figure 6. Heat-map representation of (Mℓ,k)1⩽ℓ⩽n,1⩽k⩽m for m = 10 and n = 20.
+
+out the mass function of a multivariate hypergeometric distribution:
+
+n
+∑︂
+
+ℓ−1
+∑︂
+
+I1,j =ℓ
+
+I c
+1,j =0
+
+)︁ · · · (︁ n
+im
+
+(︁ n
+i1
+(︁ mn
+i1+···+im
+
+)︁
+)︁ =
+
+∑︂
+
+n
+∑︂
+
+ℓ−1
+∑︂
+
+r∈R˜ j
+
+I1,j =ℓ
+
+I c
+1,j =0
+
+)︁
+
+)︁ · · · (︁ n
+im
+)︁
+
+(︁ n
+i1
+(︁ mn
+i1+···+im
+
+1{i1 + · · · + im = r}
+
+,
+
+(11)
+
+⏞
+⏞
+⏟⏟
+mass of a multivariate hypergeometric distribution
+
+with R˜ j = {jℓ, . . . , jn + (m − j)(ℓ − 1)}. The summation in I1,j, and I c
+and can be rewritten as follows
+
+1,j therefore computes rectangular probabilities
+
+pr(a, b) ≜ P(a1 ⩽ H1 ⩽ b1, · · · , am ⩽ Hm ⩽ bm) ,
+
+where (ai, bi) =
+
+{︄
+
+(ℓ, n)
+(0, ℓ − 1)
+
+if i ∈ {1, . . . , j}
+if i ∈ {j + 1, . . . , m} ,
+
+and (H1, . . . , Hm) follows a multivariate hypergeometric distribution with parameters ({n, . . . , n}, r). By a direct applica-
+tion of Bayes’ theorem we obtain (Lebrun, 2013, Equations (2) and (5)):
+
+pr(a, b) = P
+
+(︄ m
+∑︂
+
+i=1
+
+Ti = r
+
+)︄ ∏︁m
+i=1
+P(∑︁m
+
+P(ai ⩽ Wi ⩽ bi)
+i=1 Wi = r)
+
+,
+
+where for any t ∈ (0, 1) and for all 1 ⩽ i ⩽ m, the random variables Wi follow a binomial distribution B(n, t) and
+Ti = (Wi | ai ⩽ Wi ⩽ bi) follows a truncated binomial distribution.
+As there exists efficient algorithms to compute both P(ai ⩽ Wi ⩽ bi) and P(∑︁m
+i=1 Wi = r), the only difficulty remains the
+evaluation of P(∑︁m
+i=1 Ti = r). One approach is to multiply the generating probability functions of the Ti and then extract
+the coefficient of degree r. This algorithm has a time complexity of O(mr log(r)) if the multiplications are done using an
+FFT based algorithm. This strategy still remains costly for large values of m or r, and more advanced algorithms have been
+proposed by Lebrun (2013).
+
+Note finally that since Mℓ,k is a non-decreasing function of both ℓ and k, one can find (ℓ∗, k∗) without computing Mℓ,k for
+all values of (ℓ, k). Figures 6 and 7 illustrate that Mℓ,k actually needs to be computed for only a few values of (ℓ, k).
+
+A.3. Reporting the Maximum of Each Agent
+
+Another particular case of interest is when ℓ = n, i.e., agents send their maximum value. Using the fact that the c.d.f. of the
+maximal value of n i.i.d random variables with common c.d.f. F is F n, it is possible to give a simpler formula for Mn,k.
+Proposition A.1. For every m, n ⩾ 1 and k ∈
+
+, we have
+
+1, m
+(cid:75)
+(cid:74)
+
+Mn,k =
+
+Γ(k + 1/n)
+Γ(k)
+
+·
+
+Γ(m + 1)
+Γ(m + 1/n + 1)
+
+,
+
+where Mn,k is defined by Eq. (5) and Γ is the Gamma function: for any complex number z such that ℜ(z) > 0, Γ(z) =
+∫︁ +∞
+0
+
+tz−1e−tdt.
+
+13
+
+One-Shot Federated Conformal Prediction
+
+Figure 7. Values of (Mℓ,k)1⩽ℓ⩽n,1⩽k⩽m when (m, n) = (5, 10) (Left panel) and (10, 20) (Right panel). One color per value of k.
+
+Furthermore, when k = km ≜ ⌈m(1 − α)n⌉, we have
+
+(︂
+
+P
+
+lim
+m→∞
+
+Y ∈ ˆ︁Cn,km (X)
+
+)︂
+
+⩾ 1 − α .
+
+Proposition A.1 is proved in Appendix C.5. It shows that when each agent sends the maximum to the central server, by
+taking the km-th smallest value of these maximums with km ⩾ m(1 − α)n, the server obtains a valid coverage of (1 − α).
+Note that for a fixed m, km decreases to 0 when n grows to infinity. This is expected since, intuitively, if the number of
+points per agent increases, the maximums also increase, and the server must compensate by taking a very small quantile of
+these values to obtain a coverage close to (1 − α).
+
+B. Additional Experimental Results
+
+B.1. Results on Individual Data Sets
+
+We present in Figures 8 to 17 the results of the experiments of Section 5.2 on individual data sets.
+
+Figure 8. Coverage (left) and average length (right) of prediction intervals for 20 random training-calibration-test splits. The miscoverage
+is α = 0.1, and the calibration set is split into m = 100 disjoint subsets of equal size n = 10. The white circle represents the mean and
+the name of the data set is located at the top of each plot.
+
+14
+
+0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgbio1.21.41.61.82.02.22.42.6lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-AvgbioOne-Shot Federated Conformal Prediction
+
+Figure 9. Coverage (left) and average length (right) of prediction intervals for 20 random training-calibration-test splits. The miscoverage
+is α = 0.1, and the calibration set is split into m = 10 disjoint subsets of equal size n = 100. The white circle represents the mean and
+the name of the data set is located at the top of each plot.
+
+Figure 10. Same as Figure 8 (see its caption) with m = 100 and n = 10.
+
+Figure 11. Same as Figure 9 (see its caption) with m = 10 and n = 100.
+
+15
+
+0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgbio1.21.41.61.82.02.22.4lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgbio0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgbike0.51.01.52.02.53.03.5lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgbike0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgbike0.51.01.52.02.53.03.5lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-AvgbikeOne-Shot Federated Conformal Prediction
+
+Figure 12. Same as Figure 8 (see its caption) with m = 80 and n = 10.
+
+Figure 13. Same as Figure 9 (see its caption) with m = 10 and n = 80.
+
+Figure 14. Same as Figure 8 (see its caption) with m = 80 and n = 10.
+
+16
+
+0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgcommunity1.01.52.02.5lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgcommunity0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgcommunity0.500.751.001.251.501.752.002.25lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgcommunity0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgstar0.140.160.180.200.220.24lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-AvgstarOne-Shot Federated Conformal Prediction
+
+Figure 15. Same as Figure 9 (see its caption) with m = 10 and n = 80.
+
+Figure 16. Same as Figure 8 (see its caption) with m = 40 and n = 10.
+
+Figure 17. Same as Figure 9 (see its caption) with m = 10 and n = 40.
+
+17
+
+0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgstar0.140.160.180.200.22lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgstar0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgconcrete0.20.40.60.81.01.2lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgconcrete0.800.850.900.951.00coverageRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-Avgconcrete0.20.40.60.81.01.2lengthRidge FedCP-QQRidge CentralRidge FedCP-AvgRF FedCP-QQRF CentralRF FedCP-AvgNN FedCP-QQNN CentralNN FedCP-AvgconcreteOne-Shot Federated Conformal Prediction
+
+B.2. Experiments with Differential Privacy
+
+For the sake of completeness, we also evaluate the quality of our private algorithm FedCP2-QQ described in Section 4 on
+the bio and bike data sets with m = 5 and n = 200. The predictor is a quantile RF, the number of bins is set to B = 100,
+Smax is fixed to the largest score (no clipping), and ε = 10, 5, 1.
+
+Figure 18 displays the empirical coverages obtained over 20 different random splits. As expected from Theorem 4.1, we
+observe that on average the desired coverage at 0.90 is well satisfied. However, we also see that the coverages become quickly
+conservative as the privacy parameter ε decreases. This suggests that the different corrections introduced to compensate
+for the extra randomness due to privacy may be overly strong. Finally, we note that these results would be significantly
+improved with the privacy amplification strategies discussed in Section 4.
+
+Figure 18. Empirical coverages of prediction intervals (α = 0.1) constructed by FedCP-QQ and its private version FedCP2-QQ for
+ε = 10, 5, 1. On top, coverages for the bio data set, and, on the bottom for the bike data sets. The white circle represents the mean.
+
+C. Proofs
+
+C.1. Proof of Theorem 3.2
+
+The proof of our results heavily relies on order statistics. We refer to David & Nagaraja (2004) for an in-depth presentation.
+We begin by recalling the following important result.
+Lemma C.1. Let X1, . . . , Xn be some i.i.d. sample drawn from a continuous distribution with c.d.f. FX and density fX . If
+we denote by X(1) ⩽ · · · ⩽ X(n) the corresponding ordered sample, for every ℓ ∈
+, the c.d.f. and density of X(ℓ) are
+respectively given by
+
+1, n
+(cid:75)
+
+(cid:74)
+
+FX(ℓ)(x) =
+
+n
+∑︂
+
+i=ℓ
+
+)︃
+
+(︃n
+i
+
+FX (x)i[︁1 − FX (x)]︁n−i
+
+,
+
+fX(ℓ)(x) =
+
+n!
+(ℓ − 1)!(n − ℓ)!
+
+fX (x)FX (x)ℓ−1[︁1 − FX (x)]︁n−ℓ
+
+.
+
+We can now prove Theorem 3.2.
+First, remark that if, conditionally to ˆ︁f , (X (1)
+associated scores S(1)
+
+1 , . . . , S(m)
+
+), (X, Y ) are i.i.d., then, conditionally to ˆ︁f , the
+n , S are i.i.d. We denote by FS their c.d.f. (given ˆ︁f ), and make the proof conditionally to ˆ︁f .
+
+n
+
+), . . . , (X (m)
+
+n , Y (m)
+
+1 , Y (1)
+
+1
+
+We know that F −1
+1 , . . . , U (m)
+U (1)
+
+n
+
+S is non-decreasing and that if U ∼ U[0,1], F −1
+, U are independent with a uniform distribution over [0, 1], and independent from the data, and if
+)︂
+
+S (U ) has the same distribution as S (given ˆ︁f ). Therefore, if
+
+)︂)︂
+
+(︂
+
+(︂
+
+(︂
+
+U(ℓ,k) ≜ ˆ︁Q(k)
+
+ˆ︁Q(ℓ)
+
+{U (1)
+i
+
+, i = 1, . . . , n}
+
+, . . . , ˆ︁Q(ℓ)
+
+{U (m)
+i
+
+, i = 1, . . . , n}
+
+denotes the corresponding QQ estimator, then F −1
+)︂
+S ⩽ ˆ︁Q(ℓ,k) | ˆ︁f
+
+)︂
+Y ∈ ˆ︁C(X) | ˆ︁f
+
+= P
+
+P
+
+(︂
+
+(︂
+
+S (U(ℓ,k)) has the same distribution as ˆ︁Q(ℓ,k) (given ˆ︁f ). We obtain that
+
+= P
+
+(︂
+
+S (U ) ⩽ F −1
+F −1
+
+)︂
+S (U(ℓ,k)) | ˆ︁f
+
+⩾ P
+
+(︂
+
+)︂
+U ⩽ U(ℓ,k) | ˆ︁f
+
+.
+
+(12)
+
+Furthermore, if FS is continuous, F −1
+
+S is increasing, and
+
+(︂
+
+P
+
+S (U ) ⩽ F −1
+F −1
+
+)︂
+S (U(ℓ,k)) | ˆ︁f
+
+= P
+
+(︂
+
+)︂
+U ⩽ U(ℓ,k) | ˆ︁f
+
+.
+
+(13)
+
+18
+
+0.850.900.951.00coverageFedCP-QQ=10=5=1bio0.850.900.951.00coverageFedCP-QQ=10=5=1bikeTherefore, it remains to treat the uniform case. By Lemma C.1, we have
+
+One-Shot Federated Conformal Prediction
+
+FU(ℓ,k)(t) =
+
+=
+
+=
+
+since
+
+1 =
+
+m
+∑︂
+
+j=k
+
+m
+∑︂
+
+j=k
+
+m
+∑︂
+
+j=k
+
+n
+∑︂
+
+i=0
+
+)︃
+
+(︃m
+j
+
+FU(ℓ)(t)j[︁1 − FU(ℓ) (t)]︁m−j
+
+(︃m
+j
+
+(︃m
+j
+
+)︃ [︄ n
+∑︂
+
+i=ℓ
+)︃ [︄ n
+∑︂
+
+i=ℓ
+
+)︃
+
+(︃n
+i
+
+)︃
+
+(︃n
+i
+
+]︄j [︄
+
+ti(1 − t)n−i
+
+1 −
+
+)︃
+
+ti(1 − t)n−i
+
+]︄m−j
+
+n
+∑︂
+
+i=ℓ
+
+(︃n
+i
+
+ti(1 − t)n−i
+
+]︄j [︄ℓ−1
+∑︂
+
+i=0
+
+(︃n
+i
+
+)︃
+
+ti(1 − t)n−i
+
+]︄m−j
+
+)︃
+
+ti(1 − t)n−i =
+
+(︃n
+i
+
+ℓ−1
+∑︂
+
+i=0
+
+)︃
+
+(︃n
+i
+
+ti(1 − t)n−i +
+
+n
+∑︂
+
+i=ℓ
+
+)︃
+
+(︃n
+i
+
+ti(1 − t)n−i ,
+
+hence we get that
+
+FU(ℓ,k)(t) =
+
+m
+∑︂
+
+j=k
+
+(︃m
+j
+
+)︃ n
+∑︂
+
+n
+∑︂
+
+ℓ−1
+∑︂
+
+ℓ−1
+∑︂
+
+· · ·
+
+· · ·
+
+i1=ℓ
+
+ij =ℓ
+
+ij+1=0
+
+im=0
+
+)︃
+
+(︃n
+i1
+
+· · ·
+
+)︃
+
+(︃ n
+im
+
+ti1+···+im (1 − t)mn−(i1+···+im) .
+
+As a consequence, we obtain
+P (︁U(ℓ,k) ⩽ U )︁ = E[︁FU(ℓ,k) (U )]︁
+
+=
+
+=
+
+=
+
+∫︂ 1
+
+0
+∫︂ 1
+
+0
+
+m
+∑︂
+
+j=k
+
+FU(ℓ,k)(t)dt
+
+(︃m
+j
+
+)︃ n
+∑︂
+
+m
+∑︂
+
+j=k
+(︃m
+j
+
+)︃ n
+∑︂
+
+· · ·
+
+n
+∑︂
+
+ℓ−1
+∑︂
+
+ℓ−1
+∑︂
+
+· · ·
+
+i1=ℓ
+
+ij =ℓ
+
+ij+1=0
+
+n
+∑︂
+
+ℓ−1
+∑︂
+
+· · ·
+
+· · ·
+
+ℓ−1
+∑︂
+
+i1=ℓ
+
+ij =ℓ
+
+ij+1=0
+
+im=0
+
+)︃
+
+(︃n
+i1
+
+· · ·
+
+(︃ n
+im
+
+)︃
+
+ti1+···+im(1 − t)mn−(i1+···+im)dt
+
+)︃
+
+· · ·
+
+)︃
+
+(︃ n
+im
+
+B (i1 + · · · + im + 1, mn − (i1 + · · · + im) + 1) ,
+
+im=0
+(︃n
+i1
+
+where
+
+B : (a, b) ∈ (0, +∞)2 ↦→
+
+∫︂ 1
+
+0
+
+ta−1(1 − t)b−1dt
+
+denotes the Beta function. The identity
+that P (︁U(ℓ,k) ⩽ U )︁ = 1 − Mn,k, hence
+
+(︃a
+b
+
+By Eq. (12), we obtain that
+
+)︃
+
+=
+
+1
+(a + 1)B(b + 1, a − b + 1)
+
+, with a = mn and b = (i1 + · · · + im), implies
+
+P (︁U ⩽ U(ℓ,k)
+
+)︁ = Mn,k .
+
+P
+
+(︂
+
+)︂
+Y ∈ ˆ︁Cℓ,k(X) | ˆ︁f
+
+⩾ Mn,k
+
+(14)
+
+almost surely, hence Eq. (5) by integrating this inequality. When FS is continuous, Eq. (13) and (14) show that
+
+P
+
+(︂
+
+)︂
+Y ∈ ˆ︁Cℓ,k(X) | ˆ︁f
+
+= Mn,k ,
+
+hence the result.
+
+C.2. Proof of Theorem 3.3
+First, let us remark that ∑︁m
+j=1
+Now, following the proof of Bian & Barber (2022, Theorem 1), by definition of the FedCP-QQ method, we have
+
+is almost surely greater or equal to ℓ · k by definition of ˆ︁Q(ℓ,k).
+
+⩽ ˆ︁Q(ℓ,k)
+
+S(j)
+i
+
+∑︁n
+
+i=1
+
+}︂
+
+{︂
+
+1
+
+{︁Y ∈ ˆ︁Ck,ℓ(X)}︁ =
+
+{︂
+S ⩽ ˆ︁Q(ℓ,k)
+
+}︂
+
+19
+
+One-Shot Federated Conformal Prediction
+
+{︂
+
+S(j)
+i < S
+
+}︂
+
+<
+
+m
+∑︂
+
+n
+∑︂
+
+1
+
+{︂
+
+S(j)
+i
+
+⩽ ˆ︁Q(ℓ,k)
+
+j=1
+
+{︂
+
+S(j)
+i < S
+
+}︂
+
+< ℓ · k
+
+i=1
+⎫
+⎬
+
+⎭
+
+⎫
+⎬
+
+}︂
+
+⎭
+
+{︂
+
+S(j)
+i
+
+}︂
+
+⩾ S
+
+⩾ mn − ℓ · k
+
+⎫
+⎬
+
+⎭
+
+i=1
+
+j=1
+
+⎩
+{︃
+F¯ mn(S) ⩾ mn − ℓ · k
+
+}︃
+
+,
+
+mn
+
+⎧
+⎨
+
+⎩
+⎧
+⎨
+
+⎩
+⎧
+⎨
+
+m
+∑︂
+
+n
+∑︂
+
+j=1
+
+i=1
+
+m
+∑︂
+
+n
+∑︂
+
+j=1
+
+i=1
+
+m
+∑︂
+
+n
+∑︂
+
+1
+
+1
+
+1
+
+⊇
+
+⊇
+
+=
+
+=
+
+where F¯ mn(S) is the right-tail empirical c.d.f of the {S(j)
+set and S. We now have
+
+i }n,m
+
+i,j=1 at S. Note that this is a random variable in both the data
+
+αP (Dmn) = P
+
+⩽ P
+
+)︂
+
+(︂
+
+Y /∈ ˆ︁Cℓ,k(X) ⃓
+(︃
+
+F¯ mn(S) < 1 −
+
+⃓ ˆ︁f , Dmn
+⃓
+⃓
+⃓
+⃓
+
+ℓ · k
+mn
+
+)︃
+
+ˆ︁f , Dmn
+
+(︃
+
+(︃
+
+= P
+
+⩽ P
+
+F¯ mn(S) + F¯ S(S) − F¯ S(S) < 1 −
+
+F¯ S(S) ⩽ 1 −
+
+ℓ · k
+mn
+
++ sup
+s∈R
+
+)︃
+
+⃓
+⃓
+⃓
+⃓
+
+ℓ · k
+mn
+{︁F¯ S(s) − F¯ mn(s)}︁
+
+ˆ︁f , Dmn
+
+)︃
+
+ˆ︁f , Dmn
+
+.
+
+⃓
+⃓
+⃓
+⃓
+
+Fixing any ∆ > 0, let us consider the event
+
+{︃
+
+sup
+s∈R
+
+{︁F¯ S(s) − F¯ mn(s)}︁ ⩽ ∆
+
+}︃
+
+.
+
+Note that it depends of the data Dmn. On this event, we have
+
+αP (Dmn) ⩽ P
+
+(︃
+
+F¯ S(S) ⩽ 1 −
+
+ℓ · k
+mn
+
++ ∆
+
+⃓
+⃓
+⃓
+⃓
+
+)︃
+
+⩽ 1 −
+
+ˆ︁f , Dmn
+
+ℓ · k
+mn
+
++ ∆
+
+since F¯ S(S) is a valid p-value (Bian & Barber, 2022, Lemma 1). As a consequence,
+
+(︃
+
+αP (Dmn) > 1 −
+
+P
+
+ℓ · k
+mn
+
+)︃
+
+⩽ P
+
++ ∆
+
+(︃
+
+sup
+s∈R
+
+{︁F¯ S(s) − F¯ mn(s)}︁ > ∆
+
+)︃
+
+.
+
+Applying the Dworetzky-Kiefer-Wolfowitz inequality (Dvoretzky et al., 1956; Massart, 1990), the last term is upper-bounded
+
+by δ ∈ (0, 0.5] when we choose ∆ =
+
+2mn . Finally, for ℓ · k ⩾ (1 − α) · mn, we have
+
+√︂ log(1/δ)
+
+(︄
+
+P
+
+αP (Dmn) ⩽ α +
+
+√︃
+
+log(1/δ)
+2mn
+
+)︄
+
+(︄
+
+⩾ P
+
+αP (Dmn) ⩽ 1 −
+
+√︃
+
+ℓ · k
+mn
+
++
+
+log(1/δ)
+2mn
+
+)︄
+
+⩾ 1 − δ .
+
+C.3. Proof of Proposition 3.4
+
+All the proof is made conditionally to the predictor ˆ︁f , which means that we prove below that
+
+[︃
+P(︁Y ∈ ˆ︁Cℓ⋆,k⋆ (X) | ˆ︁f )︁ ⩾ 1 − α − E
+dTV
+
+(︂
+
+PoisBin(︁p∗(S))︁ , Bin(︁m, p˜∗( ˜︁S))︁)︂ ⃓
+⃓
+⃓ ˆ︁f
+
+]︃
+
+.
+
+(15)
+
+The result follows by taking an expectation. In the remainder of the proof, for simplicity, we write P(·) and E[·] instead of
+P(· | ˆ︁f ) and E[· | ˆ︁f ], respectively.
+
+20
+
+One-Shot Federated Conformal Prediction
+
+First, for every k ∈
+
+1, m
+(cid:75)
+
+(cid:74)
+
+and ℓ ∈
+
+1, n
+(cid:75)
+
+(cid:74)
+
+, by definition of ˆ︁Cℓ,k, we have
+
+P(︁Y /∈ ˆ︁Cℓ,k(X))︁ = P
+
+(︂
+
+ˆ︁Q(ℓ,k) < S
+
+)︂
+
+(︃ m
+∑︂
+
+= P
+
+1
+
+{︂
+
+ˆ︁Q(ℓ)(S (j)) < S
+
+}︂
+
+)︃
+
+.
+
+⩾ k
+
+j=1
+⏞
+
+⏟⏟
+≜W
+
+⏞
+
+Similarly,
+
+(︂
+
+P
+
+ˆ︁Q(ℓ,k)
+
+(︂
+
+˜︁S (1), . . . , ˜︁S (m))︂
+
+)︂
+< ˜︁S
+
+(︃ m
+∑︂
+
+= P
+
+1
+
+{︂
+
+}︂
+ˆ︁Q(ℓ)( ˜︁S (j)) < ˜︁S
+
+⩾ k
+
+)︃
+
+.
+
+j=1
+⏞
+
+⏟⏟
+≜˜︂W
+
+⏞
+
+(16)
+
+(17)
+
+Given S (and ˆ︁f ), the random variables 1{ ˆ︁Q(ℓ)(S (j)) < S}, j = 1, . . . , m, are independent Bernoulli random variables
+with respective parameters pj(S, ℓ) ≜ P(S(j)
+⩽ S|S), so their sum W follows the PoisBin(p(S, ℓ)) distribution, where
+(ℓ)
+p(S, ℓ) ≜ (p1(S, ℓ), . . . , pm(S, ℓ)). Given S˜ (and ˆ︁f ), the random variables 1{ ˆ︁Q(ℓ)( ˜︁S (j)) < ˜︁S}, j = 1, . . . , m, are i.i.d.
+Bernoulli random variables with common parameter p˜( ˜︁S, ℓ) ≜ P( ˜︁S(1)
+⩽ ˜︁S| ˜︁S), so their sum ˜︂W follows the Bin(m, ˜︁p(S, ℓ))
+distribution. As a consequence, we have
+
+(ℓ)
+
+P(W ⩾ k | S) − P(˜︂W ⩾ k | ˜︁S) = PoisBin(︁p(S, ℓ))︁(︁[k, +∞))︁ − Bin(︁m, p˜( ˜︁S, ℓ))︁(︁[k, +∞))︁
+
+⩽ dTV
+
+(︂
+
+PoisBin(︁p(S, ℓ))︁ , Bin(︁m, p˜( ˜︁S, ℓ))︁)︂
+
+,
+
+by definition of the total-variation (TV) distance dTV(µ, ν) = supA measurable
+µ and ν.
+Taking an expectation and using Eq. (16) and (17), we get that
+
+{︁µ(A)−ν(A)}︁ for any probability distributions
+
+P(︁Y /∈ ˆ︁Cℓ,k(X))︁ = P(˜︂W ⩾ k) + P(W ⩾ k) − P(˜︂W ⩾ k)
+˜︁S (1), . . . , ˜︁S (m))︂
+(︂
+
+)︂
+< ˜︁S
+
+ˆ︁Q(ℓ,k)
+
+⩽ P
+
+(︂
+
+[︃
+⩽ 1 − Mℓ,k + E
+dTV
+
+(︂
+
+(︂
+
+[︃
++ E
+dTV
+PoisBin(︁p(S, ℓ))︁ , Bin(︁m, p˜( ˜︁S, ℓ))︁)︂]︃
+
+,
+
+PoisBin(︁p(S, ℓ))︁ , Bin(︁m, p˜( ˜︁S, ℓ))︁)︂]︃
+
+by Theorem 3.2, which applies here since ˜︁S(1)
+
+1 , . . . , ˜︁S(m)
+
+n , ˜︁S are i.i.d., conditionally to ˆ︁f . Therefore,
+[︃
+PoisBin(︁p(S, ℓ))︁ , Bin(︁m, p˜( ˜︁S, ℓ))︁)︂]︃
+P(︁Y ∈ ˆ︁Cℓ,k(X))︁ ⩾ Mℓ,k − E
+dTV
+
+(︂
+
+,
+
+(18)
+
+which implies the result by taking (ℓ, k) = (ℓ∗, k∗) since Mℓ∗,k∗ ⩾ 1 − α.
+Remark C.2. In Proposition 3.4, let us emphasize that the auxiliary random variables { ˜︁S(j)
+i }n,m
+i,j=1, ˜︁S can be dependent
+on the scores {S(j)
+i }n,m
+i,j=1, ˜︁S must be i.i.d. given ˆ︁f .
+One also can choose the common distribution of the { ˜︁S(j)
+i,j=1, ˜︁S. Here, the best choice is the one that maximizes the
+right-hand side of Eq. (15). We conjecture that a good choice is to take ˜︁S = S, and to define the ˜︁S(j)
+as independent copies
+of S (given ˆ︁f ).
+
+i,j=1, S, as long as they satisfy the only assumption required: { ˜︁S(j)
+
+i }n,m
+
+i }n,m
+
+i
+
+Finally, let us recall a result from Ehm (1991, Theorem 1) which can be useful to control the right-hand side of Eq. (15).
+Theorem C.3. Let m ⩾ 1 be an integer, p1, . . . , pm ∈ [0, 1] and p˜ = 1
+j=1 pj. Let Bin(m, p˜) denote the binomial
+m
+distribution and PoisBin(m, (p1, · · · , pm)) denote the Poisson-binomial distribution. The following inequalities hold true:
+
+∑︁m
+
+C[︁1 − p˜m+1 − (1 − p˜)m+1]︁ ·
+
+[︃
+
+1 −
+
+∑︁m
+
+i=1 pi(1 − pi)
+mp˜(1 − p˜)
+
+]︃
+
+(︂
+
+⩽ dTV
+
+PoisBin(p1, · · · , pm) , Bin(m, p˜)
+
+)︂
+
+⩽ m
+
+m + 1
+
+[︁1 − p˜m+1 − (1 − p˜)m+1]︁ ·
+
+[︃
+
+1 −
+
+∑︁m
+
+i=1 pi(1 − pi)
+mp˜(1 − p˜)
+
+]︃
+
+,
+
+where dTV(·, ·) is the total-variation distance, and C is a universal constant.
+
+21
+
+C.4. Proof of Theorem 4.1
+
+One-Shot Federated Conformal Prediction
+
+The privacy guarantee is a direct consequence of the fact that Algorithm 2 is ε-DP (exponential mechanism). Indeed, each
+agent calls this algorithm only one time during FedCP2-QQ, making it ε-DP with respect to its local data set (ε-LDP).
+
+It remains to prove that the desired coverage is achieved. To do so, recall the following utility lemma related to the output of
+Algorithm 2 (Angelopoulos et al., 2022).
+Lemma C.4. (Utility of Algorithm 2). For any δ ∈ (0, 1), scores S1, . . . , Sn and q ∈ [0.5, 1), the output of Algorithm 2,
+denoted ˆ︁Qε
+
+1, satisfies:
+
+(︄
+
+P
+
+|{i : S¯ i ⩽ ˆ︁Qε
+n
+
+1}|
+
+⩾ q −
+
+2 log (B/δ)
+nε
+
+⃓
+⃓
+⃓
+⃓
+⃓
+
+)︄
+
+S1, . . . , Sn
+
+⩾ 1 − δ .
+
+(19)
+
+Proof. The proof, provided by Angelopoulos et al. (2022, Lemma 1), is a direct application of the utility guarantee of the
+general exponential mechanism (see Dwork et al., 2014, Corollary 3.12). Note that Angelopoulos et al. (2022, Lemma 1)
+state the above result on average over S1, . . . , Sn, but their proof is actually valid conditionally to S1, . . . , Sn since the
+original result by Dwork et al. (2014, Corollary 3.12) is valid conditionally to S1, . . . , Sn.
+
+We can now prove our main result. Let us first define the event E = { ˆ︁Qε ⩾ ˆ︁Q(ℓγ ,kγ )}, i.e., when the private estima-
+(kγ ) returned by FedCP2-QQ is greater than the non-private estimator ˆ︁Q(ℓγ ,kγ ) that would be returned by
+tor ˆ︁Qε = ˆ︁Qε
+FedCP-QQ (Algorithm 1) with coverage 1−α
+1−γα . Denoting by S (1...m) the full data set containing all local data sets of scores
+S (1), . . . , S (m), we have:
+
+[︂
+P(︁Y ∈ ˆ︁Cε(X))︁ = P(︁S ⩽ ˆ︁Qε)︁ = E
+
+P(︁S ⩽ ˆ︁Qε ⃓
+
+⃓ S (1...m))︁]︂
+
+[︂
+⩾ E
+
+[︂
+⩾ E
+
+[︂
+= E
+
+⃓ S (1...m))︁]︂
+
+P(︁S ⩽ ˆ︁Qε and E ⃓
+P(︁S ⩽ ˆ︁Q(ℓγ ,kγ ) and E ⃓
+P(︁S ⩽ ˆ︁Q(ℓγ ,kγ )
+
+⃓ S (1...m))︁]︂
+⃓ S (1...m))︁ · P(︁E | S (1...m))︁]︂
+⃓
+
+,
+
+(20)
+
+where the last equality is obtained by the fact that knowing S (1...m), the random variable ˆ︁Q(ℓγ ,kγ ) is deterministic, hence
+the events E = { ˆ︁Qε ⩾ ˆ︁Q(ℓγ ,kγ )} and {S ⩽ ˆ︁Q(ℓγ ,kγ )} are independent.
+We first show that P(E | S (1...m)) ⩾ 1 − γα. Notice that a sufficient condition for the event E to be satisfied is that each
+agent j outputs a value ˆ︁Qε
+(ℓγ ) of the local data set S(j). Indeed, in that case the kγ-th
+ordered value of ˆ︁Qε
+(ℓγ ), i.e., ˆ︁Q(ℓγ ,kγ ).
+
+m, i.e., ˆ︁Qε, is necessarily bigger than the kγ-th ordered value of S(1)
+1, . . . , ˆ︁Qε
+m
+{ ˆ︁Qε
+∩
+j
+j=1
+
+(ℓγ )}, which allows us to obtain a lower bound for P(E | S (1...m)):
+
+j greater that the ℓγ-th ordered score S(j)
+
+In the end, we have E ⊃
+
+(ℓγ ), . . . , S(m)
+
+⩾ S(j)
+
+P(E | S (1...m)) ⩾ P
+
+(︂ m
+⋂︂
+
+{︁
+ˆ︁Qε
+j
+
+⩾ S(j)
+(ℓγ )
+
+⃓ S (1...m))︂
+}︁ ⃓
+
+j=1
+
+=
+
+m
+∏︂
+
+j=1
+
+P(︁
+
+ˆ︁Qε
+j
+
+⩾ S(j)
+(ℓγ )
+
+⃓
+⃓ S (1...m))︁ =
+
+m
+∏︂
+
+j=1
+
+P(︁
+
+ˆ︁Qε
+j
+
+⩾ S(j)
+(ℓγ )
+
+⃓
+⃓ S (j))︁ ⩾
+
+m
+∏︂
+
+j=1
+
+P(︁
+
+ˆ︁Qε
+j
+
+⩾ S¯ (j)
+(ℓγ )
+
+⃓
+⃓ S (j))︁ ,
+
+(21)
+
+(ℓγ )} are independent given S (1...m). The last inequality
+(ℓγ ) is larger than (or equal to) the non-discretized
+
+where the first equality comes from the fact that the events { ˆ︁Qε
+j
+comes from the fact that, for all j = 1, . . . , m, the discretized score S¯ (j)
+score S(j)
+
+⩾ S(j)
+
+ˆ︁Qε
+j
+
+= P
+
+⩾ S¯ (j)
+(ℓγ )
+
+⃓ S (j))︂
+⃓
+
+(ℓγ ). Moreover, for every j ∈ {1, . . . , m}, we have:
+(︂
+(︂⃓
+⃓{i : S¯ (j)
+(︂⃓
+⃓{i : S¯ (j)
+(︄ ⃓
+⃓{i : S¯ (j)
+n
+
+⃓ S (j))︂
+j}⃓
+⃓
+j}⃓
+⃓ ⩾ ℓγ + ℓ cor − ℓ cor
+j}⃓
+⩽ ˆ︁Qε
+⃓
+
+⩾ ℓγ + ℓ cor
+n
+
+⃓ ⩾ ℓγ
+
+⩽ ˆ︁Qε
+
+⩽ ˆ︁Qε
+
+= P
+
+⩾ P
+
+−
+
+i
+
+i
+
+i
+
+2
+nε
+
+P
+
+⃓ S (j))︂
+⃓
+(︃
+
+log
+
+B
+1 − (1 − γα) 1
+
+m
+
+)︄
+
+S (j)
+
+)︃ ⃓
+⃓
+⃓
+⃓
+
+22
+
+One-Shot Federated Conformal Prediction
+
+⩾ P
+
+(︄ ⃓
+
+⃓{i : S¯ (j)
+n
+
+i
+
+⩽ ˆ︁Qε
+
+j}⃓
+⃓
+
+⩾ max
+
+{︃ ℓγ + ℓ cor
+n
+
+,
+
+1
+2
+
+}︃
+
+−
+
+2
+nε
+
+(︃
+
+log
+
+B
+1 − (1 − γα) 1
+
+m
+
+)︄
+
+S (j)
+
+)︃ ⃓
+⃓
+⃓
+⃓
+
+⩾ (1 − γα)
+
+1
+m ,
+
+where the last inequality is obtained by applying Lemma C.4 with {S1, . . . , Sn} = S (j), q = max{ ℓγ +ℓ cor
+δ = 1 − (1 − γα) 1
+m .
+Plugging this result into Eq. (21), we get P(E | S (1...m)) ⩾ 1 − γα, which can then be plugged into Eq. (20) and leads to
+
+, 1
+2 } and
+
+n
+
+[︂
+P(︁Y ∈ ˆ︁Cε(X))︁ ⩾ E
+
+P(︁S ⩽ ˆ︁Q(ℓγ ,kγ )
+
+⃓ S (1...m))︁ · P(︁E | S (1...m))︁]︂
+⃓
+
+[︂
+⩾ E
+
+P(︁S ⩽ ˆ︁Q(ℓγ ,kγ )
+
+⃓ S (1...m))︁]︂
+⃓
+
+· (1 − γα)
+
+= P(︁S ⩽ ˆ︁Q(ℓγ ,kγ )
+⩾ 1 − α ,
+
+)︁ · (1 − γα)
+
+where the last inequality comes from the fact that ˆ︁Q(ℓγ ,kγ ) is the output of FedCP-QQ (Algorithm 1) with coverage
+1−α
+1−γα .
+
+C.5. Proof of Proposition A.1
+
+We start by proving the following lemma.
+Lemma C.5. The following equality holds true for every integer k ⩾ 1:
+
+k−1
+∑︂
+
+j=0
+
+Γ(j + 1/n)
+Γ(j + 1)
+
+=
+
+n · k · Γ(k + 1/n)
+Γ(k + 1)
+
+.
+
+Proof. Throughout the proof, we use that for any x > 0, Γ(x) =
+
+Γ(x + 1)
+x
+
+, according to Davis (1959).
+
+We proceed by induction on k. First, for k = 1,
+
+k−1
+∑︂
+
+j=0
+
+Γ(j + 1/n)
+Γ(j + 1)
+
+=
+
+Γ(1/n)
+Γ(1)
+
+= Γ(1/n) = n · Γ(1/n + 1) =
+
+nΓ(1/n + 1)
+Γ(2)
+
+.
+
+Then, assume that the result holds true for some k ⩾ 1, that is,
+
+k−1
+∑︂
+
+j=0
+
+Γ(j + 1/n)
+Γ(j + 1)
+
+=
+
+n · k · Γ(k + 1/n)
+Γ(k + 1)
+
+,
+
+and let us prove that it holds true for k + 1:
+
+k
+∑︂
+
+j=0
+
+Γ(j + 1/n)
+Γ(j + 1)
+
+=
+
+=
+
+=
+
+=
+
+=
+
+k−1
+∑︂
+
+Γ(j + 1/n)
+Γ(j + 1)
+
++
+
+j=0
+n · k · Γ(k + 1/n)
+Γ(k + 1)
+
+Γ(k + 1/n)
+Γ(k + 1)
+
++
+
+Γ(k + 1/n)
+Γ(k + 1)
+
+(n · k + 1)Γ(k + 1/n)
+Γ(k + 1)
+
+(k + 1)
+Γ(k + 2)
+(k + 1)
+Γ(k + 2)
+
+· (n · k + 1)Γ(k + 1/n)
+
+· (n · k + 1)
+
+Γ(k + 1/n + 1)
+k + 1/n
+
+23
+
+One-Shot Federated Conformal Prediction
+
+=
+
+=
+
+· (n · k + 1)
+
+(k + 1)
+Γ(k + 2)
+n · (k + 1) · Γ(k + 1 + 1/n)
+Γ(k + 2)
+
+.
+
+Γ(k + 1/n + 1)
+(n · k + 1)/n
+
+We can now prove Proposition A.1. Let us assume that {U (j)
+proof of Theorem 3.2. We have Mn,k = P(U ⩽ U(n,k)) by Theorem 3.2 and by Lemma C.1, for every t ∈ [0, 1]:
+
+i,j=1, U are i.i.d. uniform on [0, 1] and use the notation of the
+
+i }m,n
+
+FU(n,k) (t) =
+
+m
+∑︂
+
+j=k
+
+)︃
+
+(︃m
+j
+
+FU(n) (t)j[︁1 − FU(n)(t)]︁m−j
+
+=
+
+m
+∑︂
+
+j=k
+
+)︃
+
+(︃m
+j
+
+[tn]j [1 − tn]m−j .
+
+Therefore,
+
+1 − Mn,k = P (︁U(n,k) ⩽ U )︁ =
+
+∫︂ 1
+
+0
+
+FU(n,k) (t)dt
+
+∫︂ 1
+
+m
+∑︂
+
+)︃
+
+(︃m
+j
+
+(tn)j(1 − tn)m−jdt
+
+(︃m
+j
+
+(︃m
+j
+
+)︃ ∫︂ 1
+
+)︃ ∫︂ 1
+
+0
+
+0
+
+=
+
+=
+
+=
+
+=
+
+0
+
+1
+n
+
+1
+n
+
+1
+n
+
+j=k
+m
+∑︂
+
+j=k
+m
+∑︂
+
+j=k
+m
+∑︂
+
+j=k
+
+)︃
+
+(︃m
+j
+
+B(j + 1/n, m − j + 1) ,
+
+uj(1 − u)m−ju1/n−1du
+
+( change of variable u = tn)
+
+uj+1/n−1(1 − u)m−jdu
+
+where
+
+B : (a, b) ∈ (0, +∞)2 ↦→
+
+∫︂ 1
+
+0
+
+ua−1(1 − u)b−1du =
+
+Γ(a)Γ(b)
+Γ(a + b)
+
+denotes the Beta function. We obtain that
+
+1 − Mn,k =
+
+=
+
+=
+
+1
+n
+
+1
+n
+
+1
+n
+
+m
+∑︂
+
+j=k
+
+Γ(j + 1/n)
+Γ(j + 1)
+
+·
+
+Γ(m + 1)
+Γ(m + 1/n + 1)
+
+Γ(j + 1/n)
+Γ(j + 1)
+
+·
+
+·
+
+Γ(m + 1)
+Γ(m + 1/n + 1)
+
+Γ(m + 1)
+Γ(m + 1/n + 1)
+
+m
+∑︂
+
+j=k
+⎛
+
+⎝
+
+Γ(j + 1/n)
+Γ(j + 1)
+
+−
+
+k−1
+∑︂
+
+j=0
+
+Γ(j + 1/n)
+Γ(j + 1)
+
+⎞
+
+⎠ .
+
+m
+∑︂
+
+j=0
+
+Using Lemma C.5, we get that
+
+1 − Mn,k =
+
+1
+n
+
+·
+
+Γ(m + 1)
+Γ(m + 1/n + 1)
+(︃ m + 1
+
+= Γ(m + 1)
+
+Γ(m + 2)
+
+(︃ n(m + 1)Γ(m + 1/n + 1)
+Γ(m + 2)
+k · Γ(k + 1/n)
+Γ(k + 1)Γ(m + 1/n + 1)
+
+−
+
+−
+
+)︃
+
+n · k · Γ(k + 1/n)
+Γ(k + 1)
+
+)︃
+
+= 1 −
+
+Γ(k + 1/n)
+Γ(k)
+
+·
+
+Γ(m + 1)
+Γ(m + 1/n + 1)
+
+,
+
+which proves the first formula.
+
+24
+
+Now, using Stirling’s formula, when k, m → +∞, we have
+
+One-Shot Federated Conformal Prediction
+
+Γ(k + 1/n)
+Γ(k)
+
+·
+
+Γ(m + 1)
+Γ(m + 1/n + 1)
+
+∼
+
+Γ(k)k1/n
+Γ(k)
+
+·
+
+Γ(m)m
+Γ(m)m1/n+1
+
+=
+
+k1/n
+m1/n
+
+.
+
+By setting k = km ⩾ m(1 − α)n, we obtain the second result.
+
+25
+
+

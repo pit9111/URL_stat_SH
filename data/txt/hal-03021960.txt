@@ -1,0 +1,2798 @@
+Stackless Processing of Streamed Trees
+Corentin Barloy, Filip Murlak, Charles Paperman
+
+To cite this version:
+
+Corentin Barloy, Filip Murlak, Charles Paperman.
+Stackless Processing of Streamed Trees.
+PODS 2021 - Symposium on Principles of Database Systems, Jun 2021, Xi’an, Shaanx, China.
+￿10.4230/LIPIcs￿. ￿hal-03021960￿
+
+HAL Id: hal-03021960
+
+https://hal.science/hal-03021960
+
+Submitted on 25 Nov 2020
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Stackless Processing of Streamed Trees
+
+Corentin Barloy
+ENS de Paris, France
+cbarloy@clipper.ens.fr
+
+Filip Murlak
+University of Warsaw, Poland
+fmurlak@mimuw.edu.pl
+
+Charles Paperman
+Université de Lille & INRIA, France
+charles.paperman@univ-lille.fr
+
+Abstract
+
+Processing tree-structured data in the streaming model is a challenge: capturing regular properties
+of streamed trees by means of a stack is costly in memory, but falling back to ﬁnite-state automata
+drastically limits the computational power. We propose an intermediate stackless model based on
+register automata equipped with a single counter, used to maintain the current depth in the tree.
+We explore the power of this model to validate and query streamed trees. Our main result is an
+eﬀective characterization of regular path queries (RPQs) that can be evaluated stacklessly—with
+and without registers. In particular, we conﬁrm the conjectured characterization of tree languages
+deﬁned by DTDs that are recognizable without registers, by Segouﬁn and Vianu (2002), in the
+special case of tree languages deﬁned by means of an RPQ.
+
+2012 ACM Subject Classiﬁcation Theory of computation → Automata extensions; Theory of
+computation → Streaming, sublinear and near linear time algorithms; Theory of computation →
+Database query processing and optimization (theory)
+
+Keywords and phrases streaming, querying, XML, JSON, automata, weak validation
+
+Digital Object Identiﬁer 10.4230/LIPIcs...
+
+Funding Filip Murlak: This work was supported by Poland’s National Science Centre grant
+2018/30/E/ST6/00042.
+
+1
+
+Introduction
+
+While graph is the new black, tree-structured data has not vanished. It is used both as a
+serialization format (Wikipedia, Wikidata, DBLP) and as an exchange format (WSDL and
+SOAP rely on XML, the more recent GraphQL prefers JSON). Querying and validation of
+tree-structured data continue to be both vital and challenging tasks in data management.
+Particularly so, when documents grow too large to ﬁt in memory, and it is time to switch
+to streaming; that is, to read the document sequentially, maintaining a concise internal
+representation suﬃcient for the realized task.
+
+According to Palkar et al. [18], exploratory big-data applications running over data in a
+semi-structured format, like JSON, can spend 80-90% of their execution time simply parsing
+the data. Performance improvements often rely on clever ways to reduce the cost of parsing.
+In systems research, two main strategies have been proposed. The ﬁrst one relies on SAX
+(Simple API for XML) parsers: it outsources parsing to the API and deals only with the
+resulting events [11, 26]. This allows to factor out the cost of parsing, and may lead to
+signiﬁcant performance gains when multiple queries are executed over the same document [26].
+The second approach is to perform parsing and query execution simultaneously, applying
+push-down automata as the computation model [17], in the hope that the acquired semantic
+
+© C. Barloy, F. Murlak and C. Paperman;
+licensed under Creative Commons License CC-BY
+
+Leibniz International Proceedings in Informatics
+Schloss Dagstuhl – Leibniz-Zentrum für Informatik, Dagstuhl Publishing, Germany
+
+XX:2
+
+Stackless
+
+information would help reduce the cost of parsing. When a single query is executed over a
+huge document, this may also be highly beneﬁcial [6].
+
+The theoretical take on alleviating the cost of parsing is more radical: since it is so costly,
+let us assume that it has been already done for us and the input stream is guaranteed to
+be a well-formed document. This may be the case, for instance, if we trust the source of
+the document or if we have already processed the document for other purposes. Can this
+assumption help process the document more eﬃciently? This setting was introduced as weak
+validation in the seminal work of Segouﬁn and Vianu [25] on validating a streamed XML
+document against a DTD by means of a ﬁnite automaton. Despite the signiﬁcant progress
+made in the initial paper and in the follow-up work [1, 5, 24], the general problem of deciding
+whether weak validation against a given regular tree language is feasible, remains open.
+Incidentally, this question is a special—but disturbingly generic—case of an undecidable
+separation problem [13].
+
+A recent trend in data processing is to use hardware acceleration to exploit local parallelism.
+Most modern CPU architectures oﬀer SIMD (single instruction multiple data) instructions,
+allowing to perform the same operation on multiple data points in one CPU cycle, leading
+to what is known as the vectorization of computation. Vectorization in used routinely in
+data-intensive applications like multimedia processing [23] or deep learning [8, 27], and is
+ﬁnding its way to data management, particularly in the sub-ﬁeld of in-memory databases
+[32, 22]. Relevant examples from a related ﬁeld are the performant regular expression engine
+Hyperscan [29] and the competitive engine of the RUST language [10], both relying crucially
+on vectorization. In the context of streaming processing of tree-structured data, an early
+work on parabix by Cameron et al. studies the use of SIMD instructions to accelerate XML
+parsing [4]. More recently, Langdale and Lemire illustrate how the performance of JSON
+parsers could be vastly improved by using vectorization [14]. Their experiments conﬁrm
+that the cost of parsing is a large fraction of the total cost of query execution, matching
+the performance loss with respect to regular expression matching. To get a better feeling
+of the room for improvement, let us look at some numbers: the experiments had diﬀerent
+setups, but the orders of magnitude are still of interest. The standard C function memchr
+scans memory to ﬁnd the ﬁrst occurrence of a given byte; it has been hand-optimized for
+various architectures and can be assumed to display the best performance one could hope
+for in a streaming task. On a standard laptop computer, it easily reaches 20Gb/s. The
+Hyperscan regular expression engine reaches performance of 10Gb/s [29]. Langdale et al. get
+up to 3Gb/s when parsing JSON ﬁles and selecting some nodes, but selecting alone reaches
+10Gb/s [14]. Palkar et al. explicitly put the blame on the incompatibility of pushdown
+automata and vectorization [18].
+
+To some extent this is explained by theory. An abstract model of exploiting local
+parallelism in streaming algorithms was proposed in [15]: the stream is read in blocks,
+each block is processed by a ﬁxed boolean circuit, and the result is fed back to the circuit
+together with the next block of the stream. The degree of local parallelism of a language is
+measured by the complexity of the circuit needed to recognize the language in the above
+model: the higher the complexity, the less local parallelism. As shown in the paper, the
+degree of local parallelism of regular languages matches their classical circuit complexity,
+and it is plausible that the situation is similar for larger classes of languages. Assuming this
+is the case, successful vectorization of XML or JSON parsers might be more tricky than
+for regular expression engines: Dyck languages (well-formed multi-bracket expressions) are
+TC0-complete [2], but while regular languages may have even higher complexity, the ones
+appearing in benchmarks are typically much simpler (for instance, all examples in [10] and
+
+Barloy, Murlak and Paperman
+
+XX:3
+
+[31] are in AC0).
+
+All this evidences that stack-based computation is troublesome. At the same time
+falling back to ﬁnite automata severely limits expressivity, as revealed by the necessary
+conditions discovered by Segouﬁn and Vianu [25]. As a middle ground, we propose to relax
+the computational model just so. We allow one counter for maintaining the current depth in
+the document, and registers for storing the current depth to be compared with the depths of
+later tags. In the resulting model, dubbed depth-register automaton, transitions are performed
+at a very low CPU cost with almost no external memory access. The latter depends on the
+number of registers; if the number is low enough, it is even possible to keep all the values
+within the CPU’s registers and not use external memory at all. Unlike pushdown automata,
+the model appears amenable to vectorization and may be hoped to achieve high throughputs,
+but a systematic study of this aspect is a matter of future work.
+
+We apply the proposed setting (predominantly) to querying, which—to the best of our
+knowledge—has not been studied before from this angle. After a preliminary expressivity
+study, we embark on characterizing node-selecting queries that can be realized in our model.
+Our ﬁrst main result is an eﬀective characterization of regular path queries (RPQs) that can
+be realized with depth-register automata. As a by-product, we reveal a connection with the
+languages of trees in which some (resp. each) leaf is selected by the RPQ. Our second main
+result is an analogous characterization for ﬁnite automata. The conditions for the unary
+query and the two associated tree languages do not conincide any more, but are elegantly
+related: the RPQ can be realized iﬀ both languages can be (weakly) recognized. The setting
+of the second main result is exactly that of Segouﬁn and Vianu, and it allows to make some
+progress towards solving the original weak validation problem. We develop our results for the
+XML encoding of trees, but they adapt smoothly to the less verbose JSON-style encoding.
+
+Organization of the paper.
+
+Section 2 introduces the computation model and gives a preliminary expressivity study.
+Section 3 establishes the characterization theorems. Section 4 explores the connection with
+the weak validation problem, explains the adaptation to JSON-style encoding, and points
+out key open problems.
+
+2
+
+Computational model
+
+We model tree-structured data as ordered unranked ﬁnite trees whose nodes are labelled with
+symbols from a ﬁnite alphabet Γ. We refer to them simply as trees over Γ. An immediate
+subtree of tree T is a subtree rooted at a child of the root of T . A tree language over Γ is a set
+of trees over Γ. If L is a language of trees (or words) over Γ, we write Lc for the complement
+of this language.
+
+The markup encoding represents trees over Γ as words over the alphabet Γ ∪ ¯Γ, where
+¯Γ = (cid:8)¯a (cid:12)
+(cid:12) a ∈ Γ(cid:9). In the context of the encoding, the elements of Γ and ¯Γ are referred to as
+opening and closing tags, respectively. If T is a tree whose root is labelled with a and whose
+immediate subtrees are T1, T2, . . . , Tn, then
+
+hT i = a · hT1i · hT2i · · · · · hTni · ¯a .
+
+For example, aa¯ac¯c¯a encodes the tree with a-labelled root whose ﬁrst child has label a and
+second child has label c. If L is a tree language over Γ, we let hLi = (cid:8)hT i (cid:12)
+(cid:12) T ∈ L(cid:9) ⊆ (Γ ∪ ¯Γ)∗.
+
+XX:4
+
+Stackless
+
+2.1 Depth-register automata
+
+Under the markup encoding, ﬁnite automata are unable to check even the simplest properties
+of the input document: for instance, determining if one marked node is a child, descendant,
+or sibling of another marked node requires a stack—or at least a counter, used to compare
+depths of nodes. Realizing multiple such tasks simultaneously seems to lead to multi-counter
+automata, which are notoriously hard to analyze. We take a diﬀerent path: we allow only
+one counter, used exclusively to maintain the current depth in the tree, but additionally
+equip the automaton with a bounded number of registers, which can be used to store depths
+of critical nodes, and compare them later with the current depth. To keep our automata
+executable eﬃciently, we assume that they are deterministic. Thus we arrive at deterministic
+input-driven 1-counter automata with registers. ‘Input-driven’ is the standard terminology
+for counters or stacks that evolve independently of the state [28, 7]. Here it means that the
+counter increases by one with each opening tag read, and decreases by one with each closing
+tag read; such automata (without registers) are also called visibly counter automata [1].
+Importantly, the only tests allowed on the values stored in registers are order comparisons
+with the current depth. We shall refer to such devices as depth-register automata. A formal
+deﬁnition follows.
+
+(cid:73) Deﬁnition 1. A depth-register automaton A is a tuple
+
+(Γ, Q, qinit, F, Ξ, δ) ,
+
+where Γ is a ﬁnite alphabet, Q is a ﬁnite set of states, qinit ∈ Q is the initial state, F ⊆ Q is
+the set of accepting (ﬁnal) states, Ξ is a ﬁnite set of registers, and
+
+δ : Q × (Γ ∪ ¯Γ) × 2Ξ × 2Ξ → 2Ξ × Q
+
+is the transition function.
+
+A conﬁguration of A is a tuple (q, d, η) ∈ Q × Z × ZΞ, whose components specify the
+state, the current depth, and the values stored in the registers, respectively. We call a
+conﬁguration (q, d, η) accepting if q ∈ F . The initial conﬁguration is cinit = (qinit, 0, ηinit)
+where ηinit(ξ) = 0 for all ξ ∈ Ξ.
+
+The run of A over a word a1a2 . . . an ∈ (Γ ∪ ¯Γ)∗ from a conﬁguration (q0, d0, η0) is the
+
+unique sequence of conﬁgurations
+
+(q0, d0, η0)(q1, d1, η1) . . . (qn, dn, ηn) ∈ (cid:0)Q × Z × ZΞ(cid:1)∗
+
+such that for each i ∈ {1, 2, . . . , n}, there exists Yi ⊆ Ξ such that
+
+(
+
+di =
+
+di−1 + 1
+di−1 − 1
+δ(qi−1, ai, X ≤
+
+i , X ≥
+i = {ξ ∈ Ξ (cid:12)
+X ≤
+i = {ξ ∈ Ξ (cid:12)
+X ≥
+
+if ai ∈ Γ ,
+if ai ∈ ¯Γ ;
+i ) = (cid:0)Yi, qi
+
+(cid:1) where
+
+(cid:12) ηi−1(ξ) ≤ di} ,
+
+(cid:12) ηi−1(ξ) ≥ di} ;
+
+for each ξ ∈ Ξ,
+
+ηi(ξ) =
+
+(
+
+di
+ηi−1(ξ)
+
+if ξ ∈ Yi ,
+if ξ /∈ Yi .
+
+Barloy, Murlak and Paperman
+
+XX:5
+
+We write c · w for the last conﬁguration of the run on w from c. If c · w = c0, we also write
+c w−→ c0. By the run of A on w we understand the run on w from cinit. We say that w is
+accepted by A if cinit · w is accepting. The language recognized by A is the set of words
+accepted by A.
+
+Depth-register automata without registers (that is, with Ξ = ∅) are a notational variant
+of deterministic ﬁnite automata over the alphabet Γ ∪ ¯Γ. For such automata we streamline
+the notation introduced in Deﬁnition 1 by dropping the ingredients associated with Ξ. In
+particular, we use states instead of conﬁgurations, and write q · w = q0 and q w−→ q0. The
+same notation will be applied to ﬁnite automata over Γ, not only over Γ ∪ ¯Γ.
+
+We shall give examples of depth-register automata in Section 2.2 (Examples 2, 5 and 6),
+
+once we have made precise how they are used to recognize tree languages.
+
+To conclude the discussion of the automata model, let us point out that the kind of
+tests allowed on registers is a natural parameter of the deﬁnition. For instance, one could
+allow testing if the current depth diﬀers from the content of a given register by a speciﬁed
+constant; this kind of test can be simulated in our model at the cost of using additional
+registers. An interesting proper extension is to allow semilinear conditions, like testing
+equality modulo a speciﬁed constant. Finally, forsaking any hope of decidability of emptiness
+(which might be tolerable), one could go up to full arithmetics. Owing to their determinizm,
+depth-register automata in all these variants would be eﬃciently executable in practice, using
+only a constant number of variables (possibly just CPU registers). Nevertheless, in this ﬁrst
+study we stick to the minimalist approach.
+
+2.2 Recognizing streamed tree languages
+
+A tree language L over Γ is recognized (under the markup encoding) by an automaton A over
+the alphabet Γ ∪ ¯Γ if for each tree t over Γ it holds that A accepts hti iﬀ t ∈ L. Equivalently,
+L is recognized by A if the language of words accepted by A separates hLi from hLci. A tree
+language is stackless if it is recognized by a depth-register automaton, and registerless if it is
+recognized by a ﬁnite automaton.
+
+Note that the automaton is allowed to accept or reject invalid encodings; that is, elements
+of (cid:0)Γ ∪ ¯Γ(cid:1)∗
+\ (cid:0)hLi ∪ hLci(cid:1). Requiring that all invalid encodings be rejected would lead to
+hLi ⊆ (Γ ∪ ¯Γ)∗ being recognized by a ﬁnite (resp. depth-register) automaton, which is a
+much stronger property. In particular, the assumption that hLi is recognized by a ﬁnite
+automaton is prohibitively strong, as it implies that the depth of trees in L is bounded [25].
+In contrast, a registerless tree language may easily contain trees of unbounded depth: a very
+simple example is the set of trees with at least one a-labelled node, which can be recognized
+(under the markup encoding) by a ﬁnite automaton that moves to an all-accepting sink state
+upon reading the opening tag a for the ﬁrst time.
+
+Registerless tree languages are regular, because a tree automaton can simulate the run of
+a ﬁnite automaton over the encoding of the tree. Stackless tree languages, in contrast, need
+not be regular.
+
+(cid:73) Example 2. The set of trees over the alphabet {a, b} in which all a-labelled nodes are
+at the same depth, can be recognized by a depth-register automaton. The ﬁrst time the
+automaton sees a, it stores the current depth in its only register. Then, every time it sees
+a it checks if the current depth is equal to the stored value, and if it is not, it moves to a
+rejecting sink state.
+
+XX:6
+
+Stackless
+
+Regularity can be enforced by applying a stack-like policy of using registers. We call a
+depth-register automaton restricted if each transition overwrites all stored values strictly
+greater than the current depth; that is, if δ(p, a, X ≤, X ≥) = (Y, q), then X ≥ \ X ≤ ⊆ Y .
+
+(cid:73) Proposition 3. Restricted depth-register automata recognize regular tree languages.
+
+We conjecture that restricted depth-register automata recognize all regular stackless tree
+languages, but it is conceivable that they do not. This is why we work with the unrestricted
+model and prove (potentially) stronger inexpressibility results. We stress, however, that all
+depth-register automata we construct are restricted. In particular, the characterization in
+Theorem 14 is identical for the restricted model, backing up the conjecture.
+
+Regardless of the restriction, stackless tree languages retein the usual closure properties
+
+or regular languages.
+
+(cid:73) Lemma 4. The classes of registerless and stackless tree languages are both closed under
+intersection, union, and complementation.
+
+How far do stackless tree languages go beyond registerless? As ﬁrst examples, let us see
+how depth-register automata can deal with sequences of siblings and the descendent relation.
+
+(cid:73) Example 5. Consider a regular language L ⊆ Γ∗ and the set HL of trees over Γ such that
+the sequence of labels read from the children of the root forms a word in L. Depending on L,
+the tree language HL may be registerless or not. For instance, for L = Γ∗aΓ∗, HL is not
+registerless, because a ﬁnite automaton cannot determine whether the current tag with label
+a belongs to a child of the root. This can be shown easily by pumping, but it also follows
+from our general characterization result, Theorem 15 (1), applied to the set of trees that
+contain a branch labelled by a word from ΓaΓ∗. In contrast, HL is stackless for all regular
+L. Indeed, after reading the ﬁrst tag (which must be an opening tag in a valid encoding),
+the automaton stores the current depth (which is 1) in its only register, and then simulates
+the ﬁnite automaton recognizing L over all closing tags for which the current depth is equal
+to the value stored in the register. This is correct, because in each valid encoding all closing
+tags with current depth 1 belong to the children of the root.
+
+(cid:73) Example 6. Consider the set of trees over the alphabet {a, b, c} where the ﬁrst a-labelled
+node (in the document order) has a b-labelled descendent. To recognize this language, the
+automaton should read the input word until it sees a, load the current depth to its only
+register, and accept iﬀ it sees the letter b before the current depth drops strictly below the
+stored value (this will indicate, that the corresponding closing tag has been read). Now,
+consider the set of trees over {a, b, c} where some a-labelled node has a b-labelled descendant.
+It suﬃces to test this property for minimal a-labelled nodes (that is, those without a-labelled
+ancestors): if a node has a b-labelled descendent, so do all its ancestors. Hence, to recognize
+the described language it suﬃces to run the automaton described above in a loop, returning
+to the initial state whenever the current depth drops strictly below the stored value, until it
+accepts.
+
+The main weakness of depth-register automata when applied to processing trees is their
+
+limited ability to handle the child relation, as revealed by the following example.
+
+(cid:73) Example 7. Consider the language of trees over the alphabet {a, b, c} where some a-labelled
+node has a b-labelled child. It might appear that this language is stackless because it is easy
+to identify an a-labelled node and a single register is suﬃcient to identify the tags of its
+
+Barloy, Murlak and Paperman
+
+XX:7
+
+children in the encoding. Indeed, this idea can be used to recognize the language of trees
+where some minimal a-labelled node has a b-labelled child, just like we did for b-labelled
+descendents in Example 6. Without the minimality assumption, however, the subautomaton
+searching for b-labelled children needs to be relaunched whenever the opening tag a is read,
+which may well happen before the previous instance of the subautomaton terminates. Each
+launch requires a new register to store the return point. Because the input tree may contain
+arbitrarily long chains of a-labelled nodes, this does not seem feasible with any ﬁxed number
+of registers. That it is indeed infeasible follows from the general characterization result
+(Theorem 14) we establish in Section 3.
+
+The method from Example 6 can be extended to test the existence of multiple nodes
+with speciﬁed labels and descendent relationships between them. By a descendent pattern we
+shall understand a ﬁnite tree over Γ. A tree T contains a descendent pattern π if there exists
+a matching function h that maps nodes of π to nodes of T such that for all nodes u, v of π:
+
+the label of u coincides with the label of h(u);
+if v is a child of u, then h(v) is a descendent of h(u).
+
+(cid:73) Proposition 8. For each descendent pattern π, the set of trees containing π is stackless.
+
+Proof. By a slight abuse of the deﬁnition of depth-register automata, we shall allow automata
+that can stop; that is, in some conﬁgurations there may be no transition to take. We prove
+by induction on the height of π that there is an automaton Aπ that recognizes trees that
+contain π and stops upon reading the closing tag corresponding to the ﬁrst opening tag of
+its input.
+
+If π consists of a single node, the automaton loads into its only register the current depth
+before reading any tags, scans the input until the current depth again becomes equal to the
+stored value. Then it moves to a state without outgoing transitions that is accepting or not,
+depending on whether the automaton has detected a tag with the label from the root of π or
+not.
+
+Suppose that the root of π has some children. By the inductive hypothesis, there is an
+automaton Aπ0 for each descendent pattern π0 corresponding to an immediate subtree of π.
+Let A be the synchronous product of all these automata, recognizing the intersection of the
+languages recognized by its components. Like in Example 6, we can assume that the root
+of π is matched to a minimal element with the desired label. The automaton Aπ loads the
+current depth before reading any tags into its ﬁrst register, and then processes the input
+looking for the ﬁrst opening tag with the same label as the root of π. If Aπ does not see one
+before the current depth is again equal to the stored value, it rejects. If it does ﬁnd one, it
+calls the automaton A using a set of registers excluding the ﬁrst one and waits until A stops.
+If A accepts, Aπ waits until the current depth becomes equal to the value stored in the ﬁrst
+register, and accepts. If A rejects, Aπ moves on to the next opening tag with the same label
+(cid:74)
+as the root of π.
+
+While the class of stackless tree languages is closed under complement by Lemma 4, it
+does not follow that we can handle negative information just as well as positive. We say that
+a tree T strictly contains a descendent pattern π if T contains π and the matching function
+h additionally satisﬁes the condition
+
+if v is not a descendent of u, then h(v) is not a descendent of h(u).
+
+The following example shows that Proposition 8 does not extend to this stronger notion.
+
+(cid:73) Example 9. Consider the pattern π shown in Figure 1a. As is customary, we use double
+edges to indicate descendent relationships between nodes. Suppose that the languages of
+
+XX:8
+
+Stackless
+
+b
+
+b
+
+b
+...
+b
+
+b
+
+c?
+
+c?
+
+c?
+
+c?
+
+c?
+
+a?
+
+a?
+
+a?
+
+...
+b
+
+b
+
+b
+
+b
+
+a?
+
+a?
+
+a
+
+a?
+b
+a? ...
+
+c
+
+c
+
+...
+b
+
+b
+
+b
+
+b
+
+a?
+
+a?
+
+a?
+b
+a? ...
+
+c
+
+c
+
+b
+
+b
+
+b
+
+a
+
+c
+
+c
+
+(a) Pattern π.
+
+(b) A ‘schema’.
+
+(c) Match.
+
+(d) No match.
+
+Figure 1 Strict descendent patterns are not stackless.
+
+.
+
+trees strictly containing π is recognized by a depth-register automaton B with m states and
+‘ registers. We shall analyze the behaviour of the automaton B over trees conforming to
+the ‘schema’ shown in Figure 1b, which for each n > 2 deﬁnes the set Kn of trees that have
+the main branch labelled by the word bn, and additionally each b-labelled node may have
+a c-labelled child to the right of the main branch, and each internal b-labelled node may
+have an a-labelled child to the left of the main branch. For a tree T like this, let wT be the
+preﬁx of hT i ending at the opening tag of the deepest b-labelled node. Let cinit be the initial
+conﬁguration of B.
+
+For T ∈ Kn, we have that cinit · wT = (q, n, η) for some state q and some η : Ξ →
+{0, 1, . . . , n}. That is, m · (n + 1)‘ conﬁgurations are possible. But there are 2n−2 ways to
+choose which b-labelled non-leaf nodes have an a-labelled child, so (cid:12)
+(cid:9)(cid:12)
+(cid:12)
+(cid:12) = 2n−2.
+(cid:12) T ∈ Kn
+(cid:12)
+(cid:12)
+(cid:9),
+Consequently, for suﬃciently large n, there exist two diﬀerent words u and v in {wT
+(cid:12) T ∈ Kn
+such that cinit · u = cinit · v. Because u 6= v, there exists i ∈ {2, 3, . . . , n − 1} such that for all
+S, T ∈ Kn, if u = wS and v = wT , then the ith b-labelled node has an a-labelled child in S
+iﬀ it does not have one in T . Let us choose S and T such that in both of them, the (i − 1)st
+and the (i + 1)st b-labelled node has a c-labelled child and there are no other c-labelled nodes,
+as shown in Figures 1c and 1d. Clearly, the tree in Figure 1c strictly contains π. It is not
+diﬃcult to verify that the one in Figure 1c does not. However, from the deﬁnition of S and
+T it follows that hSi = uw0 and hT i = vw0 for some w0, and because cinit · uw0 = cinit · vw0,
+we conclude that S and T are indistinguishable to B.
+
+(cid:8)wT
+
+Finally, let us point out that the ability to deal with sequences of siblings, demonstrated
+in Example 5, is limited to nodes that are close to the root. The following example shows
+why.
+
+(cid:73) Example 10. Even a ﬁnite automaton can check if the streamed tree contains two
+consecutive siblings with labels a and b: it suﬃces to check if the read encoding contains the
+closing tag ¯a followed immediately by the opening tag b. Consider, however, the set of trees
+that contain three consecutive siblings with labels a, b, c. Arguing like in Example 9 one
+can show that this language is not stackless. Dropping the assumption that the siblings are
+consecutive, or even that they are ordered as written, does not aﬀect the argument.
+
+Thus, depth-register automata are able to express involved global properties of trees
+(Proposition 8), far out of reach of ﬁnite automata, yet they cannot handle many properties
+that appear local but lose their locality when seen as properties of the encodings (Examples 7
+
+Barloy, Murlak and Paperman
+
+XX:9
+
+and 10). Characterizing stackless tree languages seems to be challenging, but in Section 3 we
+solve the special case of tree languages deﬁned in terms of properties of branches.
+
+2.3 Querying streamed trees
+
+So far we used automata as acceptors, deﬁning languages of trees. However, we can also
+use them as node selectors, deﬁning queries over trees. By a query Q of arity k we mean
+a function mapping each tree T to a set Q(T ) of k-tuples of nodes of T . In the streaming
+setting, higher-arity queries are problematic because a streaming algorithm using memory of
+size f (n) over inputs of length n cannot return asymptotically more than f (n) · n answers.
+This means that handling even very simple queries of arity larger than one in sublinear
+memory is impossible without compromising the semantics by applying restrictive selection
+strategies [30, 9] or heuristics like load shedding [12]. Moreover, popular query languages
+for tree-structured data, like XPath or JSONPath, focus on unary queries. We shall do the
+same.
+
+Implementations of unary queries over streamed trees come in two distinct ﬂavours,
+corresponding to the two natural moments when one may wish the selected nodes to be
+returned: at the opening tag or at the closing tag. Accordingly, we say that an automaton
+A pre-selects (resp. post-selects) a node v of a tree T if A is in an accepting state directly
+after reading the opening (resp. closing) tag of v. Both approaches have their merits.
+Post-selection is more expressive, because it allows to explore the subtree rooted at the given
+node. Pre-selection gives more ﬂexibility in the subsequent stages of processing, allowing to
+return the whole subtree rooted at the selected node without additional memory cost. In
+this work we focus on pre-selection, and leave post-selection for the future. We say that an
+automaton A realizes a unary query Q if for every tree T , A pre-selects exactly those nodes
+of T that belong to Q(T ). We call a unary query stackless (resp. registerless) if it can be
+realized by a depth-register automaton (resp. ﬁnite automaton).
+
+Practical declarative query formalisms for tree-structured data, like XPath or JSONPath,
+treat the context of a node in a symmetric fashion, even if siblings are considered ordered.
+The streaming setup, on the other hand, is inherently asymmetric: siblings to the left of the
+node to be selected can be accessed freely, but there is no way to access those on the right.
+While there exist meaningful queries that could exploit access to the siblings on the left, in
+this work we abstract away from this aspect and focus on queries invariant under sibling
+order. A query Q is invariant under sibling order if for each bijection f between the nodes of
+a tree T and the nodes of a tree T 0 that preserves node labels and the child relation, it holds
+that Q(T 0) = (cid:8)f (u) (cid:12)
+(cid:12) u ∈ Q(T )(cid:9). Unary queries invariant under sibling order form a rich
+class and capture an important segment of user queries, including all vertical XPath queries,
+built up from vertical axes (child, descendent, parent, ancestor), label tests, and ﬁlters. We
+aim at understanding which of them can be implemented over streamed trees using ﬁnite or
+depth-register automata.
+
+The scope of this task can be narrowed down quickly, as all stackless queries invariant
+under sibling order fall within a well-known class of queries. With each regular language
+L ⊆ Γ∗, we associate a unary query QL that selects all nodes v such that the path from
+the root to v is labelled by a word from L. We call queries of this form regular path queries
+(RPQs). They include all XPath queries built up from downward axes (child, descendent)
+and label tests, but not those using upward axes (parent, ancestor) or ﬁlters.
+
+(cid:73) Proposition 11. The class of stackless queries invariant under sibling order is contained
+in the class of RPQs.
+
+XX:10 Stackless
+
+That is, if a unary query invariant under sibling order is not an RPQ, then it is not
+stackless either. In particular, vertical XPath queries cannot be realized by depth-register
+automata if they use upward axes or ﬁlters. Consequently, understanding which unary queries
+invariant under sibling order are stackless or registerless amounts to characterizing stackless
+and registerless queries among RPQs, which will be the focus of the remainder of this paper.
+
+(cid:73) Example 12. Consider the following simple RPQs, expressed in XPath, JSONPath, and
+as regular expressions:
+
+/a//b
+$.a..b
+a Γ∗b
+
+XPath
+JSONPath
+RegEx
+Registerless? (cid:51)
+(cid:51)
+Stackless?
+
+/a/b
+$.a.b
+a b
+(cid:55)
+(cid:51)
+
+//a//b
+$..a..b
+Γ∗a Γ∗b
+(cid:55)
+(cid:51)
+
+//a/b
+$..a.b
+Γ∗a b
+(cid:55)
+(cid:55)
+
+The ﬁrst one is registerless: the realizing ﬁnite automaton should check that the ﬁrst opening
+tag has label a and then it should accept at each opening tag with label b. On the other
+hand, the last RPQ cannot be realized even by a depth-register automaton, because letting
+this automaton loop in each accepting state we would obtain an automaton recognizing
+the language from Example 7. What about the remaining two RPQs? It will follow from
+our general characterization results (Theorems 14 and 15) that they are stackless, but not
+registerless.
+
+From the perspective taken in this paper, RPQs and depth-register automata play
+asymmetric roles: RPQs represent user queries, and depth-register automata represent their
+implementations in the streaming setting. Accordingly, the fundamental question is which
+user queries can be implemented; that is, which RPQs are stackless. Nevertheless, one can
+also ask which stackless queries are RPQs. This appears challenging in general, but if the
+query is given as a restricted depth-register automaton, it is a pleasent exercise in automata
+theory, reminiscent of the characterization of tree languages recognizable by deterministic
+top-down automata [16].
+
+(cid:73) Proposition 13. It is decidable if the query realized by a given restricted depth-register
+automaton is an RPQ.
+
+Unlike in graph databases, where RPQs are viewed as binary queries selecting suitably
+connected pairs of nodes [3], in our setting RPQs are treated primarily as unary queries
+selecting nodes suitably connected to the root. But we can also treat them as boolean queries,
+deﬁning sets of trees that contain a node—or a leaf—suitably connected to the root. The
+leaf variant will be instrumental in the characterization results of Section 3. We write EL for
+the set of trees that contain a branch labelled by a word from L, and AL for the set of trees
+with all branches labelled by words from L. Note that (AL)c = E(Lc). Languages of the
+form AL can express useful and nontrivial schema restrictions, as they are able to specify
+which labels are allowed in the children of a node, depending on regular properties of the
+path from the root. This will allow us to shed more light on the framework of Segouﬁn and
+Vianu [25] in Section 4.1.
+
+3
+
+Characterization theorems
+
+The characterization theorems rely on four syntactic classes of regular languages: almost-
+reversible, hierarchically almost-reversible, E-ﬂat, and A-ﬂat (Deﬁnitions 17, 19 and 22).
+
+Barloy, Murlak and Paperman
+
+XX:11
+
+For now they can be treated as blackboxes, but let us highlight that their deﬁnitions are
+based on simple PTIME-testable properties of the minimal automaton, which makes the
+characterizations eﬀective. Indeed, also the suitable automata for QL, AL, and EL can be
+computed in time polynomial in the size of the minimal automaton of L.
+
+For each theorem we provide a proof outline explaining how to infer the theorem from
+the expressibility and inexpressibility results we establish in the remainder of this section.
+
+(cid:73) Theorem 14. For each regular language L, the following conditions are equivalent:
+1. QL is a stackless unary query;
+2. EL is a stackless tree language;
+3. AL is a stackless tree language;
+4. L is hierarchically almost-reversible.
+
+Proof outline. (1) implies (2) because an automaton A realizing QL can be easily turned
+into an automaton A0 recognizing EL. A0 behaves like A, but it additionally remembers the
+previously read symbol; if the previous symbol was an opening tag, the state is accepting
+in A, and the current letter is a closing tag, then A0 moves to an all-accepting sink state.
+(2) implies (4) by Lemma 29, and (4) implies (1) by Lemma 21. This shows that (1), (2),
+and (4) are equivalent. It follows that (2) and (3) are equivalent, because (AL)c = E(Lc),
+the class of stackless tree languages is closed under complementation, and, by Lemma 20, so
+(cid:74)
+is the class of hierarchically almost-reversible languages.
+
+In the registerless case the picture is more complicated, reﬂecting the inherent duality of
+
+tree languages of the form AL and EL.
+
+(cid:73) Theorem 15. Let L be a regular language.
+1. EL is a registerless tree language iﬀ L is E-ﬂat.
+2. AL is a registerless tree language iﬀ L is A-ﬂat.
+3. The following conditions are equivalent:
+a. QL is a registerless unary query;
+b. EL and AL are registerless tree languages;
+c. L is E-ﬂat and A-ﬂat;
+d. L is almost-reversible.
+
+Proof outline. (1) follows from Lemmas 24 and 25. (2) follows from (1) because: (AL)c =
+E(Lc), the class of registerless tree languages is closed under complementation, and by
+Lemma 23, L is A-ﬂat iﬀ Lc is E-ﬂat. For (3), we argue like in Theorem 14 that if QL
+is registerless, so is EL. Similarly, if QL is registerless, so is AL; the automaton A0 is
+constructed dually: whenever it reads a closing tag immediately after an opening tag while
+being in a rejecting state of A, it moves to the all-rejecting sink state ⊥. Hence, (3a) implies
+(3b). (3b) is equivalent to (3c) by (1) and (2). (3c) is equivalent to (3d) by Lemma 23. (3d)
+(cid:74)
+implies (3a) by Lemma 18.
+
+We remark that Theorem 15 is fully compatible with the framework introduced by
+
+Segouﬁn and Vianu [25]; we discuss the connection in detail in Section 4.1.
+
+3.1 Almost-reversibility
+
+How does one go about evaluating an RPQ with a ﬁnite automaton reading the markup
+encoding of a tree? Over the leftmost branch this is easy: as long as only opening tags
+are read, we simulate the automaton underlying the RPQ over the labels in the tags and
+
+XX:12 Stackless
+
+b
+
+0
+
+a
+
+a
+
+1
+
+b
+
+Figure 2 A reversible ﬁnite automaton.
+
+0
+
+a
+
+1
+
+b a, c
+
+b, c
+
+2
+
+3
+
+a, c
+
+b
+
+a, b, c
+
+(a) a Γ∗b
+
+0
+
+a
+
+1
+
+b
+
+2
+
+a, c
+
+b, c
+
+0
+
+a
+
+1
+
+b, c
+
+a, c
+
+a, b, c
+
+a, c
+
+b
+
+a, b, c
+
+3
+
+b
+
+2
+
+b, c
+
+0
+
+a
+
+c
+
+a
+
+1
+
+b, c
+
+b
+
+a
+
+2
+
+(b) ab
+
+(c) Γ∗a Γ∗b
+
+(d) Γ∗ab
+
+Figure 3 Languages of increasing hardness over Γ = {a, b, c}.
+
+accept whenever the simulated automaton accepts. When the ﬁrst closing tag appears, the
+simulated automaton should revert to the state before reading the corresponding opening
+tag. Our simulation could store a bounded suﬃx of the run of the simulated automaton, and
+use it when closing tags occur, but what shall we do when it is used up? This is clearly not
+a sustainable strategy. The task does become feasible if we assume that the previous state
+can be determined based on the current state and the last read letter. Automata that have
+this property are called reversible.
+
+Recall that in a deterministic automaton letters induce functions mapping states to states.
+A deterministic automaton is reversible if every letter induces an injective function (Figure 2).
+Equivalently, one may assume that letters induce permutations of states, which implies that
+the monoid generated by these functions—with composition as the inner product—is a group.
+Reversibility can be studied as a separate notion upon extension to incomplete automata,
+where letters induce partial functions over states [20].
+
+The simulation above captures RPQs given by reversible automata, but we can do a bit
+more. Consider the automata depicted in Figure 3. None of them is reversible because the
+function induced by the letter a is not injective. However, as explained in Example 12, the
+automaton in Figure 3a deﬁnes a registerless RPQ, while those in Figures 3b to 3d do not.
+In order to capture registerless RPQs precisely, we carefully relax the notion of reversibility.
+Unlike reversibility itself, its relaxed variant is dependent on which states are accepting.
+Let us ﬁx a deterministic automaton A. We say that states p and q are equivalent if for every
+word w, p · w ∈ F iﬀ q · w ∈ F . In a minimal automaton, equivalent states are equal. We
+say that states p and q are almost equivalent if for every non-empty word w, p · w ∈ F iﬀ
+q · w ∈ F . That is, non-empty words do not distinguish almost equivalent states; it follows
+immediately that after reading any letter the states become indistinguishable.
+
+(cid:73) Lemma 16. If states p and q are almost equivalent, then for each letter a, the states p · a
+and q · a are equivalent.
+
+Barloy, Murlak and Paperman
+
+XX:13
+
+We shall call a state p of automaton A internal if it is reachable from the initial state
+via a nonempty word. Note that if all states are reachable, only the initial state can be
+non-internal, and it happens only iﬀ it has no incoming transitions.
+
+(cid:73) Deﬁnition 17 (Almost-reversibility). We say that states p and q meet in state r if there
+exists a word u such that p · u = q · u = r; we say p and q meet if they meet in some state
+r. A deterministic automaton is almost-reversible if every two internal states that meet are
+almost equivalent. We call a regular language almost-reversible if its minimal automaton is
+almost-reversible.
+
+As intended, the automaton in Figure 3a is almost-reversible, while those in Figures 3b
+
+to 3d are not.
+
+(cid:73) Lemma 18. If L is an almost-reversible language, then QL is a registerless query.
+
+Proof. Let A be the minimal automaton of L. The simulating automaton B will use the
+same states as A together with an additional rejecting sink state ⊥; the initial state and the
+set of accepting states are also like in A. When reading opening tags, B follows the transition
+relation of A. Upon reading a closing tag ¯a in a state p, B moves to some internal p0 in A
+such that p0 · a is almost equivalent to p. To keep B deterministic, we take the minimal such
+p0 according to an arbitrarily chosen order on the states of A. If such a state p0 does not
+exists, B moves to ⊥.
+
+Consider an input tree T . For each preﬁx w of hT i, let bw be the word obtained from w
+by successively erasing all two-letter subwords of the form a¯a for a ∈ Γ. If w ends with the
+opening tag of a node x in T , then bw is the sequence of labels on the shortest path from the
+root of T to x. If w ends with the closing tag of a node x in T , then bw is the sequence of
+labels on the shortest path from the root of T to the parent of x (if x is the root of T , then
+the path is empty). We claim that for every proper nonempty preﬁx w of hT i, the state pw
+bw of
+of B after reading w is a an internal state of A that is almost equivalent to the state q
+A after reading bw, and if the last letter of w is an opening tag, then pw = q
+bw. The claim
+immediately implies that B realizes QL, because the ﬁrst and the last state of B in the run
+on hT i does not matter.
+
+bw · c = q
+
+bwc, and we are done because q
+
+We prove the claim by induction on |w|. The automaton B begins the computation in
+the initial state of A. The ﬁrst letter of hT i is some opening tag a. Because ba = a, we have
+pa = q
+ba and pa is clearly internal. Suppose now that the claim holds for w. If the next letter
+after w is an opening tag c, applying Lemma 16 to the almost equivalent states pw and q
+bw
+bw · c is clearly internal.
+of A, we get pwc = pw · c = q
+Suppose that the next letter read by B is a closing tag ¯c. We need to prove that there exists
+an internal state p0 in A such that p0 · c is almost equivalent to pw, and that every such p0
+is almost equivalent to q
+bw¯c. Because w¯c is a proper preﬁx of hT i, the
+bw, and we
+word cw¯c is nonempty; hence, q
+bw¯c · c = q
+bw¯c is a internal state of A. We also have q
+bw¯c · c is almost equivalent to pw.
+have assumed that pw and q
+bw are almost equivalent; hence, q
+bw¯c is a correct choice for p0. Let us now take any internal p0 with p0 · c almost
+So, indeed, q
+equivalent to pw, and prove that p0 is almost equivalent to q
+bw are almost
+bw¯c. As pw and q
+equivalent by the induction hypothesis, it follows that so are p0 · c and q
+bw. By Lemma 16,
+p0 · c · b = q
+bw¯c · c · b for each b ∈ Γ. Hence, p0 and q
+bw¯c meet. We have already argued
+bw¯c is internal, and p0 is internal by assumption. Because A is almost-reversible, we
+that q
+(cid:74)
+conclude that p0 is almost equivalent to q
+
+bw¯c. Consider p0 = q
+
+bw · b = q
+
+bw¯c.
+
+XX:14 Stackless
+
+3.2 Hierarchical almost-reversibility
+
+We have already developed intuitions on evaluating RPQs over markup encodings using ﬁnite
+automata. Can we do more using the depth information and the (limited) ability to process
+it oﬀered by the registers? Using one register and an additional component in the state, we
+can store the conﬁguration of the simulated automaton in one node on the path from the
+root to the current node: we store the depth of this node in the register and the state of the
+simulated automaton in the additional component of the state of the simulating automaton.
+When the simulation climbs up to this depth again, we know to which state the simulated
+automaton should be reverted, regardless of the reversibility assumptions.
+
+Using this feature we can simulate automata whose strongly connected components (SCCs)
+are singletons (Figure 3b). Recall that an SCC is a maximal subset X of the state-space such
+that every state in X is reachable from every other state in X. If each SCC is a singleton,
+then a run may loop in some states it visits, but it never revisits a state it has left. Hence,
+in each run there is a bounded number of state changes. The simulating automaton can
+then represent the whole run of the simulated automaton over the path from the root to the
+current node by means of the list of state changes and depths at which these changes occurred.
+Automata with only singleton SCCs capture exactly the class of R-trivial languages, named
+after one of Green’s relations from algebraic formal language theory [21]; the intensively
+studied piecewise testable languages [19] form a prominent subclass of R-trivial languages.
+As we shall see, the potential of register automata is exhausted by the combination of
+the above simulation method with the full power of ﬁnite automata to simulate a run inside
+a single SCC. The class of automata that can be simulated this way is captured by the
+following deﬁnition.
+
+(cid:73) Deﬁnition 19 (Hierarchical almost-reversibility). A deterministic automaton is hierarchically
+almost-reversible, abbreviated as HAR, if every two states from the same SCC that meet
+inside this SCC are almost equivalent. A regular language is HAR if its minimal automaton
+is HAR.
+
+By design, HAR languages include all almost-reversible languages (Figure 3a), and all
+R-trivial languages (Figure 3b), but also the language in Figure 3c which is neither almost-
+reversible nor R-trivial. The language in Figure 3d, is not HAR.
+
+As Deﬁnition 19 is invariant under the complementation of the automaton, we obtain the
+
+following.
+
+(cid:73) Lemma 20. The complement of a HAR language is HAR.
+
+Let us see that HAR languages can indeed be handled by depth-register automata.
+
+(cid:73) Lemma 21. If L is a HAR language, then QL is a stackless query.
+
+Proof. Let L be a HAR language and A its minimal automaton. Like before, we construct
+a depth-register automaton B that evaluates QL by maintaining a simulation of the run
+of A on the word bw labelling the path π from the root to the current node. It applies the
+method used for R-trivial languages to keep track of the changes of SCCs of A during the
+simulated run, and an adaptation of the method for almost-reversible languages to deal with
+the segments of the simulated run within a single SCC. After processing a preﬁx w of the
+encoding of the input tree, for each SCC X of A visited during the run on bw, except the
+current one, the automaton B stores
+
+the depth of the deepest node on the path π whose label was read in a state from X
+during the run on bw; and
+
+Barloy, Murlak and Paperman
+
+XX:15
+
+some state from X that meets in X with the last state from X visited by A in the run
+on bw.
+
+Additionally, if q is the current state of A after processing bw and Y is the SCC of A that
+contains q, the automaton B stores some state p ∈ Y that meets with q in Y , and p = q after
+reading each opening tag. Initially, p is the initial state i of A, and nothing else is stored.
+
+Suppose that B reads an opening tag a and the current depth is d. Because A is HAR,
+the states p and q mentioned above are almost equivalent. As A is minimal, it follows from
+Lemma 16 that p · a = q · a. Consequently, p · a is the next state of A. If p · a ∈ Y , we just
+replace p with p · a and proceed to the next tag. If p · a belongs to some SCC Z 6= Y , we
+also add Y to the list of remembered SCCs, with depth d (loaded to some unused register)
+and state p, and continue with Z as the current SCC.
+
+Suppose now that B reads a closing tag ¯a and the current depth d is greater than or
+equal to the maximal recorded depth d0. This indicates that the previous state of A also
+belongs to Y . We should now revert A to some state q0 ∈ Y such that q0 · a = q, but we
+do not know which one. Even worse, we do not have access to q, but only to some state
+p ∈ Y that meets with q in Y . Nevertheless, we can maintain the invariant by picking any
+state p0 ∈ Y such that p0 · a ∈ Y is almost equivalent to p. Note ﬁrst that such states p0 exist
+because q0 is one of them: q0 · a = q and from the previous case we know that q and p are
+almost equivalent. To keep B deterministic we pick the minimal such p0 according to some
+arbitrarily ﬁxed order on the states of A. To prove that every p0 is suitable it suﬃces to
+show that p0 meets with q0 in Y . We know that p · u = q · u ∈ Y for some word u. Because
+p0 · a is almost equivalent to p and A is minimal, we get p0 · a · u = p · u = q · u = q0 · a · u,
+and we are done. Hence, B can replace p with p0 and proceed to the next tag.
+
+Finally, suppose B reads a closing tag ¯a and the current depth is strictly smaller than
+the greatest recorded depth d0. This indicates that the previous state of A belongs to the
+SCC X 6= Y , associated with depth d0. The automaton A should be reverted to the last
+state q0 from X visited during the run. The simulation does not have access to q0, but it has
+the state p0 recorded for X, and we know that p0 meets with q0 in X. This is suﬃcient to
+maintain the invariant: the automaton B simply replaces p with p0, removes X from the list
+of remembered SCCs marking the register storing the associated depth d0 as unused, and
+(cid:74)
+proceeds to the next tag with X as the current SCC.
+
+3.3 Flatness
+
+Not all ﬁnite languages are almost-reversible, as witnessed by the one in Figure 3b. Never-
+theless, if L is ﬁnite, then AL is registerless. Indeed, a ﬁnite automaton can simply simulate
+the stack up to the depth bounded by the length of the longest word in L. If an opening tag
+is read when the stack is at its maximum depth, the automaton moves to an all-rejecting
+sink state. Symmetrically, if L is co-ﬁnite (that is, Lc is ﬁnite), then EL is registerless. This
+motivates the following dual notions.
+
+(cid:73) Deﬁnition 22 (E-ﬂatness and A-ﬂatness). We call a state q acceptive (resp. rejective) if
+q · w is accepting (resp. rejecting) for some w ∈ Γ∗. A deterministic automaton is E-ﬂat
+(resp. A-ﬂat) if for every internal state p and every rejective (resp. acceptive) state q, if p
+meets with q in q, then p is almost equivalent to q. A E-ﬂat (resp. A-ﬂat) language is a
+regular language whose minimal automaton is E-ﬂat (resp. A-ﬂat).
+
+Checking that all ﬁnite languages (including the one in Figure 3b) are A-ﬂat, and all
+co-ﬁnite ones are E-ﬂat is an easy exercise. The following lemma, connecting ﬂatness to
+almost-reversibility is not hard either (see Appendix D).
+
+XX:16 Stackless
+
+s
+
+t
+
+un!
+
+x
+
+un!
+
+x
+
+s
+
+un!
+
+un!
+
+t
+
+un!
+
+x
+
+x
+
+(a) Tree S.
+
+(b) Tree S0.
+
+Figure 4 Fooling trees in Lemma 25.
+
+(cid:73) Lemma 23. Let L ⊆ Γ∗ be a regular language.
+1. L is A-ﬂat iﬀ Lc is E-ﬂat.
+2. L almost-reversible iﬀ it is both A-ﬂat and E-ﬂat.
+
+More eﬀort is needed to show that E-ﬂatness of L is suﬃcient to simulate its minimal
+
+automaton faithfully enough to support recognizing EL.
+
+(cid:73) Lemma 24. If L is an E-ﬂat language, then EL is a registerless tree language.
+
+Like for almost-reversible automata, the high-level idea is to maintain the state of the
+simulated automaton up to almost equivalence, except that we should immediately accept
+if this state becomes non-rejective. Because the internal structure of E-ﬂat automata is
+much richer, we additionally need to keep track of transitions that moved the simulated run
+from one SCC to the next one. Taking transitions backwards when processing closing tags
+introduces certain ambiguity: the origins of the stored transitions are not single states, but
+pairs of states guaranteed to be almost equivalent. Full details can be found in Appendix E.
+
+3.4
+
+Inexpressibility
+
+The results established in this section are proved by pumping simultaneously at the level of
+trees and their encodings, which resembles pumping arguments for context free grammars. To
+simplify factorizing encodings of trees, for a word w = a1a2 · · · an ∈ Γ∗ we let ¯w = ¯an · · · ¯a2 ¯a1
+(note the reversed order). Consider the tree S shown in Figure 4a, keeping in mind that
+s, t, u, x are words rather than single letters: each node labelled with a word w represents a
+chain of |w| nodes whose labels form the word w. Then,
+
+hSi = sun!x¯x¯un!t¯tun!x¯x¯un!¯s .
+
+We use S in the proof of the following lemma.
+
+(cid:73) Lemma 25. For a regular language L, if EL is a registerless tree language, then L is
+E-ﬂat.
+
+Proof. Suppose that the minimal automaton A of L ⊆ Γ∗ is not E-ﬂat. Let i be the initial
+state of A. Then, there exist words s, t, u ∈ Γ+, x ∈ Γ∗ and states p, q such that i · s = p,
+p · u = q · u = q, q · x is rejecting, and p · t is accepting iﬀ q · t is rejecting. It follows that for
+each k > 0, sukx ∈ Lc, and st ∈ L iﬀ sukt ∈ Lc.
+
+Consider a deterministic ﬁnite automaton B over Γ ∪ ¯Γ with n states. It is well known
+that r · wn! = r · w2·n! for each nonempty word w and each state r of B (this is also implied
+by Lemma 28 established later in this section).
+
+Barloy, Murlak and Paperman
+
+XX:17
+
+Consider the trees S and S0 shown in Figure 4. By the discussion above, exactly one of
+those trees belongs to EL. Consider the runs of B on hSi and hS0i. Suppose that on hSi we
+have
+
+sun!
+−−−→ q1
+
+x¯x·¯un!·t¯t·un!x¯x¯un!
+−−−−−−−−−−−−→ q2
+
+¯s−→ q3 .
+
+q0
+
+Then, by the choice of n, we have
+
+sun!
+−−−→ q1
+
+un!
+−−→ q1
+
+x¯x·¯un!·t¯t·un!x¯x¯un!
+−−−−−−−−−−−−→ q2
+
+¯un!
+−−→ q2
+
+¯s−→ q3 .
+
+q0
+
+It follows that B accepts hSi iﬀ it accepts hS0i. Consequently, B does not recognize EL. (cid:74)
+
+The missing implication in Theorem 14 is also proved by pumping, but requires consider-
+ably more eﬀort because this time we need to fool a depth-register automaton. Before we
+dive into it, we prepare some simple tools helping to analyze runs of such automata; proofs
+of the auxiliary lemmas can be found in Appendix F.
+
+For conﬁgurations c = (q, d, η) and c0 = (q0, d0, η0) of a depth-register automaton B we
+
+write c ∼ c0 if q = q0.
+
+For −∞ ≤ i ≤ j ≤ ∞, we write c ≈i,j c0 if c ∼ c0 and for each register ξ one of the
+
+following conditions holds:
+η0(ξ) − d0 = η(ξ) − d;
+η(ξ) − d < i and η0(ξ) − d0 < i and η(ξ) = η0(ξ);
+η(ξ) − d > j and η0(ξ) − d0 > j.
+
+We let kεk = 0 and inductively kwak = kwk + 1 and kw¯ak = kwk − 1 for all a ∈ Γ and
+w ∈ (Γ ∪ ¯Γ)∗. For nonempty w we also deﬁne
+
+bwc = min
+ε6=u(cid:22)w
+
+kuk ,
+
+dwe = max
+ε6=u(cid:22)w
+
+kuk ,
+
+where u (cid:22) w means that u is a preﬁx of w. Note that for all w,
+
+bwc ≤ kwk ≤ dwe .
+
+(cid:73) Lemma 26. Suppose that c1 ≈i,j c2. For every word w such that i ≤ bwc ≤ dwe ≤ j, it
+holds that c1 · w ≈i−kwk,j−kwk c2 · w.
+
+A word x ∈ (Γ ∪ ¯Γ)+ is descending if 1 = bxc ≤ dxe = kxk and it is ascending if
+−1 = dxe ≥ bxc = kxk. Descending words generalize words from Γ+, and ascending words
+generalize words from ¯Γ+. For i, j ∈ Z∞ = Z ∪ {−∞, ∞} we let
+
+[i, j] = {k ∈ Z∞
+
+(cid:12)
+(cid:12) i ≤ k ≤ j} ,
+
+(i, j] = {k ∈ Z∞
+
+(cid:12)
+(cid:12) i < k ≤ j} ,
+
+and analogously for [i, j) and (i, j).
+
+(cid:73) Lemma 27. Let ci = (qi, di, ηi) with i ∈ [1; 4] be conﬁgurations of a depth-register
+y
+automaton B and let y, z ∈ (Γ ∪ ¯Γ)+ be descending words such that c1
+−→ c4. If
+img(η1) ⊆ (−∞; d1] and c1 ∼ c3, then img(η4) ∩ (d1; d2] = ∅.
+
+y
+−→ c2
+
+z−→ c3
+
+(cid:73) Lemma 28. Let B be a depth-register automaton with k states and ‘ registers, and let
+n ≥ k · (‘ + 1). For every conﬁguration c = (q, d, η) of the automaton B and every descending
+or ascending word x ∈ (Γ ∪ ¯Γ)+, if
+
+img(η) ∩ (cid:2)d + (cid:4)x3·n!(cid:5) ; d + (cid:6)x3·n!(cid:7)(cid:3) = ∅ ,
+
+then
+
+XX:18 Stackless
+
+1. c · xn! ∼ c · xn! · xn!; and
+2. c · xn! · xn! ≈bxn!c−kxn!k,dxn!e−kxn!k c · xn! · xn! · xn!.
+(cid:73) Lemma 29. For each regular language L, if EL is a stackless tree language, then L is
+HAR.
+
+Proof. Again, we prove the contrapositive. Suppose L ⊆ Γ∗ is not HAR. Then, its minimal
+automaton A admits states p, q, and r in the same SCC Y such that for some word u and
+some non-empty word t, we have r = p · u = q · u and p · t is accepting and q · t is non-accepting
+(in particular, p 6= q). Then, there exist v and w such that r · v = p and r · w = q. Finally,
+by minimality, all states are reachable from the initial state, so there exists a word s such
+that i · s = r. Because Y contains two diﬀerent states, it is a non-trivial SCC. Consequently,
+for each state p0 ∈ Y there exists a nonempty looping word; that is, a word w0 6= ε such
+that p0 · w0 = p0. By appending suitable looping words if necessary, we can assume that the
+words s, u, v, w are nonempty as well. Additionally, it will be convenient to assume that
+|u| ≥ |t|; this can be ensured by appending |t| copies of the appropriate looping word to u.
+The resulting fragment of the automaton A is shown in the top left corner of Figure 5. We
+have
+
+s(wu + vu)∗vt ⊆ L ,
+
+s(wu + vu)∗wt ⊆ Lc .
+
+Consider a depth-register automaton B over Γ ∪ Γ with k states and ‘ registers. Let
+n = k · (‘ + 1). We shall construct a fooling pair of trees by unravelling the fooling gadget.
+The trees are shown in Figure 5. The original tree R, is build from: (i) a tree R0 consisting
+of a single branch labelled by the word s, (ii) trees R1, . . . , R2·n!+1 that are isomorphic copies
+of the same tree, and (iii) a tree R2·n!+2 consisting of a single branch labelled by the word
+wt. Each branch of R is labelled by a word from s(wu + vu)∗wt ⊆ Lc, which means that
+R /∈ EL. The pumped tree R0 is obtained by inserting an additional segment labelled by
+(uv)n! in Rn!+1, just before the branching; we will write R0
+n!+1 for thus modiﬁed Rn!+1.
+The modiﬁcation introduces a branch labelled by a word from s(wu + vu)∗vt ⊆ L, which
+means that R0 ∈ EL. We will show that the automaton B cannot distinguish hRi from
+hR0i, by analyzing the respective runs in parallel. The crucial moments of the analysis will
+be conﬁgurations ci = (qi, di, ηi), c0
+i, η0
+i ), depicted (with the
+exception of c6) in brown in Figure 5: conﬁgurations to the left of edges are visited when
+going down and those to the right when going up.
+
+i), and c00
+
+i = (q00
+
+i = (q0
+
+i , d00
+
+i , η00
+
+i, d0
+
+Let x be the preﬁx of hR1i ending at the opening tag of the rightmost leaf of R1. Because
+|t| ≤ |u|, the rightmost branch of R1 is at least as long as both other branches, which implies
+that x is descending. Clearly, so is y = wu(vu)2·n! ∈ Γ+. Consider the following initial
+segments of the runs of B over hRi and hR0i:
+
+sxn!
+−−−→ c1
+
+yn!
+−−→ c2
+
+w−→ c3
+
+sxn!
+−−−→ c1
+
+yn!
+−−→ c2
+
+w−→ c3
+
+c0
+
+c0
+
+(uv)2·n!
+−−−−−→ c4
+(uv)3·n!
+−−−−−→ c0
+4
+
+u−→ c5
+
+yn!−1
+−−−→ c6
+
+y
+−→ c7 ,
+
+u−→ c0
+5
+
+yn!−1
+−−−→ c6
+
+y
+−→ c0
+
+7 .
+
+Let δ = |(uv)n!|. As all words over the arrows are descending, we have
+
+img(ηi) ⊆ [−∞; di] ,
+
+img(η0
+
+j) ⊆ [−∞; d0
+
+j] ,
+
+d0
+j = dj + δ
+
+(1)
+
+for all i ∈ [0; 7] and j ∈ [4; 7]. Condition (1) allows us to apply Lemma 28 to conﬁguration c3
+and the descending word uv, and conclude that c4 ≈1−δ,0 c0
+4. By (1), this can be strengthened
+to c4 ≈1−δ,∞ c0
+
+4. By Lemma 26, we get
+
+c7 ≈1−k(uv)n!u·yn!k,∞ c0
+
+7 .
+
+(2)
+
+Barloy, Murlak and Paperman
+
+XX:19
+
+c00
+13
+
+c0
+
+s
+
+(wu(vu)2·n!)n!
+
+p
+
+t
+
+v
+
+u
+
+i
+
+s
+
+r
+
+w u
+
+u(vu)2·n!
+
+w
+
+t
+
+u(vu)2·n!
+
+q
+
+(wu(vu)2·n!)n!
+
+(wu(vu)2·n!)n!
+
+wt
+
+(1)
+
+wu
+...
+
+c1
+
+c13
+
+c0
+
+s
+
+(wu(vu)2·n!)n!
+
+(wu(vu)2·n!)n!
+
+c2
+
+w
+
+c00
+c3
+12
+(uv)n!
+
+c0
+12
+
+w
+
+t
+
+u(vu)2·n!
+
+u(vu)2·n!
+
+(wu(vu)2·n!)n!
+
+(wu(vu)2·n!)n!
+
+wt
+
+(1)
+
+wu
+...
+
+c1
+
+(uv)2·n!
+c0
+4
+
+u
+
+c0
+5
+(wu(vu)2·n!)n!
+
+c0
+7
+wt
+
+(n! + 1)
+
+t
+
+(uv)2·n!
+
+c0
+11
+
+u
+
+(wu(vu)2·n!)n!
+
+wu
+c0
+8
+...
+
+c0
+9
+(wu(vu)2·n!)n!
+
+(wu(vu)2·n!)n!
+
+c2
+
+c3
+
+(uv)2·n!
+c4
+
+u
+
+c5
+
+w
+
+t
+
+c12
+
+(uv)2·n!
+c11
+
+u
+
+w
+
+t
+
+u(vu)2·n!
+
+(wu(vu)2·n!)n!
+
+(wu(vu)2·n!)n!
+
+u(vu)2·n!
+
+c7
+
+wt
+
+(n! + 1)
+
+wu
+c8
+...
+
+c9
+
+(wu(vu)2·n!)n!
+
+(wu(vu)2·n!)n!
+
+(wu(vu)2·n!)n!
+
+wt
+
+(2 · n! + 1)
+
+wu
+
+c0
+10
+
+wt
+
+w
+
+t
+
+u(vu)2·n!
+
+u(vu)2·n!
+
+(wu(vu)2·n!)n!
+
+(wu(vu)2·n!)n!
+
+wt
+
+(2 · n! + 1)
+
+wu
+
+c10
+
+wt
+
+Figure 5 Non-HAR gadget and fooling trees in Lemma 29.
+
+XX:20 Stackless
+
+Applying Lemma 28 to c2 and y, we get c2 ∼ c6. Hence, we can apply Lemma 27 to
+conﬁgurations c2, c5, c6, c7 and descending words y and yn!−1. Combining the result with (2),
+we get
+
+img(η7) ∩ (cid:0)d2; d5
+
+(cid:3) = ∅ ,
+
+img(η0
+
+7) ∩ (cid:0)d2; d0
+
+5
+
+(cid:3) = ∅ .
+
+Consequently, from (2) we can also conclude
+
+c7 ≈1−kyn!+1k,∞ c7 .
+
+Let y0 = wu(vu)3·n! and take x0 such that y2·n!+1 · x0 = x. Consider
+
+sxn!
+−−−→ c1
+
+sxn!
+−−−→ c1
+
+c0
+
+c0
+
+yn!·y·yn!
+−−−−−−→ c7
+yn!·y0·yn!
+−−−−−−→ c0
+7
+
+x0−→ c8
+
+xn!−1
+−−−→ c9
+
+x−→ c10 ,
+
+x0−→ c0
+8
+
+xn!−1
+−−−→ c0
+9
+
+x−→ c0
+
+10 .
+
+Note that condition (1) holds for all i, j ∈ [8; 10]. From (4) via Lemma 26 we get
+
+c10 ≈1−kyn!+1wuxn!k,∞ c0
+
+10 .
+
+(3)
+
+(4)
+
+(5)
+
+Applying Lemma 28 to conﬁguration c0 · s and the descending word x, we get c1 ∼ c9.
+Applying Lemma 27 to conﬁgurations c1, c8, c9, c10 and the descending words x and xn!, and
+combining the result with (5), we get
+
+img(η10) ∩ (d1; d8] = ∅ ,
+
+img(η0
+
+10) ∩ (d1; d0
+
+8] = ∅ .
+
+Hence, we can strengthen (5) to
+
+c10 ≈1−kxn!+1k,∞ c0
+
+10 .
+
+Let ¯x = ¯u ¯w¯y2·n!+1; that is, x¯x = hR1i. Consider
+
+(6)
+
+(7)
+
+c10
+
+wt¯t ¯w·¯xn!·¯u ¯w ¯yn!·¯u
+−−−−−−−−−−−→ c11
+
+c0
+10
+
+wt¯t ¯w·¯xn!·¯u ¯w ¯yn!·¯u
+−−−−−−−−−−−→ c0
+11
+
+(¯v ¯u)2·n!
+−−−−−→ c12
+(¯v ¯u)2·n!
+−−−−−→ c0
+12
+
+¯w·¯yn!·¯xn!·¯s
+−−−−−−−→ c13 ,
+(¯v ¯u)n!
+−−−−→ c00
+12
+
+¯w·¯yn!·¯xn!·¯s
+−−−−−−−→ c00
+
+13 .
+
+We have d0
+c12 ≈1−kwk,∞ c0
+we also have
+
+i = di + δ for i ∈ [10; 12] and d00
+
+12. As from (6) it follows that img(η12) ∩ (d1; d12) = img(η0
+
+i = di for i ∈ [12; 13]. By Lemma 26, we have
+12) = ∅,
+
+12) ∩ (d1; d0
+
+c12 ≈0,∞ c0
+
+12 .
+
+(8)
+
+Applying Lemma 28 to conﬁguration c0
+In combination with (8) this implies c12 ≈0,δ−1 c00
+12. By Lemma 26, this implies c13 ∼ c00
+c12 ≈−∞,δ−1 c00
+
+12. Because d12 = d00
+13.
+
+11 and the ascending word ¯v¯u, we get c0
+
+12 ≈0,δ−1 c00
+12.
+12, it follows that
+(cid:74)
+
+4 Discussion
+
+4.1 Tree languages deﬁned by DTDs
+
+Our characterization results shed some light on the registerlessness of DTDs, studied in [25]
+(called recognizability there). A DTD D over Γ consists of an initial symbol a0 ∈ Γ and, for
+each a ∈ Γ, a production of the form a → La where La is a regular language over Γ (typically
+
+Barloy, Murlak and Paperman
+
+XX:21
+
+b
+
+b
+
+b
+
+a
+
+a
+
+a
+
+a
+
+a
+
+a
+b
+
+˜a
+
+ac
+
+c
+
+0
+
+b, c a
+
+1
+
+c
+
+2
+
+a
+
+b
+
+a, b, c
+
+(a) Original automaton.
+
+(b) Minimal automaton.
+
+Figure 6 Automata corresponding to the specialized DTD a → (a + b + ˜a)∗, b → (a + b + ˜a)∗,
+
+˜a → c∗, c → (a + b)∗ with alphabet projection a 7→ a, ˜a 7→ a, b 7→ b, c 7→ c.
+
+represented as a regular expression). It deﬁnes the set of trees T over Γ that have a0 in the
+root and for each a-labelled node v in T , the labels of v’s children read from left to right
+form a word in La. A specialized DTD over Γ consists of a DTD D0 over Γ0 and an alphabet
+projection π : Γ0 → Γ; the language it deﬁnes is the projection of the language deﬁned by D0
+to the alphabet Γ.
+
+Languages of the form AL capture (resp. capture precisely) all tree languages deﬁnable
+
+by DTDs (resp. specialized DTDs) using only productions of the forms
+
+a → (b1 + · · · + bn)∗ ,
+
+a → (b1 + · · · + bn)+ .
+
+This is a severely restricted, yet non-trivial and practically relevant, special case of the setting
+considered in [25]. Let us refer to such DTDs as path DTDs. A path DTD is almost an
+automaton recognizing allowed paths: use (specialized) symbols as states, add a transition
+from a to each bi over symbol bi (or its projection π(bi) in the case of specialized DTDs), and
+let a be accepting if the production uses ∗, and non-accepting if it uses + (see Figure 6a).
+It can be shown that under restriction to path DTDs, the ﬁrst necessary condition for
+registerlessness proposed in [25] reduces to the assumption that the corresponding automaton
+is HAR, and the second one amounts to A-ﬂatness. Segouﬁn and Vianu show that the ﬁrst
+necessary condition is also suﬃcient under the restriction to fully-recursive DTDs, which
+correspond to automata that have only two non-trivial SCCs: one contains the initial state,
+and the other is an all-rejecting sink. For such automata, HAR is equivalent to A-ﬂat, which
+makes their result a special case of Theorem 15 (2) (in the limited special case of path DTDs).
+Segouﬁn and Vianu also conjecture, that the two necessary conditions together are suﬃcient
+for all DTDs. Theorem 15 (2) conﬁrms this conjecture in the special case of path DTDs. Let
+us remark that A-ﬂatness works also for languages deﬁned by specialized path DTDs, but the
+corresponding automaton must be determinized and minimized before the criterion is applied,
+as witnessed by the specialized DTD in Figure 6 which gives an A-ﬂat non-deterministic
+automaton, which is not A-ﬂat any more after determinizing and minimizing.
+
+4.2
+
+A diﬀerent encoding of trees
+
+An alternative way to serialize tree-structured data, used for instance in JSON, is the term
+encoding, in which the information about the label is included only in opening tags. For
+instance, instead of aba¯aa¯a¯bc¯c¯a we would have a{b{a{}a{}}c{}}, where a{ , b{ , c{ are
+opening tags, and } is the universal closing tag. Streaming processing under this encoding is
+
+XX:22 Stackless
+
+harder, but analyzing it is easier. An eﬀective characterization of regular tree languages that
+are registerless under the term encoding is given in [1].
+
+Our treatment can be easily adapted to the term encoding by adjusting the deﬁnition of
+when two states meet: we say that states p and q blindly meet in state r if there exist words
+u1, u2 ∈ Γ∗ such that |u1| = |u2| and p · u1 = q · u2 = r. By replacing ‘meet’ with ‘blindly
+meet’ in Deﬁnitions 17, 19 and 22, we get the deﬁnitions of the syntactic classes of blindly
+almost-reversible, blindly HAR, blindly A-ﬂat, and blindly E-ﬂat word languages. Theorems 14
+and 15 then hold for the term encoding with all syntactic classes of word languages replaced
+by their blind analogues (see Appendix G). Based on this, it can be checked by direct
+examination of the automata in Figure 3 that also under the term encoding, the ﬁrst RPQ
+from Example 12 is registerless, the following two are stackless but not registerless, and
+the last one is not stackless. Nevertheless, ‘blind’ classes are much more restricted than
+their originals: all R-trivial languages are blindly HAR, but the possibilities of backtracking
+inside an SCC are very limited. For example, the minimal automaton shown in Figure 2 is
+reversible, but not blindly-HAR; this means that the language (b∗a b∗a b∗)∗ this automaton
+recognizes is registerless under the markup encoding, but not even stackless under the term
+encoding. This is the cost of succinctness.
+
+4.3 Outlook
+
+In this work we have proposed an intermediate model for processing streamed trees, increasing
+the expressive power of ﬁnite automata considerably while sparing us the maintenance of the
+stack. We have eﬀectively characterized unary RPQs that can be realized in this model, and
+those that can be realized by ﬁnite automata. The latter leads to a partial solution of the
+weak validation problem posed by Segouﬁn and Vianu [25].
+
+The weak validation problem remains the most intriguing theoretical challenge in the
+area. Other salient problems are to characterize (eﬀectively) stackless tree languages among
+regular ones and, conversely, regular tree languages among stackless ones. The former is more
+relevant for query and schema processing, but the latter may provide some useful insights as
+well.
+
+Solving these problems for all regular tree languages might be very hard, but for more
+restricted, yet practically relevant, subclasses it might be easier. For instance, it would be
+very useful to be able to decide if a given XPath expression is stackless or registerless (both as
+a boolean query and as a unary query). Examples 7, 9 and 10 suggest that stackless XPath
+expressions would have to use child, next-sibling, following-sibling, and negation extremely
+cautiously, but this might be alleviated by including schema information into the setting.
+
+Applying our results on the term encoding to JSON would also involve incorporating
+rudimentary schema information, as in JSON siblings either have diﬀerent labels, or have no
+labels at all.
+
+Finally, a major question is how to vectorize. A ﬁrst step would be to uncover the local
+parallelism of pushdown and depth-register automata, in the spirit of [15]. Closing the
+distance to actual applications will require replacing circuits with a more faithful abstraction
+of the capabilities of CPUs.
+
+References
+
+1 Vince Bárány, Christof Löding, and Olivier Serre. Regularity problems for visibly pushdown
+languages. In Proc. STACS 2006, pages 420–431. Springer, 2006. doi:10.1007/11672142\_34.
+2 David A. Mix Barrington and James C. Corbett. On the relative complexity of some languages
+in NC1. Inf. Process. Lett., 32(5):251–256, 1989. doi:10.1016/0020-0190(89)90052-5.
+
+Barloy, Murlak and Paperman
+
+XX:23
+
+3 Angela Bonifati, George H. L. Fletcher, Hannes Voigt, and Nikolay Yakovets. Querying Graphs.
+
+Morgan & Claypool Publishers, 2018. doi:10.2200/S00873ED1V01Y201808DTM051.
+
+4 Robert D. Cameron, Ehsan Amiri, Kenneth S. Herdy, Dan Lin, Thomas C. Shermer, and Fred
+Popowich. Parallel scanning with bitstream addition: An XML case study. In Proc. Euro-Par
+2011, pages 2–13. Springer, 2011. doi:10.1007/978-3-642-23397-5\_2.
+Cristiana Chitic and Daniela Rosu. On validation of XML streams using ﬁnite state machines.
+In Proc. WebDB 2004, pages 85–90. ACM, 2004. doi:10.1145/1017074.1017096.
+
+5
+
+7
+
+6 Denis Debarbieux, Olivier Gauwin, Joachim Niehren, Tom Sebastian, and Mohamed Zergaoui.
+Early nested word automata for XPath query answering on XML streams. Theor. Comput.
+Sci., 578:100–125, 2015. doi:10.1016/j.tcs.2015.01.017.
+Inf. Process. Lett.,
+Input-driven Languages Are in Log N Depth.
+Patrick Dymond.
+26(5):247–250, January 1988. URL: http://dx.doi.org/10.1016/0020-0190(88)90148-2,
+doi:10.1016/0020-0190(88)90148-2.
+Evangelos Georganas, Sasikanth Avancha, Kunal Banerjee, Dhiraj D. Kalamkar, Greg Henry,
+Hans Pabst, and Alexander Heinecke. Anatomy of high-performance deep learning convolutions
+on SIMD architectures. In Proc. SC 2018, pages 66:1–66:12. IEEE / ACM, 2018. URL:
+http://dl.acm.org/citation.cfm?id=3291744.
+
+8
+
+9 Alejandro Grez, Cristian Riveros, and Martín Ugarte. A formal framework for complex event
+processing. In Proc. ICDT 2019, pages 5:1–5:18. Schloss Dagstuhl - Leibniz-Zentrum für
+Informatik, 2019. doi:10.4230/LIPIcs.ICDT.2019.5.
+Sascha Grunert and Daniel Schmidt.
+2017.
+https://rust-leipzig.github.io/regex/2017/03/28/comparison-of-regex-engines/. URL: https:
+//rust-leipzig.github.io/regex/2017/03/28/comparison-of-regex-engines/.
+
+A comparison of
+
+regex engines,
+
+10
+
+11 Ashish Kumar Gupta and Dan Suciu. Stream processing of XPath queries with predicates. In
+
+Proc. SIGMOD 2003, pages 419–430. ACM, 2003.
+
+12 Yeye He, Siddharth Barman, and Jeﬀrey F. Naughton. On load shedding in complex event
+processing. In Proc. ICDT 2014, pages 213–224. OpenProceedings.org, 2014. doi:10.5441/
+002/icdt.2014.23.
+Eryk Kopczynski. Invisible pushdown languages. In Proc. LICS 2016, pages 867–872. ACM,
+2016. doi:10.1145/2933575.2933579.
+
+13
+
+14 Geoﬀ Langdale and Daniel Lemire. Parsing gigabytes of JSON per second. VLDB J.,
+
+15
+
+28(6):941–960, 2019. doi:10.1007/s00778-019-00578-5.
+Filip Murlak, Charles Paperman, and Michal Pilipczuk. Schema validation via streaming
+circuits. In Proc. PODS 2016, pages 237–249. ACM, 2016. doi:10.1145/2902251.2902299.
+16 Damian Niwinski and Igor Walukiewicz. A gap property of deterministic tree languages. Theor.
+
+Comput. Sci., 303(1):215–231, 2003. doi:10.1016/S0304-3975(02)00452-8.
+
+17 Dan Olteanu. SPEX: streamed and progressive evaluation of XPath. IEEE Trans. Knowl.
+
+18
+
+19
+
+20
+21
+
+Data Eng., 19(7):934–949, 2007. doi:10.1109/TKDE.2007.1063.
+Shoumik Palkar, Firas Abuzaid, Peter Bailis, and Matei Zaharia. Filter before you parse:
+Faster analytics on raw data with sparser. Proc. VLDB Endow., 11(11):1576–1589, 2018.
+Jean-Eric Pin. Proprietes syntactiques du produit non ambigu. In Proc. ICALP 1980, pages
+483–499. Springer, 1980. doi:10.1007/3-540-10003-2\_93.
+Jean-Eric Pin. On reversible automata. In Proc. LATIN 1992, pages 401–416. Springer, 1992.
+Jean Eric Pin and Raymond E. Miller. Varieties Of Formal Languages. Plenum Publishing
+Co., 1986.
+
+22 Orestis Polychroniou, Arun Raghavan, and Kenneth A. Ross. Rethinking SIMD vectorization
+In Proc. SIGMOD 2015, pages 1493–1508. ACM, 2015. doi:
+
+for in-memory databases.
+10.1145/2723372.2747645.
+
+23 Gang Ren, Peng Wu, and David A. Padua. An empirical study on the vectorization of
+In Proc. IPDPS 2005. IEEE, 2005.
+
+multimedia applications for multimedia extensions.
+doi:10.1109/IPDPS.2005.94.
+
+XX:24 Stackless
+
+24
+
+25
+
+Luc Segouﬁn and Cristina Sirangelo. Constant-memory validation of streaming XML documents
+against DTDs. In Proc. ICDT 2007, pages 299–313. Springer, 2007. doi:10.1007/11965893\
+_21.
+Luc Segouﬁn and Victor Vianu. Validating streaming XML documents. In Proc. PODS 2002,
+pages 53–64. ACM, 2002.
+
+26 Dan Suciu. From searching text to querying XML streams. J. Discrete Algorithms, 2(1):17–32,
+
+2004.
+
+28
+
+27 Vincent Vanhoucke, Andrew Senior, and Mark Z. Mao. Improving the speed of neural networks
+on CPUs, 2011. Deep Learning and Unsupervised Feature Learning Workshop @ NIPS 2011.
+Burchard von Braunmühl and Rutger Verbeek. Input-driven languages are recognized in log n
+space. In Proc. FCT 1983, pages 40–51. Springer, 1983. doi:10.1007/3-540-12689-9\_92.
+29 Xiang Wang, Yang Hong, Harry Chang, KyoungSoo Park, Geoﬀ Langdale, Jiayu Hu, and
+Heqing Zhu. Hyperscan: A fast multi-pattern regex matcher for modern CPUs. In Proc.
+NSDI 2019, pages 631–648. USENIX Association, 2019. URL: https://www.usenix.org/
+conference/nsdi19/presentation/wang-xiang.
+
+30 Haopeng Zhang, Yanlei Diao, and Neil Immerman. On complexity and optimization of
+expensive queries in complex event processing. In Proc. SIGMOD 2014, pages 217–228. ACM,
+2014. doi:10.1145/2588555.2593671.
+
+31 Yichun
+
+Zhang.
+
+Regex
+
+engine matching
+
+speed
+
+benchmark,
+
+2015.
+
+32
+
+http://openresty.org/misc/re/bench/. URL: http://openresty.org/misc/re/bench/.
+Jingren Zhou and Kenneth A. Ross. Implementing database operations using SIMD instructions.
+In Proc. SIGMOD 2002, pages 145–156. ACM, 2002. doi:10.1145/564691.564709.
+
+Barloy, Murlak and Paperman
+
+XX:25
+
+A
+
+Proof of Proposition 3
+
+Let us recall the statement.
+
+(cid:73) Proposition 30. Restricted depth-register automata recognize regular tree languages.
+
+Proof. Consider a restricted depth-register automaton
+
+A = (Γ, Q, qinit, F, Ξ, δ) .
+
+The run of A on a tree T can be represented by means of an auxiliary labelling of the nodes
+of T with elements of
+
+(cid:0)2Ξ × Q(cid:1) × 2Ξ × (cid:0)2Ξ × Q(cid:1)
+
+where for each node v in T , if v gets auxiliary label
+
+(cid:0)(X, p), Y, (Z, q)(cid:1)
+
+then
+
+upon reading the opening tag of v, A loads the current depth to registers in X and moves
+to state p;
+when processing the inﬁx of hT i delimited (exclusively) by the opening and closing tags
+of v, A loads some current depth to exactly those registers that belong to Y ;
+upon reading the closing tag of v, A loads the current depth to registers in Z and moves
+to state q.
+
+In what follows, we shall refer to q as the exit state of v.
+
+The correctness of the auxiliary labelling can be equivalently expressed in a more local
+way, relying on the transition function of A. Suppose that a node v has label a in T and
+auxiliary label (cid:0)(X, p), Y, (Z, q)(cid:1), and its children v1, v2, . . . , vn have labels a1, a2, . . . , an in
+T and auxiliary labels (cid:0)(Xi, pi), Yi, (Zi, qi)(cid:1) for i ∈ {1, 2, . . . , n}. Then,
+
+Y =
+
+n
+[
+
+i=1
+
+Xi ∪ Yi ∪ Zi
+
+and for all i ∈ {1, 2, . . . , n},
+
+(Xi, pi) = δ(p0
+(Zi, qi) = δ(q0
+
+i, ai, Ξ, ∅) ,
+i, ai, Ξ \ (Xi ∪ Yi), X ∪ Z1 ∪ . . . Zi−1 ∪ Xi ∪ Yi) ,
+
+where
+p0
+1 = p and p0
+i = pi if vi is a leaf and otherwise q0
+q0
+If v is the root of T , it must also hold that
+
+i = qi−1 for i ∈ {2, . . . , n};
+
+i is the exit state of the last child of vi.
+
+(X, p) = δ(qinit, a, Ξ, ∅) and (Z, q) = δ(q0, a, Ξ \ Y, Ξ) ,
+
+where q0 = p if v is a leaf and otherwise q0 is the exist state of the last child of v (that is,
+q0 = qn). The rephrased condition is equivalent to the original one precisely because in a
+restricted depth-register automaton we have the guarantee that Xi ∪ Yi ⊆ Zi.
+
+To show that the tree language recognized by A is regular it suﬃces to observe that it
+can be recognized by a nondeterministic tree automaton that guess an auxiliary labelling of
+the input tree, checks its correctness by verifying the rephrased condition, and accepts if the
+(cid:74)
+second state in the auxiliary label of the root belongs to F .
+
+XX:26 Stackless
+
+B
+
+Proof of Proposition 11
+
+Let us recall the statement of the proposition.
+
+(cid:73) Proposition 31. The class of stackless queries invariant under sibling order is contained
+in the class of RPQs.
+
+Proof. Consider a query Q invariant under sibling order, realized by a depth-register au-
+tomaton B. It follows immediately, that Q is fully described by the answers it gives on the
+leftmost branch of every tree. But these answers are determined by the word on the path
+from the root to the current node. Hence, Q is a path query and it is fully described by its
+behaviour on single-branch trees. Consider the run of B on the preﬁx of the encoding of
+such a tree, consisting of all opening tags. In such a run, the current depth is always strictly
+greater than all values stored in the registers, so the registers can be eliminated from the
+automaton. Over single-branch trees, the resulting ﬁnite automaton over Γ ∪ ¯Γ selects the
+same nodes as B. By restricting the alphabet to Γ, we obtain an automaton recognizing
+(cid:74)
+L.
+
+C
+
+Proof of Proposition 13
+
+We recall the formulation of the proposition.
+
+(cid:73) Proposition 32. It is decidable if the query realized by a given restricted depth-register
+automaton is an RPQ.
+
+Proof. By Proposition 11, a stackless query is an RPQ iﬀ it is a path query. We phrase the
+argument for the latter property.
+
+A marked tree over Γ is a tree over Γ × {0, 1}; marked nodes in such a tree are those
+with labels from Γ × {1}. Let us ﬁx a unary query Q. For a tree T over Γ we let TQ be the
+marked tree over Γ obtained from T by marking nodes from Q(T ). Let MQ be the set of
+all such TQ with T ranging over all trees over Γ. The query Q is a path query if and only
+if there exists a language L over Γ × {0, 1} such that MQ = ML, where ML is the set of
+marked trees over Γ where each direct path from the root to a marked node is labelled with
+a word from L. Moreover, if Q is a path query, then we can take for L the language LQ
+obtained by restricting MQ to trees that consist of a single branch with marked leaf. Hence,
+Q is a path query if and only if MQ = MLQ.
+
+It is easy to turn this characterization into an algorithm. Suppose that we are given a
+restricted depth-register automaton A and let Q be the query it realizes. Based on (the
+proof of) Proposition 3, it is easy to construct a tree automaton B recognizing MQ. Next, we
+intersect B with a tree automaton recognizing single-branch trees with marked leaf, interpret
+the result as a word automaton, and thus obtain an automaton C that recognizes the language
+LQ. Finally, we easily turn C into a tree automaton D recognizing MLQ . Thus, testing if
+the query realized by A is a path query reduces to testing if the tree automata B and D are
+(cid:74)
+equivalent, which is well known to be decidable.
+
+D Proof of Lemma 23
+
+Let us recall the statement of the lemma.
+
+(cid:73) Lemma 33. Let L ⊆ Γ∗ be a regular language.
+
+Barloy, Murlak and Paperman
+
+XX:27
+
+1. L is A-ﬂat iﬀ Lc is E-ﬂat.
+2. L almost-reversible iﬀ it is both A-ﬂat and E-ﬂat.
+
+Proof. Let A be the minimal automaton of L. Then Ac, obtained from A by swapping
+accepting and rejecting states, is the minimal automaton of Lc. A state q is acceptive in A
+iﬀ it is rejective in Ac. It follows that A is A-ﬂat iﬀ Ac is E-ﬂat.
+
+For the second part, observe that states p and q in Deﬁnition 22 are internal, so every
+almost-reversible automaton is A-ﬂat and E-ﬂat. For the converse, consider a minimal
+automaton A that is A-ﬂat and E-ﬂat. We begin with an auxiliary claim.
+
+We call an SCC X a sink if for each q ∈ X and each u ∈ Γ∗, q · u ∈ X. We claim that if
+a sink SCC X is reachable from an internal state p, then X contains a state q that is almost
+equivalent to p. Indeed, suppose that p · w ∈ X. Because X is a sink, p · wn ∈ X for all
+n > 0. Consequently, there exist n, k > 0 such that p · wn = p · wn · wk. Moving n positions
+backwards in the cyclic list of states p · wn, p · wn+1, . . . , p · wn+k−1, starting from p · wn, we
+ﬁnd a state q = p · wn+k−n mod k ∈ X that meets with p. Because X is a sink, p and q can
+only meet in some r ∈ X. But then p and q also meet in q. Because q is either rejective or
+acceptive, and A is both E-ﬂat and A-ﬂat, it follows that p and q are almost equivalent.
+
+To see that A is almost-reversible, take two internal states p1 and p2 that meet. Then,
+p1 and p2 meet in some sink SCC X. Consequently, there exists a non-empty word w and
+state r ∈ X such that p1 · w = p2 · w = r. By the auxiliary claim, X contains states q1 and
+q2 that are almost equivalent to p1 and p2, respectively. By Lemma 16 and the minimality
+of A, we get q1 · w = p1 · w = r = p2 · w = q2 · w; that is, the states q1, q2 ∈ X meet in
+X. Consequently, q1 meets with q2 in q2, and because q1 is obviously internal, it follows by
+E-ﬂatness or A-ﬂatness that q1 and q2 are almost equivalent. It follows that p1 and p2 are
+(cid:74)
+almost equivalent, too.
+
+E
+
+Proof of Lemma 24
+
+Let us recall the statement of the lemma.
+
+(cid:73) Lemma 34. If L is an E-ﬂat language, then EL is a registerless tree language.
+
+Proof. Let A be the minimal automaton of L. We ﬁrst construct an automaton B simulating
+A in a certain precise sense, and then we turn B into an automaton recognizing EL.
+
+Like in the simulation of almost-reversible automata, the high-level idea is to maintain
+the state of A after processing bw up to almost equivalence, except that if at any point the
+maintained state becomes non-rejective, the simulating automaton moves to an all-accepting
+sink state >. But because the internal structure of E-ﬂat automata is much richer then that
+of almost-reversible ones, the simulating automaton B needs more information.
+
+After reading a preﬁx w of the encoding of the input tree, the simulating automaton B
+will store a synopsis of the run of A on bw. The goal of the synopsis is to list the transitions
+that moved the run from one SCC of A to the next one. However, because the automaton A
+is not reversible, taking the transitions backwards when processing closing tags will introduce
+certain ambiguity into the stored transitions. Namely, the origins of the transitions will be
+split states, deﬁned as pairs (p, q) such that q is rejective and either p = q or p is internal and
+meets with q in q. E-ﬂatness guarantees that for each split state (p, q), the states p and q are
+almost equivalent. By minimality, transitions from split states have unambiguous targets.
+
+A split transition is a tuple (p, q, a, r) such that (p, q) is a split state and p · a = q · a = r.
+
+A synopsis for A is an alternating sequence of state triples and letters, written as
+
+(r0, p0, q0) a1−→ (r1, p1, q1) a2−→ · · · a‘−→ (r‘, p‘, q‘) ,
+
+(9)
+
+XX:28 Stackless
+
+such that r0 is the initial state of A, each (pi, qi, ai+1, ri+1) is a split transition in A, (p‘, q‘)
+is a split state in A, and
+
+for each i < ‘, the states qi and ri+1 are in diﬀerent SCCs;
+for each i ≤ ‘, qi belongs to the SCC of ri and either pi belongs to the SCC of ri or i > 0
+and pi = pi−1 = qi−1.
+
+Observe that the states qi represent a chain of diﬀerent SCCs, so ‘ + 1 is bounded by the
+depth of the DAG of SCCs of A.
+
+The empty word ε is compatible only with synopses (r0, p0, q0) with r0 ∈ {p0, q0}. For
+u ∈ Γ∗ and a ∈ Γ, the word ua is compatible with a synopsis σ of the form (9) if r0·ua ∈ {p‘, q‘}
+and one of the following holds:
+(a) r0 · u is in the SCC of r0 · ua, and u is compatible with the synopsis obtained from σ by
+
+replacing (r‘, p‘, q‘) with (r‘, r0 · u, r0 · u);
+
+(b) ‘ > 0, r0 · u ∈ {p‘−1, q‘−1}, a = a‘, and u is compatible with the synopsis obtained from
+
+σ by removing the suﬃx a‘−→ (r‘, p‘, q‘);
+
+(c) ‘ > 0, r0 · ua = p‘ = p‘−1 = q‘−1, and ua is compatible with the synopsis obtained from
+
+σ by removing the suﬃx a‘−→ (r‘, p‘, q‘).
+
+Note that if some u is compatible with σ and r0 · u = p‘, then u is compatible with every
+synopsis obtained from σ by replacing q‘ with some other state; similarly with p‘ and q‘
+swapped.
+
+The states of B include all synopses for A and two sink states: all-accepting > and
+all-rejecting ⊥. The simulation invariant is that after processing a proper preﬁx w of the
+encoding of the input tree, either B is in the state > and r0 · bv is non-rejective for some preﬁx
+v of w, or B is in a synopsis state σ and bw is compatible with σ and if the last symbol of w
+is an opening tag then p‘ = q‘.
+
+Let r0 be the initial state of A. If r0 is rejective, the initial state of B is (r0, r0, r0);
+otherwise, it is >. The invariant clearly holds before the ﬁrst tag is processed. Let us see
+how to deﬁne transitions from a synopsis state σ of the form (9) to propagate the invariant.
+Suppose that an opening tag a is read and let s = p‘ · a = q‘ · a. If s is not rejective, move
+to >. If s is rejective and belongs to the SCC of q‘, continue with (r‘, p‘, q‘) replaced with
+(r‘, s, s) in σ. If s is rejective but does not belong to the SCC of q‘, continue with a−→ (s, s, s)
+appended to σ. The invariant propagates.
+
+Suppose a closing tag ¯a is read. If p‘ is not internal, then p‘ = q‘ = r0, which is only
+possible if σ = (r0, r0, r0). The automaton B then moves to ⊥. Assume that the invariant
+holds before ¯a is processed. Then, r0 · ¯w = r0. Because r0 is not internal, it follows that w is
+empty. Hence, w¯a = ¯a, which is not a preﬁx of the encoding of any tree, and the state of B
+after processing w¯a does not matter. If p‘ is internal, we consider four cases depending on
+whether p‘ and q‘ are in the same SCC of A, and whether the shape of the synopsis allows
+backtracking via a transition that originates outside of the SCC of q‘.
+
+Case A: p‘ and q‘ are in the same SCC X, and either r‘ /∈ {p‘, q‘} or a 6= a‘ or p‘−1 is
+
+not internal; that is, we can only take (backward) transitions within X. Consider
+
+P = (cid:8)p ∈ X (cid:12)
+
+(cid:12) p · a ∈ {p‘, q‘}(cid:9) .
+
+Because X contains the internal state p‘ and the rejective state q‘, all states in X are internal
+and rejective. The same holds for P ⊆ X. Pick any two p, q ∈ P . Because p‘ and q‘ meet
+inside X, so do p and q. It follows that p and q meet in q. Hence, (p, q) is a split state, and
+p and q are almost equivalent. In a minimal automaton there can be at most two diﬀerent
+almost equivalent states, so |P | ≤ 2. If P = ∅, then B moves to ⊥. Otherwise, P = {p0, q0}
+for some p0 and q0, and B continues, replacing (r‘, p‘, q‘) with (r‘, p0, q0). Suppose that the
+
+Barloy, Murlak and Paperman
+
+XX:29
+
+invariant holds before ¯a is processed. If it holds by (a), then r0 · cw¯a ∈ P = {p0, q0} and cw¯a is
+compatible with the synopsis obtained from σ by replacing (r‘, p‘, q‘) with (r‘, r0 · cw¯a, r0 · cw¯a).
+Suppose that the invariant holds by (b). This implies that r‘ ∈ {p‘, q‘} and a = a‘, so it
+must be the case that p‘ is not internal. Then q‘ is equal to p‘, so not internal either. By (b),
+r0 · cw¯a ∈ {p‘−1, q‘−1}, so it is non-internal too. Consequently, cw¯a is the empty word, which
+is possible only if w¯a is the complete encoding of the input tree. But then the invariant is
+not required to hold. Finally, the invariant cannot hold by (c), because it would imply that
+q‘−1 and q‘ are in the same SCC, which is forbidden by the deﬁnition of synopsis.
+
+Case B: p‘ and q‘ are in the same SCC X, and also r‘ ∈ {p‘, q‘}, a = a‘, and p‘−1 is
+internal; that is, we can also take (backward) transitions that leave X. Note that this is
+possible only if ‘ > 0. Consider again the set P ⊆ X introduced above. If P = ∅, then
+B continues, removing the suﬃx a‘−→ (r‘, p‘, q‘) from the synopsis. In this case, only the
+condition (b) of the invariant might hold before processing ¯a, so cw¯a is compatible with
+the modiﬁed synopsis, and the invariant propagates. Assume that P is nonempty. Let
+p0 ∈ {p‘−1, q‘−1} and q0 ∈ P . We know that p0 · a and q0 · a belong to {p‘, q‘}, and that p‘
+and q‘ meet in X, so we also have that p0 and q0 meet in X. Because q0 ∈ P ⊆ X, it follows
+that p0 and q0 meet in q0. As p‘−1 is assumed to be internal, so is q‘−1, and consequently
+also p0. The state q0 is rejective because all states in P are. It follows that (p0, q0) is a split
+state, so p0 and q0 are almost equivalent. Because p0 ∈ {p‘−1, q‘−1} ⊆ X c and q0 ∈ P ⊆ X,
+we conclude that p0 6= q0. Using again the fact that there are at most two diﬀerent almost
+equivalent states in every minimal automaton, we get that p0 = p‘−1 = q‘−1 and {q0} = P .
+The automaton B continues, replacing (r‘, p‘, q‘) with (r‘, p0, q0) in the synopsis σ. If the
+invariant holds before processing ¯a, then either (a) or (b) holds. If (a) holds, then r0 · cw¯a = q0,
+and the invariant propagates like before. If (b) holds, then r0 · cw¯a = p0 = p‘−1 = q‘−1, and
+after processing ¯a, (c) will hold.
+
+Case C: q‘ is in SCC X but p‘ /∈ X, and either r‘ /∈ {p‘, q‘} or a 6= a‘. We then have
+p‘ = p‘−1 = q‘−1. Suppose p · a = p‘ for some internal p and q · a = q‘ for some q ∈ X. Then
+it easily follows that p meets with q in q, and so p and q are almost equivalent. Consequently,
+p · a = p‘ and q · a = q‘ are equal, which is impossible because p‘ /∈ X. Thus, p and q cannot
+both exist.
+
+If p does not exist, B moves to the state it would take from the synopsis σ0 obtained from
+the current one by replacing (r‘, p‘, q‘) with (r‘, q‘, q‘) in σ. Note that σ0 falls into Case A.
+Suppose that the invariant holds before processing ¯a. If it is by (a), then r0 · bw = q‘, so bw will
+also be compatible with σ0 and the invariant will propagate as shown in Case A. The invariant
+cannot hold by (b), because this would imply that r‘ ∈ {p‘, q‘} and a = a‘, and we have
+assumed the contrary. Suppose that the invariant holds by (c). Then (r0 · cw¯a) · a = r0 · bw = p‘.
+But, as we have shown, there are no internal states p such that p · a = p‘. Hence, r0 · cw¯a is a
+noninternal state. This is possible only if cw¯a is empty. Then, w¯a is the whole encoding of
+the input tree, and the invariant is not required to hold any more.
+
+If q does not exist, the state is chosen similarly, but this time we obtain σ0 by removing
+the suﬃx a‘−→ (r‘, p‘, q‘) from σ. Note that σ0 falls into Case A or Case B: p‘−1 is internal
+because it is equal to p‘, and p‘−1 and q‘−1 are in the same SCC because they are equal.
+If the invariant holds before processing ¯a, then it must be by (c). Then, bw will also be
+compatible with σ0, and the invariant will propagate as shown in Cases A and B.
+
+Case D: q‘ is in SCC X but p‘ /∈ X, and both r‘ ∈ {p‘, q‘} and a = a‘. It then follows
+that p‘ = p‘−1 = q‘−1 and r‘ = q‘. Consequently, p‘ · a = q‘ and, because p‘ and q‘ are
+almost equivalent, q‘ · a = q‘. Suppose that p · a = p‘ for some internal state p. Then, we
+have p · aa = q‘ · aa = q‘; that is, p meets with q‘ in q‘. Since q‘ is rejective, it follows
+
+XX:30 Stackless
+
+that p and q‘ are almost equivalent. But that means that p‘ = p · a = q‘ · a = q‘, which
+is impossible because p‘ /∈ X. Hence, no such p exists. Suppose that q · a = q‘ for some
+q ∈ X \ {q‘}. Then q · a = q‘ · a = q‘ and it follows that q is almost equivalent to q‘. But this
+is impossible because together with p‘ /∈ X this would give three diﬀerent almost equivalent
+states. Hence, such q also does not exist. We let B continue with the same synopsis. Suppose
+that the invariant holds before processing ¯a. If it is by (a), then r0 · cw¯a = q‘, because it
+is the only state in X from which the transition over a leads to {p‘, q‘}, and the invariant
+propagates. If the invariant holds by (b), then r0 · cw¯a ∈ {p‘−1, q‘−1}, but p‘−1 = q‘−1 = p‘,
+so for cw¯a and σ we will have (c). Finally, if the invariant holds by (c), it follows that w¯a is
+the whole encoding of the input tree, like in the ﬁrst subcase of Case C, and the invariant is
+not required to hold any more.
+
+This completes the construction of B and the proof that every run of B over the encoding
+of a tree T satisﬁes the invariant. Directly from the invariant it follows that after reading a
+preﬁx wa of hT i for a opening tag a, we have p‘ = q‘ = r0 · cwa. To recognize EL it suﬃces
+to enrich the synopsis states of B with the information about the most recently read tag,
+and move directly to > whenever a closing tag ¯a is read in a state storing the opening tag
+a and a synopsis with p‘ = q‘ accepting in A. The resulting automaton B0 enters > in the
+situation described above or if it encounters a preﬁx v of the encoding such that r0 · v is not
+rejective. In the ﬁrst case, the automaton B0 has detected a leaf such that the branch leading
+to it is labelled by a word from L. In the second case, B0 has detected a node such that each
+(cid:74)
+branch containing this node is labelled by a word from L. Correctness of B0 follows.
+
+F
+
+Proofs of lemmas from Section 3.4
+
+We recall the formulations of the lemmas.
+
+(cid:73) Lemma 35. Suppose that c1 ≈i,j c2. For every word w such that i ≤ bwc ≤ dwe ≤ j, it
+holds that c1 · w ≈i−kwk,j−kwk c2 · w.
+
+Proof. It suﬃces to show the lemma for the case when w is a single letter; the general claim
+follows by straightforward induction on the length of w. Suppose that w = a ∈ Γ. Then,
+bwc = dwe = 1. Because c1 ≈i,j c2 and i ≤ 1 ≤ j, it follows the same transition over a will
+be taken from c1 and c2. After the transition is taken, the absolute thresholds between the
+three kinds of behaviour of registers listed in the deﬁnition of ≈ do not change, but because
+the current depth increases by one, the relative thresholds have to be adjusted. This gives
+(cid:74)
+precisely c1 · a ≈i−1,j−1 c2 · a. For w = ¯a the argument is entirely analogous.
+
+(cid:73) Lemma 36. Let ci = (qi, di, ηi) with i ∈ [1; 4] be conﬁgurations of a depth-register
+y
+automaton B and let y, z ∈ (Γ ∪ ¯Γ)+ be descending words such that c1
+−→ c4. If
+img(η1) ⊆ (−∞; d1] and c1 ∼ c3, then img(η4) ∩ (d1; d2] = ∅.
+
+y
+−→ c2
+
+z−→ c3
+
+Proof. Because y and z are descending, from img(η1) ⊆ (−∞; d1] it follows that img(η3) ⊆
+(−∞; d3]. Combining this with c1 ∼ c3, we conclude that from conﬁgurations c1 and c3 the
+same sequence of transitions will be taken while processing y. But this implies that if a
+depth d ∈ (d1; d2] was stored in some register ξ while processing y from c1, the corresponding
+depth d0 ∈ (d3; d4] will be stored in ξ while processing y from c3. That is, each depth stored
+when the ﬁrst copy of y was processed, is overwritten when the second copy of y is processed.
+Because img(η1) ⊆ (−∞; d1], and both y and z are descending, there is no other way of
+(cid:74)
+putting a value from the segment (d1; d2] into registers.
+
+Barloy, Murlak and Paperman
+
+XX:31
+
+(cid:73) Lemma 37. Let B be a depth-register automaton with k states and ‘ registers, and let
+n ≥ k · (‘ + 1). For every conﬁguration c = (q, d, η) of the automaton B and every descending
+or ascending word x ∈ (Γ ∪ ¯Γ)+, if
+
+img(η) ∩ (cid:2)d + (cid:4)x3·n!(cid:5) ; d + (cid:6)x3·n!(cid:7)(cid:3) = ∅ ,
+
+then
+1. c · xn! ∼ c · xn! · xn!; and
+2. c · xn! · xn! ≈bxn!c−kxn!k,dxn!e−kxn!k c · xn! · xn! · xn!.
+Proof. It is well known that for every deterministic ﬁnite automaton A over Γ ∪ ¯Γ with at
+most n states, p · wn! = p · wn! · wn! for every state p and every word w. To see why this
+is the case, let us analyze the evolution of the state after processing successive copies of w.
+Already after processing at most n copies a state will repeat, and because A is deterministic,
+we will start looping around a cycle in A. After processing all n! copies we are still on the
+cycle, of course. After processing any number of copies that is divisible by the length of the
+cycle (measured in the number of w-steps, not single letters), we return to the same state.
+Because the length of the cycle is at most n, and n! is divisible by every number between 1
+and n, the claim follows.
+
+The lemma is proved in a similar fashion. Suppose x is descending; the argument for
+ascending x is entirely analogous. Throughout the run on xn! · xn! · xn! from c, the current
+depth stays within (cid:2)d + (cid:4)x3·n!(cid:5) ; d + (cid:6)x3·n!(cid:7)(cid:3). Consequently, comparisons with values from
+img(η) give the same result at every step of this run. Moreover, because x is descending,
+depths stored when processing the ith copy of x are all strictly smaller than every depth
+that occurs when processing the jth copy of x for all j > i. Consequently, the behaviour of
+B when processing the (i + 1)st copy of x is determined by the state and the set of registers
+storing values not greater than the current depth—after processing the ith copy of x. Because
+the set of registers can only grow as the successive copies of x are processed, after processing
+at most k · (‘ + 1) copies of x a state-set pair will repeat. Because the sets only grow, all
+state-pairs in between share the same set. It follows that when processing subsequent copies
+of x, this sequence of state-pairs will repeat in a cyclic fashion. Because the length of this
+sequence is at most k · (‘ + 1), it follows like before that the state-set pairs corresponding
+to c · xn! and c · xn! · xn! coincide. This implies item (1) of the lemma. In conﬁguration
+c · xn! · xn! some registers store the same value from
+
+(cid:0)−∞; d + (cid:6)xn!(cid:7)(cid:3) ∪ (cid:0)d + (cid:6)x3·n!(cid:7) ; ∞(cid:1)
+
+that they stored in conﬁguration c · xn!, and into the remaining registers some values from
+
+(cid:0)d + (cid:6)xn!(cid:7) ; d + (cid:6)x2·n!(cid:7)(cid:3)
+
+were loaded when the second copy of xn! was being processed. Because the state-set pairs
+corresponding to c · xn! and c · xn! · xn! coincide, processing the third copy of xn! will load
+into the same registers the corresponding (that is, shifted by kxn!k) values, and no other
+(cid:74)
+load operations will be performed. This implies item (2) of the lemma.
+
+G
+
+Blind classes
+
+We shall use the symbol (cid:67) for the universal closing tag. The term encoding [T ] ∈ (cid:0)Γ ∪ {(cid:67)}(cid:1)∗
+of a tree T with a-labelled root and immediate subtrees T1, T2, . . . , Tn is
+
+[T ] = a [T1] [T2] . . . [Tn] (cid:67) .
+
+XX:32 Stackless
+
+s
+
+u1(u2)n!−1
+
+u1(u2)n!
+
+u2(u2)n!
+
+t
+
+u1(u2)n!
+
+s
+
+t
+
+u1(u2)n!
+
+x
+
+x
+
+x
+
+x
+
+(a) Tree S.
+
+(b) Tree S0.
+
+Figure 7 Blind variants of fooling trees in Lemma 25.
+
+Correspondingly, for u = a1a2 · · · an ∈ Γ∗ we let ¯u = (cid:67)n. Like for the markup encoding, we
+let [L] = (cid:8)[T ] (cid:12)
+
+(cid:12) T ∈ L(cid:9) for every tree language L over Γ.
+
+A tree language L over Γ is term-registerless (resp. term-stackless) if there exists a ﬁnite
+automaton (resp. depth-register automaton) over Γ ∪ {(cid:67)} that accepts all words from [L]
+and rejects all words from [Lc]. A unary query Q is term-registerless (resp. term-stackless) if
+there exists a ﬁnite automaton (resp. depth-register automaton) over Γ ∪ {(cid:67)} that pre-selects
+nodes in Q(T ) when running over [T ].
+
+We say that states p and q blindly meet in state r if there exist words u1, u2 ∈ Γ∗ such that
+|u1| = |u2| and p · u1 = q · u2 = r. By replacing ‘meet’ with ‘blindly meet’ in Deﬁnitions 17,
+19 and 22, we get the deﬁnitions of the syntactic classes of blindly almost-reversible, blindly
+HAR, blindly A-ﬂat, and blindly E-ﬂat word languages.
+
+(cid:73) Theorem 38. Let L be a regular language.
+1. EL is a term-registerless tree language iﬀ L is blindly E-ﬂat.
+2. AL is a term-registerless tree language iﬀ L is blindly A-ﬂat.
+3. The following conditions are equivalent:
+
+a. QL is a term-registerless unary query;
+b. EL and AL are term-registerless tree languages;
+c. L is blindly E-ﬂat and blindly A-ﬂat;
+d. L is blindly almost-reversible.
+
+Proof. The argument is fully analogous to that in Theorem 15, with Lemmas 18 and 23
+to 25. replaced by their analogues for term-registerless, blindly E-ﬂat, blindly A-ﬂat, and
+blindly almost-reversible languages.
+
+The analogue of Lemma 18 states that if L is a blindly almost-reversible language, then
+QL is a term-registerless query. The proof is almost identical, except that when the closing
+tag (cid:67) is read in state p, we pick any state p0 such that p0 · a is almost equivalent to p for
+some a ∈ Γ; because L is blindly almost-reversible, the original argument now shows also
+that the choice of a does not matter.
+
+The analogue of Lemma 23 states that a regular language is blindly A-ﬂat iﬀ its comple-
+ment is blindly E-ﬂat, and that it is blindly almost-reversible iﬀ it is both blindly A-ﬂat and
+blindly E-ﬂat; it is proved just like the original.
+
+The analogue of Lemma 24 states that if L is blindly E-ﬂat, then EL is term-registerless.
+The proof is an adaptation of the original one to the blind setting. The states of the
+simulating ﬁnite automaton, the simulation invariant, the transitions over opening tags, and
+the transformation into an automaton recognizing EL are entirely analogous, with ‘meet’
+replaced everywhere with ‘blindly meet’; in particular, we keep the labels a1, . . . , a‘ in the
+synopsis. However, the behaviour of the simulating automaton over the closing tag needs to
+
+Barloy, Murlak and Paperman
+
+XX:33
+
+be adjusted so that it does not rely on the label of the current node. We begin by dropping
+all references to the current label in the conditions deﬁning Cases A–D, which gives
+Case A’: p‘, q‘ ∈ X but either r‘ /∈ {p‘, q‘} or p‘−1 is not internal;
+Case B’: p‘, q‘ ∈ X, r‘ ∈ {p‘, q‘}, and p‘−1 is internal;
+Case C’: q‘ ∈ X, p‘ /∈ X, and r‘ /∈ {p‘, q‘};
+Case D’: q‘ ∈ X, p‘ /∈ X, and r‘ ∈ {p‘, q‘}.
+In each of these cases the simulating automaton needs to consider all possible values of the
+current label. That is, in Cases A’ and B’, the set P is now deﬁned as
+
+P = (cid:8)p ∈ X (cid:12)
+
+(cid:12) p · a ∈ {p‘, q‘}, a ∈ Γ(cid:9) ,
+
+and in Case C’ we look at p · a1 = p‘ and q · a2 = q‘ for arbitrary a1, a2 ∈ Γ. Apart from these
+diﬀerences, the arguments in Cases A’–C’ are analogous to the original ones. Let us have
+a closer look at Case D’. Like before we have p‘ = p‘−1 = q‘−1 and r‘ = q‘. Consequently,
+p‘ · a‘ = q‘ and, because p‘ and q‘ are almost equivalent, q‘ · a‘ = q‘. Suppose that p · a = p‘
+for some internal state p and some a ∈ Γ. Then, we have p · aa‘ = q‘ · a‘a‘ = q‘; that is,
+p blindly meets with q‘ in q‘. Since q‘ is rejective, it follows from blind E-ﬂatness that p
+and q‘ are almost equivalent. Consequently, q‘ · a = p · a = p‘. Because we also have that
+p‘ · a‘ = q‘, it follows that p‘ ∈ X which is a contradiction. Hence, such p cannot exist. One
+then argues, like in the markup case, that there is no q ∈ X \ {q‘} for which there exists
+a ∈ Γ such that q · a = q‘, and that letting the simulating automaton continue with the same
+synopsis preserves the invariant.
+
+Finally, the analogue of Lemma 25 states that for each regular language L, if EL is
+term-registerless, then L is blindly E-ﬂat. This time there are important diﬀerences in the
+proof; we sketch it below.
+
+We show that if L is not blindly E-ﬂat, then [EL] cannot be separated from [(EL)c] by a
+ﬁnite automaton. Suppose that the minimal automaton A of L ⊆ Γ∗ is not E-ﬂat. Let i be
+the initial state of A. Then, there exist words s, t, u1, u2 ∈ Γ+, x ∈ Γ∗ and states p, q such
+that |u1| = |u2|, i · s = p, p · u1 = q · u2 = q, q · x is rejecting, and p · t is accepting iﬀ q · t
+is rejecting. It follows that for each k > 0, su1(u2)kx ∈ Lc, and st ∈ L iﬀ s(u1)(u2)kt ∈ Lc.
+Unlike for the markup encoding, the construction of the fooling trees depends on whether
+st ∈ L or st ∈ Lc
+
+Suppose ﬁrst that st ∈ Lc. Then, the trees S, S0 used in Lemma 25 should be replaced
+with the ones in Figure 7a. We have S /∈ EL and S0 ∈ EL. Note that we have no control on
+whether the rightmost branch of S0 is labelled by a word from L or not, but it is irrelevant,
+because we know that the middle branch is. The term encodings of S and S0 satisfy the
+following:
+
+[S] = s · u1(u2)n! x¯x (¯u2)n! ¯u1 t¯t u1(u2)n! x¯x (¯u2)n! ¯u1 ¯s ,
+[S0] = s u1(u2)2·n! x¯x (¯u2)n! ¯u2 t¯t u1(u2)n! x¯x (¯u2)n! ¯u1(¯u2)n!−1 ¯u1 ¯s
+= s u1(u2)2·n! x¯x (¯u2)n! ¯u1 t¯t u1(u2)n! x¯x (¯u2)n! ¯u2(¯u2)n!−1 ¯u1 ¯s
+= s u1(u2)2·n! x¯x (¯u2)n! ¯u1 t¯t u1(u2)n! x¯x (¯u2)2·n! ¯u1 ¯s ,
+
+because |u1| = |u2| implies ¯u1 = ¯u2. The rest of the proof is identical.
+
+If st ∈ L, in S we replace u1 on the rightmost branch with u2, and we modify S0
+accordingly. It then holds that S ∈ EL regardless of whether su2(u2)n!x belongs to L or not,
+(cid:74)
+and S0 /∈ EL; the proof again continues like in Lemma 25.
+
+(cid:73) Theorem 39. For each regular language L, the following conditions are equivalent:
+
+XX:34 Stackless
+
+1. QL is a term-stackless unary query;
+2. EL is a term-stackless tree language;
+3. AL is a term-stackless tree language;
+4. L is blindly HAR.
+
+Proof. The argument is fully analogous to that in Theorem 14, with Lemmas 20, 21 and 29
+replaced by their analogues for term-stackless and blindly HAR languages.
+
+The analogue of Lemma 20 states that the class of blindly HAR languages is closed under
+
+complement, which is immediate from the deﬁnition just like for HAR languages.
+
+The analogue of Lemma 21 states that if L blindly HAR then QL is term-stackless. The
+proof is analogous, with the only modiﬁcation being what we did with Lemma 18 in the
+proof of Theorem 38: when the closing tag (cid:67) is read in state p and the current depth is
+greater than or equal to the maximal stored depth, we pick any state p0 such that p0 · a is
+almost equivalent to p for some a ∈ Γ. Because L is blindly HAR, the original argument now
+shows also that the choice of a does not matter.
+
+Finally, the analogue of Lemma 29 states that for each regular language L, if EL is a
+term-stackless tree language then L is blindly HAR. The proof is obtained by adjusting the
+proof of Lemma 29 just like the proof of Lemma 25 was adjusted in Theorem 38. This time
+there is only one case because we know that s(wu1 + vu2)∗wt ⊆ Lc and s(wu1 + vu2)∗vt ⊆ L,
+and not the other way around. In the tree R shown in Figure 5, the copies of u immediately
+following copies of w should be replaced by u1 and those immediately following v should be
+(cid:74)
+replaced by u2. From there, the proof continues like before.
+
+

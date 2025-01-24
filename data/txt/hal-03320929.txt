@@ -1,0 +1,3484 @@
+Eﬀicient Exploration of Interesting Aggregates in RDF
+Graphs
+Yanlei Diao, Pawel Guzewicz, Ioana Manolescu, Mirjana Mazuran
+
+To cite this version:
+
+Yanlei Diao, Pawel Guzewicz, Ioana Manolescu, Mirjana Mazuran. Eﬀicient Exploration of Interesting
+Aggregates in RDF Graphs. SIGMOD/PODS ’21 - International Conference on Management of Data,
+Jun 2021, Virtual Event China, China. pp.392-404, ￿10.1145/3448016.3457307￿. ￿hal-03320929￿
+
+HAL Id: hal-03320929
+
+https://inria.hal.science/hal-03320929
+
+Submitted on 16 Aug 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Efficient Exploration of Interesting Aggregates in RDF Graphs
+
+Yanlei Diao1,2
+
+Ioana Manolescu2,1
+1 Ecole Polytechnique, Institut Polytechnique de Paris, France
+
+Paweł Guzewicz1,2
+
+Mirjana Mazuran2,1
+
+2 Inria, France
+
+yanlei.diao@polytechnique.edu,{pawel.guzewicz,ioana.manolescu,mirjana.mazuran}@inria.fr
+
+ABSTRACT
+As large Open Data are increasingly shared as RDF graphs today,
+there is a growing demand to help users discover the most inter-
+esting facets of a graph, which are often hard to grasp without
+automatic tools. We consider the problem of automatically identify-
+ing the k most interesting aggregate queries that can be evaluated
+on an RDF graph, given an integer k and a user-specified interest-
+ingness function. Our problem departs from analytics in relational
+data warehouses in that (i) in an RDF graph we are not given but
+we must identify the facts, dimensions, and measures of candidate
+aggregates; (ii) the classical approach to efficiently evaluating mul-
+tiple aggregates breaks in the face of multi-valued dimensions in
+RDF data. In this work, we propose an extensible end-to-end frame-
+work that enables the identification and evaluation of interesting
+aggregates based on a new RDF-compatible one-pass algorithm for
+efficiently evaluating a lattice of aggregates and a novel early-stop
+technique (with probabilistic guarantees) that can prune uninterest-
+ing aggregates. Experiments using both real and synthetic graphs
+demonstrate the ability of our framework to find interesting ag-
+gregates in a large search space, the efficiency of our algorithms
+(with up to 2.9× speedup over a similar pipeline based on existing
+algorithms), and scalability as the data size and complexity grow.
+
+CCS CONCEPTS
+• Information systems → Database management system en-
+gines; Graph-based database models.
+
+KEYWORDS
+data analytics, data exploration, graphs, RDF
+
+1 INTRODUCTION
+RDF graphs are increasingly being published and shared as part
+of the Linked Open Data movement. Given the size, heterogeneity,
+and complexity of these graphs, their information content is hard
+to grasp, in particular for non-expert users. In this work, we explore
+automatic insight extraction from RDF graphs [14, 15, 36]. Given a
+graph and an integer k, we seek to automatically identify the k most
+interesting insights in the graph. An insight is an RDF analytical
+query that results in aggregated measures over the data, grouped
+by a set of dimensions. The query can be expressed in a language
+such as SPARQL 1.1, the W3C’s standard RDF query language [13],
+and evaluated by any RDF query engine. The interestingness of an
+insight is assessed based on a statistical measure of the query result.
+Motivating application. Computational Lead Finding (CLF)
+[3, 47] is one of the target applications of our work. For journalists, a
+“lead” is an idea based on which they may write an interesting article.
+Given a dataset, CLF aims to automatically identify the interesting
+leads from the data. Below, we outline our approach to RDF insight
+extraction using examples from statistical lead discovery.
+
+Example 1
+
+Sum of the net worth of CEOs with political
+connections grouped by country of origin.
+Example 2 Average age of CEOs grouped by nationality
+
+and number of managed companies.
+
+Example 3 Number of CEOs grouped by nationality, gen-
+der, and area of the companies they manage.
+
+Table 1: Examples of interesting aggregates.
+
+Running examples. Consider an RDF graph comprising politi-
+cians, CEOs, and connections between them. We can extract such
+a graph, for instance, from the WikiData open-source RDF repos-
+itory. Figure 1(a) shows an example RDF graph where CEOs are
+linked with politicians, e.g., Isabel dos Santos, a wealthy Angolan
+CEO (at the heart of the Luanda Leaks scandal), is the daughter
+of a former president of Angola. Starting from the graph, we aim
+to automatically identify a small set of aggregate queries that are
+statistically interesting. Here, interestingness is a statistical measure
+that indicates deviation from the prior knowledge of the journalists.
+For example, the interesting aggregate results may deviate from a
+uniform distribution of values over different aggregate groups, or a
+normal distribution over numeric dimensions such as age.
+
+Table 1 shows three example aggregates, whose dimensions and
+measures are either properties in the RDF graph or properties that
+we derive to enrich the scope of the analysis. In Example 1, CEOs,
+politicalConnections, countryOfOrigin, and netWorth are either types
+or properties in the RDF graph in Figure 1(a). Example 2 analyzes
+the CEOs along the number of managed companies, which is not a
+property in the graph: we derive it by counting the properties of
+each CEO. This enables us to discover, e.g., that the average age
+of Angolan CEOs that manage two companies is low compared to
+other nationalities. Example 3 analyzes CEOs by areas of companies;
+we derive this from the graph by following a path from the CEOs to
+the companies they manage, then to their areas. Similar path exam-
+ples include company/headquarters, politicalConnection/role; longer
+paths produce a larger number of novel angles for the analysis.
+
+Among all possible aggregate queries that we can generate, the
+above three examples are selected because their results show sig-
+nificant deviation from uniform values (having outliers). For Exam-
+ples 1 and 2, Figure 1(b) shows respectively a histogram that exhibits
+an outlier in sum(netWorth) for Angola, and a heat map where the
+dark color reflects a low value of avд(age) of CEOs, both due to Dos
+Santos. We can show to the user such interesting insights as (i) his-
+tograms (if one-dimensional), (ii) heat maps (if two-dimensional),
+or (iii) tables (for high-dimensional aggregates).
+
+Our goal to discover the k most interesting aggregates from an
+
+RDF graph poses two unique challenges:
+
+Challenge C1 - Aggregate identification. Automatic extrac-
+tion of interesting aggregates is one among many existing tech-
+niques for data exploration and visualization recommendation. Yet,
+most prior works assume a fixed relational schema [42, 43]. In
+contrast, in RDF graphs, facts, dimensions, and measures are not
+
+Figure 1: Running examples using the CEOs dataset.
+
+specified but must be identified therein. To address this challenge,
+given an RDF graph, we provide a variety of strategies to create
+new dimensions and measures, which enable us to examine a rich
+space of candidate aggregates and to discover the most interest-
+ing ones. We further develop a modular framework for aggregate
+identification, which can be extended or customized as needs arise.
+Challenge C2 - Efficient and correct aggregate evaluation.
+Since we define interestingness on an aggregate result, we must
+evaluate candidate aggregates to determine if they are among the
+k most interesting ones. A key feature of our work is that we look
+for multidimensional aggregates (MDAs), such as Examples 2 and 3.
+A set of N dimensions, among which we enumerate candidate
+aggregates, leads to a lattice [29] of 2N nodes, each of which is an
+MDA (see Figure 1(c)). We may have many such lattices to consider
+at once, and efficiently evaluating them all poses a salient challenge.
+To address the challenge, first, we revisit a classical framework
+for lattice-based MDA computation in relational data warehouses
+(DWs). Efficient algorithms, such as ArrayCube [49], compute an
+aggregate in the lattice from the result of one of its parents, and
+compute all aggregates in the lattice in a single pass over the data.
+However, a crucial observation we make in this work is that the
+classical one-pass approach to lattice computation is incorrect for
+RDF data, due to a phenomenon called multi-valued dimensions,
+that is, an RDF node (fact) may have multiple values along a given di-
+mension. To tackle the issue, while retaining the benefits of one-pass
+algorithms, we provide a theoretical analysis of how the classical
+approach produces errors. Furthermore, we develop a new RDF-
+compatible one-pass algorithm that (i) correctly and efficiently
+handles lattice-based MDA computation where the aggregates use
+multi-valued dimensions; (ii) for each node in the lattice (with a
+given set of dimensions), simultaneously handles many aggregates
+that differ in the measure (among many possible ones) and the
+aggregate function in use; (iii) saves computation cost by sharing
+measures across all lattices that analyze the same set of facts.
+
+Second, to further improve efficiency, we develop a new tech-
+nique to stop the evaluation of an MDA as soon as we can determine
+(with high probability) that it will not be among the top k. Our tech-
+nique builds on the work in [30], which provides confidence-interval
+(CI) bounds on an approximate aggregate result. Our problem is
+harder because we want to approximate the interestingness score
+computed over the aggregate result, which amounts to estimating
+the result of a nested aggregate query, whereas the prior work does
+
+not support such nested queries. Using advanced statistical tools,
+we construct CIs for the interestingness function including vari-
+ance, skewness, and kurtosis over estimated results of candidate
+aggregates, enabling early pruning of uninteresting aggregates.
+In summary, the contributions we make in this work include:
+• Spade, a new RDF-oriented end-to-end framework that automat-
+ically identifies, enumerates, and efficiently evaluates RDF MDAs
+to determine the most interesting ones (Section 3);
+
+• MVDCube, the first correct and efficient algorithm for one-pass
+
+lattice-based computation of RDF MDAs (Section 4);
+
+• A novel early-stop technique that stops the evaluation of MDAs
+that, with a high probability, will not be in the top-k list (Section 5);
+• Experimental results validating (i) the ability of Spade to extract
+insights from a large space of candidate aggregates; (ii) the frequent,
+and potentially high errors that existing algorithms introduce on
+real-life, heterogeneous RDF graphs; (iii) the efficiency of our one-
+pass algorithm, which is faster than PostgreSQL’s GROUP BY CUBE
+implementation by 20% to 80%; (iv) the extra speedup of 10% to
+43% achieved by our early-stop technique, and (v) the scalability of
+Spade as the size and complexity of the graphs increase (Section 6).
+
+2 PROBLEM STATEMENT AND NOTATION
+We consider RDF data defined over three pairwise disjoint sets:
+the set of URIs U, the set of literals L, and the set of blank nodes
+B. An RDF graph G is a finite set of triples of the form (s, p, o),
+called subject, property, and object, such that s ∈ (U ∪ B), p ∈ U,
+and o ∈ (U ∪ B ∪ L). The RDF property rdf:type is used to attach
+types to an RDF node, which may have zero, one or several types.
+Such an RDF graph may have an ontology stating relationships
+among its types and properties, e.g., any CEO is a BusinessPerson.
+An ontology leads to implicit triples that together with the triples
+explicitly present in G are the graph’s semantics. All the implicit
+triples can be materialized via saturation, iteratively deriving new
+ones from G and the rules; we consider ontologies for which this
+process is finite as in [23], and apply it prior to our analysis.
+
+A candidate fact set (CFS) is a set of RDF nodes that we build
+an aggregate on; we call a member of the set a candidate fact (CF).
+An attribute is either a (direct) property (P) of a CF in the
+original RDF data, or a derived property (DP), which we create
+from the data and attach to a CF to enrich the analysis. For instance,
+one may attach to each CEO the number of companies they manage
+(the full set of derivation strategies is discussed in Section 3). An
+
+attribute can be used as a dimension, to group CFs by value, or as
+a measure, to be aggregated within each group of CFs.
+
+We employ an aggregate function, f , that ranges over the
+
+common set Ω = {count, min, max, sum, avд}.
+
+A multidimensional aggregate (MDA), A = ⟨CFS, D, M, f ⟩,
+is determined by: a CFS, a set D = {D1, D2, . . . , DN } of dimensions
+(which are attributes), a measure M (also an attribute), and an
+aggregate function f . The semantics of A is that of a SPARQL
+1.1 aggregate query [13], which also agrees with that of the RDF
+analytical queries introduced in [2, 11]. The result of A on an RDF
+graph G, denoted A(G), is the set of tuples, one per each distinct
+combination of dimension values (aggregate group) in the data:
+
+A(G) = {(d1, d2, . . . , dN , f {mj | ∃ CFi ∈ CFS, CFi .D1 = d1,
+CFi .D2 = d2, . . . , CFi .DN = dN , CFi .M = mj })}
+
+where CFi has (at least) the values d1, d2, . . . , dN along the dimen-
+sions D1, D2, . . . , DN , and mj iterates over the set of values of the
+measure M on CFi . Finally, f {·} is the result of running the aggre-
+gate function f over the measure values from a given set.
+
+Our semantics, unlike that of relational DWs, does account for
+heterogeneity in RDF data: (i) Some CFs may miss dimensions and/or
+measures, and thus they do not contribute to the result. For the
+graph in Figure 1, the result for Example 1 is {(Angola, $2.8B)}, due
+to n1, whereas n2 does not contribute to the result as it lacks the
+countryOfOrigin dimension; (ii) A CF may contribute to multiple
+groups in A (if it has multiple values for a dimension), and/or mul-
+tiple times to the aggregated value (if it has several values for the
+measure). The result for Example 2 is {(Nigeria, 1, 65), (France, 1, 65),
+(Lebanon, 1, 65), (Brazil, 1, 65)}, all obtained from n2 given its four
+distinct values of nationality. Although n1 has both dimensions, it
+does not contribute to the result as it misses the age measure.
+
+An interestingness function, h, is applied over the result of
+an aggregate A. Let W be the number of tuples in A(G) and, for
+each tuple ti ∈ A(G), let ti .v be the aggregated value computed by
+f . Then h takes the set {t1.v, t2.v, . . . , tW .v} and returns a score,
+i.e., a positive real number, reflecting a measure of interestingness
+of A. The user chooses the function to be used during the analysis.
+
+Finally, the problem we address is stated as follows:
+
+Problem 1. Given an RDF graph G, a positive integer k,
+and an interestingness function h of choice, find the aggregates
+A1(G), . . . , Ak (G) whose interestingness on G is the highest.
+
+3 OVERVIEW OF THE APPROACH
+In this section, we describe the system design of Spade, a new RDF-
+oriented end-to-end framework that automatically identifies, enumer-
+ates, and efficiently evaluates MDAs to determine the most inter-
+esting ones. Figure 2 shows Spade’s analytics pipeline; it comprises
+an offline phase, where an RDF graph is loaded and pre-processed,
+and an online phase, where user-specific analysis is performed.
+
+Offline Processing. Upon loading an RDF graph, we first build
+a structural summary thereof, using the open-source RDFQuotient
+tool [22]. The summary captures all the properties occurring in
+the graph and proposes a set of RDF node groups such that the
+RDF nodes in each group are considered equivalent. Spade uses
+the summary to expedite several steps of the analysis, e.g., the
+enumeration of RDF types and properties, as described below.
+
+Figure 2: The architecture of Spade.
+Next, we perform Offline Attribute Analysis with three main
+purposes: (i) to gather a set of statistics for each property in the
+graph, (ii) to determine if derivations should be generated for a
+given property, and (iii) to decide if pre-aggregated values of some
+properties should be computed and stored in the database.
+
+Derived properties are the key to a rich search space and to
+effectively addressing challenge C1. With this aim, we compute
+statistics including the type of property values (e.g., String, Inte-
+ger, Date) and, if they are multi-valued, their number of distinct
+values, the lowest and highest values, etc. Based on these results,
+Derived Property Enumeration generates: (i) property counts for
+multi-valued properties, e.g., how many companies a CEO man-
+ages; (ii) keywords occurring in property values, e.g., if a company’s
+description is “Sonangol oversees petroleum production”, we attach
+to the company the multi-valued attribute kwInDescription with the
+values “Petroleum” and “Production”; (iii) the language of a text
+property, e.g., a company may gain the attribute langOfDescription
+with the value “English”; (iv) paths, e.g., a CEO politically connected
+to a “President” gains the attribute politicalConnection/role with the
+value “President”. Finally, each derived property is also analyzed
+and stored along with its statistics in the database.
+
+In addition, for each multi-valued attribute, we create a table in
+the database storing its values, pre-aggregated on the RDF nodes
+that have it. More specifically, for each RDF node, we compute and
+store the aggregated value for each (attribute, aggregate function)
+pair, e.g., the sum of a1, the count of a1, the minimum of a2. This
+allows Spade to account for facts with multiple measure values and
+improve Aggregate Evaluation during Online Processing.
+
+Online Processing. The analysis of RDF graphs suits the spe-
+
+cific needs of users and proceeds in the following steps.
+
+Step 1 is Candidate Fact Set Selection. To address challenge
+C1, Spade identifies CFSs in three ways: (i) type-based: for each type
+T in the graph, the set of RDF nodes of typeT ; (ii) property-based: for
+a (user-specified) set of properties, all the RDF nodes having those
+outgoing properties; (iii) summary-based: each set of RDF nodes
+identified as equivalent by the RDFQuotient summary; RDF nodes in
+the same equivalence class tend to have many common properties,
+making them interesting candidates to be analyzed together.
+
+Step 2 is Online Attribute Analysis. In this step, for each CFS,
+we first enumerate all direct and derived properties. Then, we enrich
+the offline-analysis results by adding CFS-dependent statistics, e.g.,
+the support of an attribute among all the facts in the CFS, the
+number of CFs that have such an attribute more than once, and the
+
+DP1 DP2, ...RelationalRDF graphFrontendRDFQuotient Summary a1,DataP1, P2, ...RDF-DBKeywordextractionLanguagedetectionDerived Property EnumerationPathsOnline Attribute AnalysisOnline ProcessingCountgenerationType-basedProperty-basedCandidate Fact Set SelectionSummary-based1)2)3)Ofﬂine Attribute AnalysisAggregate EnumerationA1, A2, ...Aggregate EvaluationAggregate ResultManagerIF1IF2...Top-ka2, ...Multidimensional CFS1, CFS2, ...Ofﬂine Processingnumber of distinct values. Spade exploits the gathered statistics in
+different steps, e.g., to guide the choice of dimensions, measures,
+and aggregate functions and to improve Aggregate Evaluation.
+
+Step 3 is Aggregate Enumeration. Spade uses the pool of ana-
+lyzed attributes to generate candidate MDAs. To address challenge
+C1, we generate a rich space of candidate aggregates while applying
+rule-based pruning to avoid meaningless candidates.
+
+(a) Identifying dimensions and measures from (derived) properties:
+We first enumerate all the (derived) properties and consider them
+for dimensions or measures, subject to the following rules: (i) Di-
+mensions and measures must be frequent, i.e., having a support
+greater than a defined threshold; (ii) Dimensions should not have
+too many distinct values when compared to the number of facts to
+examine (e.g., we do not consider counting the number of CEOs by
+their birthday as there are too many distinct values).
+
+(b) Identifying the dimension set of each lattice: We compute the
+Maximal Frequent Sets of attributes [25] in the CFS. Each of the
+found sets is the root of one lattice. We further filter them so that
+each lattice: (i) has at most N attributes, and (ii) does not contain
+attributes that are derived one from the other, e.g., nationality and
+numOfNationalities are not allowed as dimensions of the same
+lattice. Although we aim to offer a general approach, we also note
+that the readability of MDAs by human users is maximized at levels
+of relatively low dimensionality, i.e., N ∈ {1, 2, 3, 4}.
+
+(c) Identifying the measures in each lattice: Once a lattice acquires
+dimensions Di , we assign it a measure set Mi that comprises all
+the analyzed attributes of the CFS except those in Di , and those that
+are derived from a dimension in Di , e.g., numOfNationalities cannot
+be a measure in an aggregate whose dimension is nationality.
+
+Several lattices may be found for a CFS, e.g., for CEOs, we have
+three: {countryOfOrigin}, {nationality, numOfCompanies}, and {na-
+tionality, gender, company/area} (Examples 1-3). They might par-
+tially overlap in dimensions and/or measures; e.g., Examples 2 and 3
+share nationality. Spade ensures that the results of evaluated MDAs
+are reused (not recomputed) in the other lattices where they appear.
+Step 4 is Aggregate Evaluation. This step triggers the actual
+evaluation of the enumerated MDAs. To address challenge C2, we
+combine: (i) our novel early-stop technique to quickly prune the
+unpromising MDAs, and (ii) our MVDCube algorithm to efficiently
+compute the remaining MDAs in a single pass. The final results are
+produced in an incremental fashion and handled by the Aggregate
+Result Manager (ARM). The ARM stores them and incrementally
+updates statistics such as minimum and maximum values, as we
+explain in Section 4. These are used to determine the interestingness
+of the computed MDAs (by applying h) in one pass over their results.
+Step 5 finally performs Top-k Computation. Once the eval-
+uation is complete, the ARM retrieves all the evaluated MDAs,
+computes their interestingness score by applying h, and returns the
+k best aggregates. Spade natively supports three interestingness
+functions, from which the user can choose to suit their preferences:
+(i) variance, (ii) skewness, and (iii) kurtosis, where variance can
+detect deviation from uniform aggregate values, whereas the latter
+two can detect deviation from a normal distribution of aggregated
+values over numeric dimensions. Figure 1(b) shows two example
+aggregates with high variance scores. More sophisticated interest-
+ingness functions for insight detection can be applied on the Step 4
+results via the ARM; we discuss early-stop extensions in Section 5.2.
+
+Figure 3: Multidimensional space and MMST for Example 3.
+
+Figure 4: Relational aggregation.
+4 LATTICE-BASED COMPUTATION
+We first recall a classical optimized method of computing all ag-
+gregates in a lattice. We then explain its limitations and the errors
+it makes in our setting. Finally, we present our new algorithm to
+compute lattices of RDF aggregates correctly and efficiently.
+
+4.1 Classical one-pass lattice computation
+In relational DWs, nodes in a multidimensional lattice are often com-
+puted from one of their parents to reuse computation and limit the
+number of passes over the data. Among the existing algorithms [39],
+ArrayCube [49] computes the whole lattice in a single pass. Given a
+set of N dimensions, a measure, and an aggregate function, it relies
+on an array representation of data and evaluates 2N nodes through
+a Minimum Memory Spanning Tree, as we recall below.
+
+Array representation of data. The distinct values of each di-
+mension are ordered, leading to a set of cells, each corresponding to
+a unique combination of indices of values along the N dimensions
+(axes). In Example 3, assuming nationality ∈ {A, B, F, L, N}, gender
+∈ {F, M} and company/area ∈ {A, D, M, N} (we denote initials of the
+respective values in Figure 3), the multidimensional space has 40
+cells, e.g., in cell 0, nationality=A, gender=F and company/area=A;
+in cell 1, nationality=B, gender=F and company/area=A. Each cell
+of the N -dimensional array contains the value of the aggregated
+measure over all facts in that cell; in Example 3, this is the count of
+CEOs. Further, cells are grouped in partitions: each partition is a
+contiguous part of the array, containing the cells corresponding to
+a predefined number of distinct values along each dimension, e.g.,
+if this is 2, the 40-cell array has 6 partitions. Figure 3(a) shows the
+array. Note that an initial pass over the data is required to bring it
+from the relational to the array representation.
+
+Minimum Memory Spanning Tree (MMST). The dimensions
+in Example 3 determine the lattice in Figure 3(b). To evaluate all
+nodes, ArrayCube chooses, for each non-root node A, a parent node
+to compute A from, hence forming a spanning tree of the lattice.
+The memory needed to evaluate all the aggregates in one pass over
+the data depends on the ordering of dimensions, their numbers of
+
+A1A2A3A4gender,company/area, nationality gender,  nationalitygender, company/areacompany/area, nationality gender company/areanationality(b) Minimum Memory Spanning Tree.2x2x2P2P1Diamond AutomotiveManufacturer Natural gas Femalegendercompany/areaP3P4P5P6BrazilAngolaFranceLebanonNigerianationality(a) Cube.Male2x222x22x222A5A6AngolaFemaleDiamondAngolaAngolaFemaleManufacturerFemaleNatural gasnationalitygendercompany/areaNigeriaNigeriaFranceFranceLebanonLebanonnullnullnullnullnullnullAutomotiveManufacturerAutomotiveManufacturerAutomotiveManufacturercount(*)111111111t1t2t3tIDt4t5t6t7t8t9A1: count of CEOs by  nationality, gender, company/areaA2: count of CEOs  by gender, company/areaBrazilBrazilnullnullt10t11AutomotiveManufacturer11FemaleDiamondFemaleManufacturerFemaleNatural gasgendercompany/areanullnullAutomotiveManufacturercount(*)11144t1t2t3tIDt4t5A3: count of  CEOs by genderFemalegendercount(*)3t1tIDA4: count of CEOs by company/areaDiamondManufacturerNatural gascompany/areaAutomotivecount(*)1514t1t2t3tIDt4distinct values, and the partition size. ArrayCube chooses the tree
+that minimizes the overall memory needed; it is called the MMST.
+Lattice computation proceeds as follows. The MMST is instan-
+tiated, allocating to each node the required memory. Partitions are
+loaded from the array representation of data, one at a time, into the
+root of the MMST. The content of each cell in the root is propagated
+to the children and used to incrementally update the aggregated
+measures of all the nodes in the MMST. Once a partition is evalu-
+ated, each node checks if it is time to store its memory content to disk.
+For instance, after scanning partition P1 in Figure 3(a), the subarray
+with nationality ∈ {A, B} and company/area ∈ {A, D} is exhausted.
+Thus, the counts of CEOs with either of the two nationalities, and A
+or D company area are computed. Now, A6 (Figure 3(b)) can store its
+result to disk and reuse the memory in the subsequent computation.
+Similarly, once processed, the two subarrays of P2, (i) nationality
+∈ {A, B}, and company/area ∈ {M, N}; (ii) nationality ∈ {A, B}, are
+exhausted, and both A6 and A5 can store their results to disk. A6
+stores its result after every partition, A5 after every two.
+
+4.2 Incorrectness in the RDF setting
+Results computed by ArrayCube may be incorrect in the presence
+of multi-valued dimensions. Consider our running examples that
+show CEOs with various nationalities and at most one gender who
+manage companies in several areas. In a relational DW, each such
+CEO would be stored as a tuple in the fact table, and their multiple
+nationalities (respectively, company areas) would be modeled as a
+dimension table associating them with each of their nationalities
+(company areas). We could then find the result for Example 3 with
+a query q that joins all the relations, groups the data by the dimen-
+sions, and finally aggregates the measure. To evaluate all MDAs in
+the lattice determined by the dimensions, ArrayCube would use
+the MMST in Figure 3(b) and compute the aggregate A1 by means
+of q, using its result to compute the rest of the lattice.
+
+Figure 4 shows the result of A1 when applied to the two CEOs
+in Figure 1. The tuples t1 to t3 are derived from Dos Santos (the
+RDF node n1), whereas t4 to t11 are due to Carlos Ghosn (the RDF
+node n2). Since n2 lacks gender information, the tuples t4 to t11
+have gender=null. We need to keep them to compute the rest of
+the lattice correctly. Since n2 has valid values for nationality and
+company/area, we must count this CEO when computing aggregates
+over one or both of these dimensions, e.g., A4 in Figure 4. We
+obtain the result of A2 by aggregating A1’s result to project away
+the nationality dimension. For instance, the tuples t4, t6, t8, and
+t10, which are all associated with n2, collapse into the tuple t4
+in A2 where now this CEO counts as four. Then, A2 is further
+aggregated by projecting away company/area to compute A3 and
+separately gender to compute A4. The cardinality “bug” introduced
+in A2 propagates down the lattice. In A4’s result, we find five CEOs
+managing Manufacturer companies, whereas there are only two.
+A similar error occurs in A3 where we count three female CEOs
+because the tuples t1 to t3 of A2 are aggregated into the same tuple
+and are, thus, counted three times (although they all represent n1).
+The above example shows that multiple values for a dimension
+may lead to errors when an aggregate is computed from one of its par-
+ents. To correctly compute the whole lattice from the root aggregate,
+naïve solutions may: (i) require that each CEO fact be represented
+
+by at most one tuple, e.g., in our example, by ignoring all but one of
+Ghosn’s nationalities (company areas); this would clearly miss an
+interesting part of the data; (ii) compute each of the 2N aggregates
+in the lattice separately, missing the benefits of efficient one-pass
+algorithms; this would entail a high run time overhead.
+
+Interestingly, if we alter the query q to count distinct CEOs in each
+group (in lieu of count(∗)), no errors occur in the result of Example 3.
+By design, ArrayCube cannot compute aggregates including dis-
+tinct: instead, it computes all aggregates from the result of the lattice
+root, where information about individual facts is no longer present.
+Other one-pass algorithms for lattice-based aggregate computa-
+tion, such as PostgreSQL’s GROUP BY CUBE implementation [27]
+(PGCube), do support the counting of distinct values and can thus
+be used to obtain the correct result for Example 3. However, in the
+presence of multi-valued dimensions, computing aggregates from
+the result of one of their parents in the lattice may still lead to wrong
+results, as illustrated in the following variations of Example 3.
+
+Variation 1. Consider the aggregate “sum of the net worth of CEOs
+by nationality, gender, and area of the companies they manage”. We
+first augment the data in the root aggregate A1 with the sum of
+netWorth (NW ). The tuples t1 to t3 contain the NW of Dos Santos:
+$2.8 billion. The tuples t4 to t11 contain the NW of Ghosn: $120 mil-
+lion. We then compute the sum of NW by company/area. The tuples
+t2, t5, t7, t9, and t11 (all having company/area=M) sum up into one
+tuple, and result in the sums of $2.8B of Dos Santos, and 4 × $120M
+of Ghosn, whereas both CEOs should have contributed exactly once.
+Moreover, we cannot solve this issue with the sum(distinct NW )
+aggregate. If both CEOs had the same NW , a sum(distinct) would
+sum NW once, instead of (correctly) summing it twice.
+
+Similarly, the following variation illustrates another scenario
+
+leading to wrong results.
+
+Variation 2. Consider the aggregate “average age of CEOs by na-
+tionality, gender, and area of the companies they manage”. We obtain
+it as sum(age)/count(age), i.e., the sum in Variation 1 is divided by 5.
+Instead, the correct value is sum of ages of Dos Santos and Ghosn
+divided by 2. As in Variation 1, we cannot solve this issue by using
+avд(distinct age).
+
+As our experiments show (Section 6.3), the number of incorrectly
+computed aggregates, and the magnitude of the error itself, can be
+quite significant. This is because of the flexible RDF model, which al-
+lows multi-valued dimensions. Conversely, in a relational DW, once
+a fact table is joined with dimension tables, ArrayCube assumes
+that each fact has exactly one value for a dimension (for instance,
+due to a functional dependency). Below, we formally characterize
+the situations when ArrayCube introduces errors on RDF data.
+
+Analysis of ArrayCube errors on RDF. Consider an RDF
+graph G and a lattice of N dimensions (2N nodes) on G. Whether
+a lattice node can be computed correctly from one of its parents,
+depends on the presence of multi-valued dimensions in the lattice:
+
+Lemma 1. Let G be an RDF graph. Let P = ⟨CFS, DP , M, f ⟩,
+C = ⟨CFS, DC , M, f ⟩ be two aggregates in a lattice on G such
+that P is a parent of C, DP = DC ∪ {D} where D is a dimension,
+f ∈ {count(∗), count(M), sum(M), avд(M)}, and there exists a fact
+n ∈ CFS with more than one value along the dimension D. Then,
+computing C(G) from the result of P(G) may lead to wrong results.
+
+Proof. Let the fact n ∈ CFS have the values n.D = {a, b} and,
+for each Dj ∈ DP , Dj (cid:44) D, n.Dj = dj and dj is not null. By
+definition of P, there exist tuples t1, t2 ∈ P(G) such that t1 =
+(d1, . . . , a, . . . , dN , v1) and t2 = (d1, . . . , b, . . . , dN , v2), to both of
+which n contributes. Hence, there exists a tuple t3 ∈ C(G) such that
+t3 = (d1, . . . , dN , v3), in which the dimension D does not appear.
+When computing C(G) from P(G), the aggregated value v3 is
+obtained from t1.v1 and t2.v2 based on the function f . For instance,
+if f is count(∗), the fact n will be counted twice, instead of just once.
+If f is sum(M), the M value(s) of n will be summed twice, which
+falsifies the result (except for the particular case where their sum is
+□
+0). Computing the avд may similarly lead to wrong results.
+
+How does Lemma 1 impact the one-pass lattice-based computa-
+
+tion for a given graph G? We show the following result:
+
+Theorem 1. Given an RDF graph G and a lattice on G, let MD ⊆
+D be the set of all the dimensions for which some fact(s) n ∈ CFS have
+more than one value, and let K > 0 be the size of MD. (i) A one-pass
+algorithm cannot compute correctly all the lattice aggregates. (ii) The
+maximum number of MDAs (lattice nodes) that can be computed
+correctly (depending on the choice of the MMST) is 2N −K .
+
+Proof. (i) Among the N · 2N −1 lattice edges, K · 2N −1 are la-
+beled with a dimension from MD, meaning that the dimension is
+projected away when computation follows this edge. As Lemma 1
+shows, if the MMST contains one such edge, the result of the child
+node of that edge may contain errors. However, no spanning tree,
+thus, no MMST, can avoid all edges labeled with a dimension in
+MD. This is because to go from the root, whose dimensions are
+D, to a node lacking one dimension D ∈ MD, by the construction
+of the lattice, the MMST must traverse an edge labeled D.
+
+(ii) The lattice nodes that can be computed correctly in one pass
+(starting from the root’s result) are exactly those having all the
+MD dimensions: a node lacking one such dimension would be
+obtained by aggregating a parent’s result along that dimension, and
+thus, by Lemma 1, be wrongly computed. The lattice has 2N −K
+such nodes. Fewer nodes may be computed correctly if the MMST
+□
+picks a “wrong” edge, even if it could have avoided doing so.
+
+4.3 MVDCube Algorithm
+We now present Multi-Valued Data Cube (MVDCube), our new
+one-pass MDA evaluation method. Going beyond existing algo-
+rithms [49], MVDCube: (i) produces correct results even in the
+presence of missing or multi-valued dimensions and/or measures,
+(ii) computes several aggregate functions over a large set of measures
+in the same lattice, and (iii) saves computation cost by sharing
+measures across all lattices from a given CFS.
+
+Before we move forward, we clarify that our RDF database uses
+the following storage: a CFS is represented by a single-column table
+storing the identifiers (IDs) of the facts; for each attribute a, a table
+ta stores (s, o) pairs for each (s, a, o) triple in the RDF graph.
+
+Figure 5 depicts the main features of MVDCube. Our MVDCube
+evaluation method proceeds in the following steps, with the pseudo-
+code of its core functions shown in Algorithm 1.
+
+Building MMSTs. Given a CFS and a set of lattices (identified
+in Step 3 of Spade’s pipeline), each with the dimensions Di and the
+measures Mi , we construct one MMST per lattice as in [49].
+
+Data Translation. For each lattice, we process the root node by
+sending a join query to the database to obtain all the CFs that have a
+value for at least one of the dimensions in Di . We then translate the
+join result to lay the data in a partitioned array representation of cells.
+A partition is a set of pairs (cell index, CF). We assign each RDF node
+a cell index based on its dimensions’ values; in the case of multiple
+values for a dimension, we assign indexes of all corresponding cells.
+We add the special value null in the domain of each dimension to
+account for missing values. Therefore, each cell is associated with
+the set of RDF nodes that correspond to the combination of dimension
+values that this cell represents. Like ArrayCube, we take an initial
+pass over the data to bring it into the array representation, where
+the (conceptual) multidimensional array is stored as a serialized
+one-dimensional array. If the data does not fit into the available
+memory, we partition it, store to disk, and later read back, one
+partition at a time; otherwise, MVDCube accesses the array directly
+from the main memory, in a single pass, in subsequent steps.
+
+Measure Loading is performed in parallel to the Data Trans-
+lation step. For each measure M in Mi , we query the database to
+retrieve, for each CF, the pre-aggregated values of M (which were
+computed and stored offline). We load the values ordered by the
+IDs of the CFs, and share them among all MMSTs in a given CFS.
+As they are stored at the granularity of a CF, they can be used to
+compute aggregate results for all cells, as we describe below.
+
+Lattice Computation is then carried out in one pass over the
+data using the MMST. MVDCube associates an MMST node with a
+(large) set of aggregates; we denote such a node as Ai = ⟨CFS, Dj ⟩.
+Each node then represents all the MDAs that have dimensions Dj
+(but might differ in their measure and aggregate function). Suppose
+that we want to compute the lattice with D={gender, company/area,
+nationality}, M={age, netWorth} and that age is associated with avд,
+and netWorth is associated with sum. Node A2 in Figure 5 represents
+the two MDAs: (i) average age of CEOs, and (ii) sum of netWorth
+of CEOs, both grouped by gender and company/area.
+
+In the MMST, we allocate, for each node, the needed memory.
+We load partitions successively into the root. In Figure 5, we assume
+that each partition contains 3 distinct values of each dimension,
+hence 27 cells. For compactness, we encode each set of RDF nodes in
+a cell using a Roaring Bitmap [32] (also adopted in Spark because of
+the strong compression and lookup performance). In Figure 5, each
+cell stores a set of CEOs (a subset of the facts n1 and n2). The bitmaps
+follow the same ordering of the CFs applied during Measure Loading.
+The cell of index 3 in A1 contains a bitmap of size 2, BM3 = 10,
+representing that n1 is in the set, whereas n2 is not.
+
+(a) Projection and bitmap propagation. We scan the bitmaps in the
+cells of the root node and immediately propagate them to the child
+nodes in the MMST as dimensions are projected away (line 4 in
+Algorithm 1). We union (OR) the bitmap in each cell in a child node
+with each bitmap received from the parent (line 9): this models the
+contribution of all facts in a parent node to the corresponding cell
+in the child node. In particular, as we project away a multi-valued
+dimension from a parent node to a child node, if a fact has multiple
+values of the dimension, it belongs to different cells in the parent
+node, but will be consolidated in the same cell in the child node.
+
+Red arrows in Figure 5 show propagations. For example, the
+bitmap of cell 2 in node A4, BM2, is initially empty (i.e., 00). Then
+
+Figure 5: Aggregate evaluation using MVDCube and early-stop.
+
+it is updated to 01 when BM8 from A2 is propagated, and later to
+11 when BM2 from A2 is also propagated.
+
+Once a partition is evaluated, we apply the ArrayCube check
+(Section 4.1) in the nodes to learn if it is time to write results to
+disk (line 10). If so, we first propagate their memory content to
+their child nodes (line 11), and then we compute the values of the
+aggregated measures and store them (line 12).
+
+(b) Measure computation (denoted as ⊗). When a node is ready to
+write to disk, we scan its memory one cell at a time. For each cell:
+(i) we identify the pre-aggregated measures of each RDF node in
+the cell’s bitmap, and (ii) we apply the relevant aggregate functions
+to them. Note that measure computation is very fast as both the
+bitmaps and the pre-aggregated measures are ordered by the fact
+ID, and can aggregate different measures simultaneously.
+
+Revisit A4 in Figure 5. Once P1 and P2 are evaluated, A4 is ready
+to write current results to disk. We scan the three cell bitmaps, and
+for each bitmap: (i) identify the age and the net worth of each CEO
+in the bitmap by accessing the pre-aggregated measures, (ii) aggre-
+gate the respective measures by applying avд on the age and sum
+on the net worth. For example, for BM2, we identify the ages (re-
+spectively, net worth) of n1: 47 ($2.8B) and n2: 66 ($120M) because
+they are both present in the bitmap, then compute their average (re-
+spectively, sum). The Aggregate Result Manager (line 19) receives
+the computed measures, and the values of the dimensions obtained
+from the cell index. Finally, we empty A4’s memory in the MMST
+and reuse it to evaluate the aggregate on the next partition (line 13).
+Memory usage. Our memory analysis builds on the correspond-
+ing ArrayCube study [49]. Assuming N dimensions with d distinct
+values each and c distinct values per partition, the MMST uses at
+most MT = c N + (d + 1 + c)N −1 array cells to compute one aggre-
+gated measure. In MVDCube, the memory for an MMST is also
+upper bounded by MT cells. However, cells have a variable size as
+each of them contains a Roaring Bitmap (RB). For this reason, we
+provide a worst-case estimation of MVDCube’s memory needs for
+the MMST and the pre-aggregated measures.
+
+(a) The size of an RB used to store Z integers in the interval
+[0, u) is bound in [32] to MRB = 2 · Z + 9 · (u/65535 + 1) + 8, that
+is, beyond a fixed overhead for u, the universe size, RBs never use
+more than 2 bytes per integer. In the worst case, we could have
+|CFS | facts in each cell, occupying a total of MT · MRB bytes.
+
+(b) For m measures, MVDCube needs |CFS | ·
+
+|SMi | float num-
+bers in the worst case, where Mi refers to each measure and SMi
+
+m
+(cid:205)
+i=1
+
+Algorithm 1: MVDCube(root, partitions)
+1 Function Main(root, partitions):
+2
+
+foreach P ∈ partitions do
+root.loadPartition(P);
+root.updateSubtree();
+root.computeAndStoreAggregatedMeasures();
+
+3
+
+4
+
+5
+
+6 Function updateSubtree():
+7
+
+foreach child ∈ children do
+
+8
+
+9
+
+10
+
+11
+
+12
+
+13
+
+foreach pair (partition, offset) ∈ memory do
+child.updateBitmap(partition, offset);
+
+if timeToStoreToDisk() then
+
+child.updateSubtree();
+child.computeAndStoreAggregatedMeasures();
+child.emptyMemory();
+
+14 Function computeAndStoreAggregatedMeasures():
+foreach pair (partition, offset) ∈ memory do
+15
+
+16
+
+17
+
+18
+
+19
+
+currentBitmap = getBitmap(partition, offset);
+
+foreach pair (measure, aggFunction) do
+
+aggregatedMeasure = currentBitmap ⊗
+preAggregatedMeasure(measure,aggFunction);
+
+resultManager.add(partition,offset,aggregatedMeasure);
+
+is the set of aggregate functions assigned to the measure. As an
+optimization, we detect, offline, the numeric properties having at
+most one value for all their RDF nodes, e.g., the age of CEOs. To save
+memory, we allocate a single float number for all pre-aggregated
+results (min, max, and sum) for such properties.
+
+5 EARLY-STOP AGGREGATE PRUNING
+To reduce the effort required to compute lattices of aggregates, we
+have developed a novel technique called early-stop (ES).
+
+5.1 The early-stop principle
+Given an aggregate A = ⟨CFS, D, M, f ⟩ and an interestingness
+function h, finding, how interesting A is, amounts to evaluating a
+query of the form:
+
+SELECT h(aggregated) FROM
+
+(SELECT D1, D2, . . . DN , f (M ) AS aggregated
+FROM C F S D, M GROUP BY D1, D2, . . . , DN ) AS inner;
+
+Data Translationreservoirsamplinggender, company/area, nationalitynationalitycompany/area......gender, nationalitycompany/area nationalitygender1010...0101...01010101BM0       BM3       BM6             BM19  BM20         BM25  BM26  P1:1010011011BM8BM2BM2measure  computationA1A2Measure LoadingA4Lattice Computationavg(age)CFSM1CFSM24766agen1pre-aggregated measures2.8B120MnetWorthn2          partitioned array dataP1:{(3,n1),(6,n1),(19,n2),(20,n2),(25,n2),(26,n2)}; P2:{(18,n2),(19,n2),(24,n2),(25,n2)}; P3:{(18,n1)}; P4:{}capacity R3 R4 R2 R1CFSD1D2D34756.5662.92B120M2.8Bsum(netWorth)Early-stopgender, company/areawhere CFS D, M is CFS joined with dimensions D and the (pre-
+aggregated) measure M. Note that we only need to present the
+result of the inner query to the user, if A ends up in the top-k. This
+leads to the following idea: we could reduce the effort to compute
+some aggregates if we can determine (with high probability) that
+they will not be among the k most interesting ones.
+
+The literature [28, 30] introduced conservative and large-sample
+confidence intervals as means of estimating the result of a query
+such as inner but not the result of the full nested query, i.e., the
+interestingness score that we aim to obtain. Recent work on visual-
+ization recommendation [43] shows how to stop the evaluation of
+low-utility one-dimensional aggregates early on relational data. In
+doing so, it relies on a worst-case (conservative) confidence-interval-
+based pruning. In contrast, we extend the line of research on ag-
+gregate pruning by constructing a large-sample confidence interval
+around the interestingness score estimator. We provide our novel
+approach and formalize its probabilistic guarantees below.
+
+To enable early-stop pruning, we estimate the interestingness of
+the aggregate A using an estimator (cid:98)Hr , and bound this approximate
+score within our large-sample confidence interval. (We derive the
+formula for the interval in Section 5.2.) We draw from each aggre-
+gate group a sample containing the same number of facts. For the
+sake of efficiency, our sampling procedure proceeds in batches of a
+given size. After scanning a batch, we update the estimate of the
+aggregate’s interestingness based on the (pre-aggregated) measure
+values of the facts in the batch. To prune some aggregates, if we find
+that the upper-bound on the estimate of A’s interestingness is lower
+than the current lower-bound of the k-th best aggregate, we can give
+up evaluating A, and thus obtain the top-k aggregates more quickly.
+The central part of Figure 5 illustrates this with five aggregates and
+k = 3: the fifth aggregate can be stopped after the current batch,
+whereas the estimation of the fourth aggregate will continue in the
+next batch. This procedure terminates once the sample is exhausted
+or no aggregates have been pruned in a given number of batches.
+
+5.2 Estimating the interestingness score
+Notation recall. A simple random sample of size r is a vector
+[v1, . . . , vr ] of values drawn uniformly without replacement from
+a population V of size R; the sample is modeled by a set of indepen-
+dent, identically distributed (i.i.d.) random variables X1, . . . , Xr .
+
+An estimator is a random variable equal to a linear or nonlinear
+combination of X1, . . . , Xr (typically modeling a simple random
+sample). Evaluating the estimator on a vector [v1, . . . , vr ] of con-
+crete values taken by these random variables yields an estimation.
+Let S be a statistic of V , (cid:98)Sr be an estimator of the true value of S
+based on a sample of size r , and (1 − α) be a confidence level for
+0 ≤ α ≤ 1. Then, a (1 − α)-confidence interval (CI) is a random
+interval such that for each 1 ≤ r ≤ R, P((cid:98)Sr − εr ≤ S ≤ (cid:98)Sr + ¯εr ) =
+1 −α. One interval is derived deterministically from one sample; the
+probability is taken over all such intervals. We denote Lr = (cid:98)Sr − εr
+and Ur = (cid:98)Sr + ¯εr , respectively, the lower and the upper bounds at
+(1−α) confidence level on (cid:98)Sr . As in [30], the large-sample confidence
+interval contains the true value with the probability approximately
+equal to 1 − α.
+
+Constructing the estimator. We begin by developing formulas
+for the point estimator (cid:98)Hr of the query’s result when the aggregate
+
+r
+(cid:205)
+j=1
+
+function (f ) in use is count, sum, or avд and the interestingness
+function (h) is variance, skewness, or kurtosis. We first detail this for
+avд, and variance and then discuss extensions to other functions.
+Let д1, д2, . . . , дG be the aggregate groups of A and µ =
+(µ1, µ2, . . . , µG )⊺ be the true result of A, that is, the vector con-
+taining, for each group, the average of the pre-aggregated val-
+ues of M for facts from that group. Further, for each group дi ,
+let ¯Yi = 1
+X j be the sample mean estimator, where the variable
+r
+2
+X j has mean µi and variance σ
+and models the (pre-aggregated)
+i
+measure value of the j-th fact of the sample of size r , drawn from
+the facts in дi . Note that, from the Central Limit Theorem (Theo-
+σ 2
+2
+rem 5.5.14 in [8]), each ¯Yi ∼ N (µi ,
+r ) as r → ∞, where N (µi , σ
+i )
+i
+is the normal distribution centered in µi with standard error σi .
+(cid:1) ⊺ is
+We estimate (cid:98)Hr (µ) with (cid:98)Hr ( ¯Y ), where ¯Y = (cid:0) ¯Y1, ¯Y2, . . . , ¯YG
+the vector of all the group estimators. We thus obtain the (unbiased)
+estimator of the variance of a vector y = (y1, y2, . . . , yG )⊺:
+
+2
+
+1
+
+G
+(cid:213)
+
+G
+(cid:213)
+
+1
+G − 1
+
+(cid:98)Hr (y) =
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+Deriving CI bounds. We aim at providing a large-sample con-
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+i=1
+
+j=1
+
+(1)
+
+G
+
+fidence interval around (cid:98)Hr ( ¯Y ). Our formal result is as follows:
+
+Theorem 2. Let (cid:98)Hr be the estimator of variance. There exists an
+error εr > 0 such that (cid:98)Hr (µ) ∈ [ (cid:98)Hr ( ¯Y ) − εr , (cid:98)Hr ( ¯Y ) + εr ] with the
+probability approximately equal to 1 − α.
+
+Proof. We prove Theorem 2 constructively, thus exhibiting a
+concrete formula for εr . To derive the confidence interval, first, we
+approximate (cid:98)Hr ( ¯Y ) around µ using the first two terms of its Taylor
+series expansion: (cid:98)Hr ( ¯Y ) ≈ (cid:98)Hr (µ)+ ∇ (cid:98)Hr (µ) · ( ¯Y − µ). Then, we apply
+the Multivariate Delta Method (Theorem 5.5.28 in [8]) to state that
+
+√
+r
+
+(cid:104)
+(cid:98)Hr ( ¯Y ) − (cid:98)Hr (µ)
+
+(cid:105) D
+
+−→ N (0, τ
+
+2)
+
+(2)
+
+σs,t
+
+convergence in distribution,
+
+−→ denotes
+∂ (cid:98)Hr (µ)
+∂ys
+
+where D
+G
+G
+(cid:205)
+(cid:205)
+, σs,t = Cov( ¯Ys , ¯Yt ) for 1 ≤ s, t ≤ G.
+s=1
+t =1
+In other words, the difference between the correct value of
+interestingness, (cid:98)Hr (µ), and that on the estimator, (cid:98)Hr ( ¯Y ), converges
+in distribution to a 0-centered normal distribution.
+
+∂ (cid:98)Hr (µ)
+∂yt
+
+=
+
+τ
+
+2
+
+(cid:18)
+
+s
+r
+
+2 =
+
+, and τ
+
+To apply this theorem, we must show that (1) (cid:98)Hr has continuous
+2 > 0. Condition (1) can be
+first partial derivatives and that (2) τ
+easily shown by applying basic calculus on Eq. 1. For (2), we assume
+that ¯Y1, ¯Y2, . . . , ¯YG are independent random variables. Hence, for
+1 ≤ s, t ≤ G, if s (cid:44) t, then Cov( ¯Ys , ¯Yt ) = 0, else Cov( ¯Ys , ¯Yt ) =
+(cid:18)
+Var( ¯Ys ) = σ 2
+2
+G−1
+We now move toward a formula for the confidence interval based
+on the samples in the groups. We derive it by “standardizing” the
+distribution of the difference obtained in Eq. 2, and taking quantiles
+of the standard normal distribution, N (0, 1), as the interval’s ends.
+(cid:18)
+¯Ys − 1
+G
+biased) estimators of variances in all the G groups. From the
+Strong Law of Large Numbers (Theorem 5.5.9 in [8]), we have
+
+, where (cid:99)σ 2
+s
+
+Let (cid:98)τ 2 =
+
+µs − 1
+G
+
+is positive.
+
+G
+(cid:205)
+s=1
+
+G
+(cid:205)
+s=1
+
+are (un-
+
+G
+(cid:205)
+i=1
+
+G
+(cid:205)
+i=1
+
+2
+G−1
+
+σ 2
+s
+r
+
+(cid:99)σ 2
+s
+r
+
+(cid:19) (cid:19)2
+
+(cid:19) (cid:19)2
+
+¯Yi
+
+µi
+
+(cid:18)
+
+that lim
+r →∞
+
+(cid:98)τ 2 = τ
+
+2 almost surely. Then, applying Slutsky’s theo-
+
+Dataset
+
+#triples
+
+#CFSs
+
+#P
+
+#A
+
+#DP
+
+rem (Theorem 5.5.17 in [8]), we get
+
+(cid:104)
+
+√
+r
+
+(cid:32) √
+r
+
+N (0, 1). In turn, for large r , we obtain: P
+(cid:12)
+√
+(cid:12)
+r√
+εr
+(cid:12)
+(cid:99)τ 2
+
+(cid:12)
+(cid:12) (cid:98)Hr ( ¯Y )− (cid:98)Hr (µ)
+(cid:12)
+(cid:99)τ 2
+
+√
+r√
+(cid:99)τ 2
+
+≈ 2Φ
+
+≤ εr
+
+√
+
+P
+
+(cid:33)
+
+(cid:18)
+
+(cid:105)
+
+(cid:113)
+(cid:98)Hr ( ¯Y ) − (cid:98)Hr (µ)
+/
+(cid:12)
+(cid:16)(cid:12)
+(cid:12) (cid:98)Hr ( ¯Y ) − (cid:98)Hr (µ)
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:19)
+
+(cid:98)τ 2 D
+−→
+(cid:17) =
+
+≤ εr
+
+−1 , where Φ denotes the
+
+cumulative distribution function of a normally distributed variable.
+2 quantile of Φ. Solving zp = εr
+for εr , gives
+
+Let zp be the p+1
+
+√
+r√
+(cid:99)τ 2
+
+us εr =
+mation at the desired confidence level:
+
+. Finally, choosing zp = z1−α we obtain the approxi-
+
+(cid:114)
+
+z2
+p (cid:99)τ 2
+r
+
+woD kw lang
+
+count path
+
+Airline [24]
+CEOs [37]
+DBLP [21]
+Foodista [18]
+NASA [17]
+Nobel [12]
+
+56M
+85k
+33M
+1M
+99k
+87k
+
+1
+237
+1
+5
+10
+15
+
+30
+61
+21
+13
+37
+39
+
+5,923
+159
+1
+0
+19
+58
+
+0
+1
+5
+1
+3
+3
+
+0
+1
+3
+1
+15
+3
+
+0
+37
+8
+6
+3
+18
+
+0
+462
+19
+38
+87
+87
+
+Table 2: Real datasets used for testing.
+
+#A
+
+wD
+
+5,923
+27,860
+961
+14
+1,449
+30,658
+
+(cid:32)
+
+P
+
+(cid:12)
+(cid:12) (cid:98)Hr ( ¯Y ) − (cid:98)Hr (µ)
+(cid:12)
+
+(cid:12)
+(cid:12)
+(cid:12)
+
+≤
+
+(cid:114)
+
+(cid:33)
+
+z2
+1−α (cid:99)τ 2
+r
+
+≈ (1 − α)
+
+□
+
+Other interestingness functions. To derive confidence inter-
+vals for skewness and kurtosis, we follow similar derivations by
+replacing the definition of (cid:98)Hr (Eq. 1) with their respective formulas.
+We derive the CIs based on the Delta Method – both cases exhibit
+continuous first partial derivatives; see Appendix A. In general, one
+can derive similar formulas for any interestingness function that
+meets conditions (1) and (2).
+
+Other aggregate functions. For sum, we estimate the group
+sizes while sampling and compute the estimate as a product of
+the avд and count estimates. For min and max, we use the sample
+min and the sample max, respectively, as point estimates; we apply
+Popoviciu’s and Szőkefalvi-Nagy’s inequalities [41] for the upper
+and lower bounds, respectively. See Appendices B, and C for details.
+
+5.3 Plugging early-stop into MVDCube
+We integrate early-stop into MVDCube to speed up Aggregate
+Evaluation, and thus address challenge C2. The evaluation of an
+MMST begins with the Data Translation step, run in parallel with
+Measure Loading (recall Section 4.3). We exploit the data translation
+to create a stratified sample of facts for the early-stop pruning.
+Given the MMST, each address in the multidimensional space in
+the root corresponds to a unique group of facts. We allocate empty
+reservoirs R1, R2, . . . , RG , one per aggregate group, each with a
+capacity equal to the sample size: this way we ensure stratification.
+While reading each tuple, we determine its group, hence also the
+reservoir, and either put the fact in or not with some probability. If
+the reservoir is full, we discard one of the previously inserted facts.
+This strategy is known as reservoir sampling and guarantees a
+choice of a simple random sample [44]. Figure 5 shows an on-going
+sampling process with four reservoirs R1 to R4, each of size 3.
+
+The sample thus obtained is used by early-stop as follows. Once
+the translation is finished, we propagate the facts sampled from the
+MMST’s root down the tree using Roaring Bitmaps as in MVDCube
+(see Figure 5): each node in the MMST receives its own sample.
+Then, we perform the early-stop pruning based on these samples.
+All the aggregates that have not been pruned (deemed sufficiently
+interesting) by early-stop are subsequently evaluated by MVDCube.
+
+Figure 6: Examples of interesting aggregates found by Spade.
+
+6 EXPERIMENTAL EVALUATION
+Computational environment. We ran all experiments on an Intel
+Xeon CPU E5-2640 v4 @ 2.40GHz, 40 cores (2 sockets with 10
+physical cores each, hyper-threading enabled), running CentOS 7
+with 90GB for JVM (OpenJDK 1.8) and 30GB for PostgreSQL 12.
+
+Systems. We implemented Spade in Java 1.8 (18k lines of code);
+it relies on OntoSQL 1.0.12, an efficient RDF storage and query
+answering platform on top of an RDBMS [5–7] (PostgreSQL in our
+case). We compare the performance of our aggregate evaluation
+method against the best-effort baseline, which uses PostgreSQL’s
+GROUP BY CUBE implementation, since 2016 based on an efficient
+one-pass computation of all aggregates in a lattice [26], that sup-
+ports additional features such as count(distinct), which were not
+available in ArrayCube [49]. We denote this by PGCube. As dis-
+cussed in Section 4.2, PGCube may fail to compute correct results in
+the presence of multi-valued dimensions. However, the support for
+counting of distinct values may help PGCube correct some wrong
+results. Thus, we consider two variants: (i) PGCube computing
+counts using count(∗), denoted PGCube∗, and (ii) PGCube comput-
+ing counts using count(distinct), denoted PGCubed . In both cases,
+our Java code is at a disadvantage against a C/C++ engine.
+
+Real-world graphs. Our experiments involve a set of real-
+application RDF graphs, for which Table 2 shows: the number of
+triples, the number of CFSs, the number of (direct) properties and
+derived properties (#P and #DP, respectively) in the graph, and the
+number of aggregates without and with derivations (#AwoD and
+#Aw D , respectively). The graph sizes in this work are similar to the
+real-world dataset sizes used in comparable relational works, e.g.,
+20k tuples in [42], and up to 60M tuples in [43]. Airline was origi-
+nally a relational dataset on flight delays used in prior work [43];
+we converted it into RDF (each tuple becomes a CF with a fixed
+set of properties), whereas the others are natively RDF. We discuss
+differences between this and the other graphs shortly.
+
+Figure 7: Interestingness of MDAs due to derivations.
+
+6.1 Analysis of example results
+We begin by showing, in Figure 6, example interesting aggregates
+found by Spade when using variance as an interestingness score:
+(a) “Minimum net worth of CEOs by gender and occupation”:
+(i) there are two outliers, male philanthropists and male sharehold-
+ers: their minimum net worth is much higher than others’; (ii) the
+net worth value is known for all but one occupation for male CEOs,
+but only in a half of them for female CEOs; (iii) the minimum net
+worth of female CEOs is nearly the same across occupations.
+
+(b) “Number of launches by launch site and nationality” in the
+NASA graph: (i) very high values for USSR spacecrafts launched
+from Plesetsk and Bajkonur; (ii) the most used USA launch sites
+are Cape Canaveral and Vandenberg Base.
+
+(c) “Average mass of spacecrafts by discipline”: here 4 disciplines,
+i.e., Human crew, Microgravity, Life sciences and Repair stand out
+with the average spacecraft mass significantly higher than others’.
+Nonetheless, many candidate MDAs are uninteresting: Figure 8
+shows the aggregate “minimum number of occupations of CEOs by
+gender and number of companies” in the CEOs dataset, where all
+aggregated values are uniformly equal to 1; or “average number
+of launched vehicles by launch site” in the NASA dataset, where
+most values are equal to 1, and only 8 out of 35 bars are slightly
+higher but still less than 1.05. These aggregates don’t exhibit any
+significant outliers and were therefore ranked low by Spade. This
+confirms the need for using early-stop to prune such MDAs.
+
+It could have been in principle envisioned to compare the inter-
+estingness of the aggregates found by our system with that of some
+manually chosen aggregates. However, doing so is hampered by the
+lack of feasible selection methods available to human users. For this
+reason, the starting point of our work is precisely the observation
+that it is very hard to select aggregates manually. There are several
+reasons for this: (i) The sheer size of the graph impedes human
+understanding, and it is hard to induce human users to attempt
+solving such a computationally expensive task at all. Even if they
+did try to solve it, typically, such users would use a simple SPARQL
+engine that can evaluate aggregates, and hence they would have to
+formulate the queries themselves, which requires expertise in writ-
+ing such complex aggregate queries. (ii) Even if we reduce a graph
+to a modest size, e.g., through summarization [9, 34] or sampling,
+the reduced graph may not reflect (a) all possible combinations of
+facts, dimensions, and measures in the original data; (b) the graph
+values, e.g., the frequent values and value distributions; or (c) any
+derived properties. Even under strong (unrealistic) assumptions,
+e.g., (b) and (c) are both known for a simple, regular RDF graph,
+users would still not know which aggregates are interesting (e.g.,
+deviating from a uniform distribution) before enumerating and
+
+Figure 8: Example uninteresting aggregates found by Spade.
+
+evaluating them all at least partially. (iii) Supporting interactions
+with the system leads users inevitably to inject some information
+about their preferences in the aggregate selection process. For ex-
+ample, in the NASA dataset, the users may prefer to investigate
+launches grouped by the launch site rather than the discipline of the
+spacecraft staff. In contrast, Spade is a fully automated approach to
+discovering statistically interesting aggregates, with no user input
+required. It defines and enumerates a large set of candidate ag-
+gregates by applying heuristics to generate potentially interesting
+dimensions and measures and evaluates them efficiently.
+
+As examples in Figure 6 show, our highly-ranked results returned
+from the six real datasets reveal interesting insights. Due to the
+automatic nature of Spade, in some datasets, there may be a small
+fraction of aggregates that, despite being statistically sound, are
+unlikely to be chosen by the user. For example, the aggregate mini-
+mum net worth of CEOs by nationality/image uses a derived property,
+nationality/image, which is statistically similar to other meaningful
+dimensions, e.g., nationality/label, but the user is unlikely to choose
+it. This indicates that a “human-in-the-loop” approach can further
+improve the effectiveness of our automated approach. While for
+the above example, the user can simply add nationality/image to a
+stop list for dimensions, a full design of “human-in-the-loop” data
+exploration will be a focus of our future research.
+
+6.2 The benefits of derived properties
+We begin our evaluation by validating the benefits of Derived Prop-
+erty Enumeration (Section 3). This step is crucial to address chal-
+lenge C1. We show that it allows us to increase the pool of attributes
+and to generate a large and rich space of interesting aggregates.
+
+Experiment 1. We compare the results of our analytical strat-
+egy when: (i) only RDF graph properties were used for the analysis
+
+Figure 9: Run times (on log scale) of MVDCube and PGCube.
+
+Dataset
+
+PGCube∗
+
+PGCubed
+
+#wrong aggs #wrong aggs
+
+Airline
+CEOs
+DBLP
+Foodista
+NASA
+Nobel
+
+0
+4,723
+102
+2
+378
+4,154
+
+0
+3,998
+87
+0
+312
+3,821
+
+Table 3: PGCube∗ and PGCubed
+errors on real-graph aggregates.
+
+Figure 10: Distribution
+of PGCubed errors.
+
+(woD), and (ii) derived properties were also considered (wD). As
+Table 2 shows, the Airline dataset (originally relational) leads to
+no derivations: tuples are not linked to each other, and thus no
+paths can be derived; it lacks multi-valued attributes, thus no count
+derivation applies; the data is mostly numeric, so keyword or lan-
+guage attributes are not derived. The other (native RDF) graphs
+differ drastically: they feature several CFSs, multi-valued proper-
+ties, links among RDF nodes leading to many path derivations
+(Table 2 shows counts of path derivations of length 1, as they are
+the most numerous); textual attributes are also quite frequent. Fig-
+ure 7 further shows, for each graph, the interestingness of its MDAs
+(measured with variance) in woD and wD settings (left and right
+lines, respectively); a horizontal tick in a line depicts an MDA.
+
+Our first main observation, denoted as remark (R1), is that
+(i) derivations increase the total number of enumerated MDAs: for
+instance, on Foodista, no MDA exists without derivations, whereas
+we find several by deriving the recipe language, the count of in-
+gredients, etc.; on DBLP, only year is a good dimension, whereas
+through derivations we obtain, e.g., keyword(title); (ii) derivations
+increase the interestingness of the best aggregates.
+
+Henceforth, we enable derivations in our experimental analysis.
+
+6.3 Analysis of MVDCube against PGCube
+Our next set of experiments focuses on Aggregate Evaluation, the
+last step of our online pipeline, where most computation takes
+place. Since PGCube is not able to prune unpromising aggregates,
+for fairness, in this section, early-stop is disabled.
+
+Experiment 2. We compare MVDCube with PGCube in run
+time and quality (correctness). Recall that PGCube’s results may be
+erroneous (Section 4.2). We use the six real graphs with derivations.
+Regarding the run time, Figure 9 shows MVDCube against
+PGCube∗ and PGCubed on our real datasets. We observe that MVD-
+Cube achieves a time gain of 20% to 80% over PGCube∗ and of 30% to
+83% over PGCubed on most datasets (R2). Specifically, MVDCube
+outperforms PGCube when there are many (more than 15) aggregates
+
+Figure 11: Run times of the steps in Spade’s online pipeline.
+
+to evaluate (R3). This is because MVDCube: (i) shares measures
+across all the aggregates from the same CFS, and (ii) computes each
+aggregate only once, even if it appears in several lattices. In contrast,
+PGCube evaluates each lattice in a separate query, each of which
+joins the facts with the measures. Except for the Foodista dataset,
+which has a small number of aggregates and both methods run
+under a second, MVDCube shows significant gains on CEOs, NASA
+and Nobel Prizes graphs, where many MDAs are evaluated, MVD-
+Cube gains 40% over PGCube. Similarly, Airline leads to almost 6k
+MDAs, the dataset is rather large (6M facts), and the repeated joins
+are expensive: PGCube∗ takes 5 times MVDCube’s time.
+
+Regarding the errors, Table 3 shows, for each graph, the number
+of aggregates with incorrect results (#wrong aggs) for PGCube∗
+and PGCubed . We observe that PGCube∗ and PGCubed produce
+errors in, respectively, 14% and 12% of all computed aggregates
+(R4). PGCubed , PGCube’s best effort to generate correct results,
+still produces errors in 9% to 21% of the computed aggregates across
+different datasets. As shown in Section 4.2, errors are related to
+multi-valued attributes in the data. Indeed, CEOs, NASA, and Nobel
+Prizes datasets have the greatest number of multi-valued attributes
+and the highest error, ranging from 12% to 21%.
+
+Experiment 3. We now quantify the error in those aggregates
+that are computed wrongly by PGCubed . Given an aggregate A,
+the value of the aggregated measure of the j-th
+we denote mA
+j
+group in A, as computed by MVDCube. We denote by pA
+the value
+j
+that PGCubed computes for the same group. As pA
+can only be
+j
+, ideally, this ratio
+higher than or equal to the correct value mA
+j
+should be 1. When an aggregate is shared by two lattices, it can be
+computed from either lattice, leading to different error ratios. When
+this happens, we record the maximum error, to measure the “worst-
+case risk” incurred by evaluating the lattice through PGCube. Each
+aggregate thus leads to a set of error ratios, one per group. Figure 10
+shows their distribution, for count and sum aggregates, for the four
+datasets from Table 3 where errors were detected. We note that
+errors can easily exceed one order of magnitude (R5): in 3 out of 4
+cases, PGCubed produces at least 1 tuple whose value is more than
+30 times the true value. In CEOs, one group records an error ratio
+greater than 103; it comes from a three-dimensional lattice where
+all dimensions were multi-valued. Such incorrect values would
+severely falsify the selection of the k most interesting aggregates.
+
+6.4 Impact of early-stop on MVDCube
+Experiment 4. We next study the effectiveness of our early-stop
+technique (ES). For our real graphs, Table 4 shows: (i) the evaluation
+time taken by MVDCube alone, (ii) the time with ES enabled, as de-
+scribed in Section 5.3, (iii) the time gain due to ES, (iv) the fraction
+of aggregates pruned and (v) the accuracy of ES. Following [43],
+
+∩T w
+k
+
+and T w
+k
+
+|/|T w /o
+k
+
+if T w /o
+are the sets of the top-k aggregates returned by
+k
+MVDCube without and with ES, the accuracy is computed as the
+: |T w /o
+fraction of true positives in T w
+|. We show this
+k
+k
+for k ∈ {3, 5, 10}, in keeping with comparable works in a relational
+DW setting [43] and using a sample size of 60 with 2 batches, a con-
+figuration we found empirically to work well. Table 4 leads to two
+observations. First, ES can bring significant evaluation time gains,
+from 10% to 43% in our experiments; and it aggressively prunes
+uninteresting aggregates, frequently as much as 70% (R6). ES is es-
+pecially beneficial on graphs with more than 100 aggregates, except
+for DBLP, where translating the data into an array representation
+is much more expensive than evaluation, and thus, the saved eval-
+uation effort appears small. In some cases, the impact of ES was
+negative (and very small), due to a sampling overhead. Second,
+MVDCube with ES is often quite accurate (R7): 100% accuracy is
+attained in the majority of cases, except for Nobel Prizes, where,
+e.g., the true top-10 contains aggregates with interestingness score
+greater than 10.49, whereas ES returns those greater than 9.45.
+
+6.5 Scalability study
+We finally analyze the scalability of our approach and compare it
+with PGCube, when varying different data characteristics. To be
+able to fully control them, we designed a synthetic benchmark
+(a set of graphs) with fixed numbers of facts |CFS |, N dimensions
+and M measures. All property values are numeric. We ensure that a
+single CFS is found and that each dimension Di , 1 ≤ i ≤ N , takes at
+most 100 values (so that they are considered good dimensions, recall
+Step 2 in Section 3). We denote each graph by |D1| : |D2| : . . . : |DN |,
+the maximum number of distinct values along each dimension. To
+obtain realistic distributions of the facts in this multidimensional
+space, we randomly assign dimension values as in [1], controlled
+by a sparsity parameter s ∈ [0, 1]. To ensure PGCube correctness,
+each fact has only one value for each dimension.
+
+Experiment 5. We analyze the performance of the entire online
+pipeline of Spade on benchmark datasets. We use 12 configurations,
+each having |CFS |=1M, 3 dimensions, and 3, 5, or 10 measures.
+We also use (i) two different combinations of distinct values for
+dimensions, 100:100:100 (uniform) and 100:5:2 (decreasing), and
+(ii) two different sparsity coefficients, 0.1 and 0.5. In Figure 11, each
+bar represents one configuration (“u” or “d” for value distribution
+| sparsity coefficient | number of measures) and reports the total
+execution time of Spade using MVDCube without early-stop. Each
+segment of a bar covers one computation step (recall Figure 2).
+In the pipeline order of steps, we observe that: (i) Candidate Fact
+Set Selection is too fast to be visible; although there is only one
+CFS here, in all our experiments with real graphs, it was 5-10 ms.
+(ii) Online Attribute Analysis’s time is noticeable, between 15% and
+37% of the total time, and increases with the number of measures:
+Spade must analyze them before deciding that they are not suitable
+dimensions. (iii) Aggregate Evaluation dominates the processing
+time; it increases with the number of distinct groups and the number
+of measures as each measure leads to a different aggregate. (iv) The
+time to select the best aggregates (evaluate their interestingness
+and pick the top-k) is also noticeable and grows as expected with
+the number of aggregates. (v) Sparsity has a moderate impact. From
+these results, we conclude that for a fixed CFS, Aggregate Evaluation
+
+dominates Spade’s execution, increasing with the number of distinct
+groups and the number of measures; Online Attribute Analysis has
+the second-highest cost, growing with the number of attributes (R8).
+Experiment 6. We now study the impact of |CFS |, N , and M
+on the performance of Spade. As a base configuration, we fixed the
+synthetic graph with |CFS | = 5M, 3 dimensions, and 15 measures
+(generated as above). For each dimension, we set the uniform value
+distribution (as above) and sparsity 0.1, as Experiment 5 proved
+this configuration to be the most difficult. Figures 12a, 12b, 12c
+show the total execution time of Spade’s online pipeline when we
+vary |CFS | ∈ {1M, 2.5M, 5M, 7.5M, 10M}, M ∈ {5, 10, 15, 20, 25, 30},
+and N ∈ {1, 2, 3, 4}, respectively; the Aggregate Evaluation step
+was executed through PGCube∗, MVDCube, and MVDCube with
+early-stop as evaluation modules. We chose PGCube∗ as on these
+graphs it is correct, and it is faster than PGCubed . The figures show
+that MVDCube scales linearly when |CFS | and M grow, and its run
+time increases more with N ; the latter is expected given the high
+number of lattices that are enabled by more dimensions. Further,
+Spade using MVDCube is consistently faster than using PGCube∗
+by up to 2.9×; it also scales better as |CFS |, N and M grow, and
+MVDCube with early-stop is consistently the fastest (R9). Note that
+in Figure 12b, MVDCube with early-stop took slightly longer for
+M=10 than for M=15: in these cases, the random samples drawn by
+early-stop (Section 5) were less helpful for M=10 than for M=15.
+
+6.6 Experimental conclusions
+Our experimental results established, first, the need for a novel
+framework for finding interesting aggregates in RDF graphs: in
+heterogeneous graphs lacking well-defined facts, dimensions, and
+measures, Property Derivation increases significantly the space
+of interesting aggregates (R1). Due to multi-valued dimensions,
+relational aggregate evaluation algorithms often introduce errors
+(R4), which can be very significant (R5). On real-world graphs,
+our algorithm, MVDCube, not only produces correct results but is
+also faster (by 20% to 80%) than the best comparable (PostgreSQL)
+baseline (R2), (R3). Our novel early-stop technique reduces MVD-
+Cube’s run time by 10% to 43% in many cases (R6), while remaining
+accurate (R7). In the entire online pipeline of Spade, the most time-
+consuming steps are Aggregate Evaluation, followed by Online At-
+tribute Analysis (R8). MVDCube consistently outperforms PGCube
+while scaling in the number of facts, measures, and dimensions;
+early-stop further improves the performance (R9).
+
+7 RELATED WORK
+Graph exploration. By providing visually meaningful, interactive
+interfaces, RDF graph visualization [40] allows casual users to ac-
+cess the data in RDF graphs. Based on the graph structure, content,
+and/or semantics, RDF summarization [9] computes a synopsis
+(summary) of the data, encapsulating the essential information of
+the graph from a given perspective. Example-based graph explo-
+ration, such as in [33], helps users discover data based on examples
+they specify. Our work is complementary to these approaches.
+
+Insight extraction from multidimensional data is a
+common technique for data exploration. Research conducted
+in [42] and [16] provides automatic extraction of the top-k insights
+from multidimensional relational data. An insight is an observation
+
+TOP 3
+
+TOP 5
+
+TOP 10
+
+dataset
+
+MVD MVD+ES
+
+gain% pruned%
+
+acc%
+
+MVD MVD+ES
+
+gain% pruned%
+
+acc%
+
+MVD MVD+ES
+
+gain% pruned%
+
+acc%
+
+Airline
+CEOs
+DBLP
+Foodista
+NASA
+Nobel
+
+381,710
+18,114
+256,832
+855
+8,633
+24,633
+
+316,168
+14,624
+255,918
+917
+7,366
+13,897
+
+17.17
+19.27
+0.36
+-7.25
+14.68
+43.58
+
+96.13
+79.21
+88.03
+0.00
+82.40
+95.94
+
+100.00
+33.33
+100.00
+100.00
+100.00
+0.00
+
+369,369
+18,685
+250,916
+1,173
+8,581
+24,453
+
+316,885
+14,108
+248,982
+893
+7,750
+13,829
+
+14.21
+24.50
+0.77
+23.87
+9.68
+43.45
+
+93.52
+72.86
+85.33
+0.00
+76.54
+95.59
+
+100.00
+100.00
+100.00
+100.00
+80.00
+20.00
+
+373,660
+18,047
+249,463
+886
+8,458
+23,848
+
+330,467
+15,108
+256,325
+920
+8,151
+14,267
+
+11.56
+16.29
+-2.75
+-3.84
+3.63
+40.18
+
+88.10
+66.86
+80.85
+0.00
+59.01
+94.70
+
+90.00
+100.00
+100.00
+100.00
+100.00
+30.00
+
+Table 4: Early-stop effectiveness on real datasets. All times in ms; in bold: gain% > 10%, pruned% > 70%, and acc% = 100%.
+
+(a) Varying the number of facts |C F S |.
+
+(b) Varying the number of measures M .
+Figure 12: Scalability of Spade in the number of facts, measures, and dimensions.
+
+(c) Varying the number of dimensions N .
+
+extensible framework that enumerates a large and rich space of
+insights in the form of RDF aggregate queries and produces top-k re-
+sults that maximize a given interestingness function. To efficiently
+explore the large space of candidates aggregates, Spade introduces:
+(i) MVDCube, an efficient algorithm for evaluating many aggre-
+gates in a single pass over the data, 20% to 80% faster than the best
+comparable method implemented in PostgreSQL, and (ii) a novel
+probabilistic technique that prunes uninteresting aggregates early.
+Spade scales well with the data size and the number of measures.
+In future work, we plan to study more insight extraction methods
+to support numeric trends [42], time series, and geo-referenced data.
+Another research direction is “human-in-the-loop” data exploration
+that allows the user to work synergistically with the system to
+broaden the set of insights discovered from large graphs.
+
+ACKNOWLEDGMENTS
+Yanlei Diao and Paweł Guzewicz are supported by the European
+Research Council, H2020 research program under GrantNo.: 725561,
+and by the Agence Nationale de la Recherche under GrantNo.: ANR-
+16-CE23-0010-01. Mirjana Mazuran is supported by the European
+Research Council, H2020 research program under GrantNo.: 800192.
+
+derived from aggregation in multiple steps; it is considered inter-
+esting when it is remarkably different from others, or it exhibits
+a rising or falling trend. Multi-structural databases [20] distribute
+data across a set of dimensions, compare two sets of data along
+given dimensions, and separate the data into cohesive groups. A
+smart drill-down operator [31] is proposed for interactively explor-
+ing a relational table to discover groups of tuples that are frequent,
+specific, and diverse. Works in this area assume a fixed relational
+schema; more recently, they consider graphs as in [4], but, unlike
+Spade, they require them to have a very regular structure.
+
+Visualization recommendation. SeeDB [43] identifies, in rela-
+tional data, the one-dimensional aggregates that exhibit the largest
+deviation between a target dataset and a reference dataset. A study
+in [19] lays out a recommendation scheme for top-k aggregate
+visualizations from relational data using a multi-objective utility
+function to prune as many low-utility views as possible. Recent
+work [48] shows how to automatically discover the utility func-
+tion to match the user intentions. DeepEye [35] finds and ranks
+visualizations by combining a binary classifier, supervised learn-
+ing, and expert rules. QAGView [45, 46] provides summaries of
+high-valued aggregate query answers that ensure properties includ-
+ing coverage, diversity, and relevance, customized based on user
+preferences. LensXPlain [38] helps users understand answers to
+aggregate queries by providing the top-k explanations.
+
+In contrast to these works, Spade applies on a schemaless RDF
+graph, and hence must automatically derive those dimensions and
+measures that are good candidates to produce some insights.
+
+Cube computation is at the heart of multidimensional data
+analysis and has been intensely studied [39]. To limit the number
+of scans of the data and to share computation as much as possible,
+many algorithms compute the aggregates in the lattice from one
+of their parents [1, 10, 49]. ArrayCube [49] is a widely accepted
+algorithm in this category proposing a one-pass solution that si-
+multaneously aggregates along multiple dimensions.
+
+8 CONCLUSIONS AND FUTURE WORK
+Discovering interesting insights from RDF graphs requires auto-
+matic, expressive, and efficient methods. We presented Spade, an
+
+REFERENCES
+[1] Sameet Agarwal, Rakesh Agrawal, Prasad Deshpande, Ashish Gupta, Jeffrey F.
+Naughton, Raghu Ramakrishnan, and Sunita Sarawagi. 1996. On the Computation
+of Multidimensional Aggregates. In VLDB. VLDB Endowment, Mumbai (Bombay),
+India, 506–521.
+
+[2] Elham Akbari Azirani, François Goasdoué, Ioana Manolescu, and Alexandra
+Roatis. 2015. Efficient OLAP operations for RDF analytics. In ICDE Workshops.
+IEEE, Seoul, South Korea, 71–76.
+
+[3] Adnene Belfodil, Sylvie Cazalens, Philippe Lamarre, and Marc Plantevit. 2020.
+Identifying exceptional (dis)agreement between groups. Data Mining and Knowl-
+edge Discovery 34, 2 (2020), 394–442. https://doi.org/10.1007/s10618-019-00665-9
+[4] Dritan Bleco and Yannis Kotidis. 2019. Using entropy metrics for pruning very
+
+large graph cubes. Information Systems 81 (2019), 49–62.
+
+[5] Maxime Buron, François Goasdoué, Ioana Manolescu, and Marie-Laure Mug-
+nier. 2019. Reformulation-based query answering for RDF graphs with RDFS
+ontologies. In ESWC. Association for Computing Machinery, Portorož, Slovenia.
+https://hal.archives-ouvertes.fr/hal-02051413
+
+[6] Maxime Buron, François Goasdoué, Ioana Manolescu, and Marie-Laure Mugnier.
+2020. Ontology-Based RDF Integration of Heterogeneous Data. In EDBT. Associ-
+ation for Computing Machinery, Copenhagen, Denmark. https://hal.inria.fr/hal-
+02446427
+
+[7] Damian Bursztyn, François Goasdoué, and Ioana Manolescu. 2016. Teaching an
+
+RDBMS about ontological constraints. PVLDB 9, 12 (2016), 1161–1172.
+
+[8] George Casella and Roger Berger. 2001. Statistical Inference. Duxbury Resource
+
+Center, Pacific Grove, California, USA.
+
+[9] Šejla Cebiric, François Goasdoué, Haridimos Kondylakis, Dimitris Kotzinos, Ioana
+Manolescu, Georgia Troullinou, and Mussab Zneika. 2019. Summarizing Semantic
+Graphs: A Survey. The VLDB Journal 28, 3 (2019). https://hal.inria.fr/hal-01925496
+[10] Zhimin Chen and Vivek R. Narasayya. 2005. Efficient Computation of Multiple
+Group By Queries. In SIGMOD. Association for Computing Machinery, Baltimore,
+Maryland, USA, 263–274.
+
+[11] Dario Colazzo, François Goasdoué, Ioana Manolescu, and Alexandra Roatis. 2014.
+RDF Analytics: Lenses over Semantic Graphs. In WWW. Association for Com-
+puting Machinery, Seoul, South Korea. https://doi.org/10.1145/2566486.2567982
+[12] The Nobel Prize Committee. 2020. Nobel Prizes dataset. http://data.nobelprize.
+
+org/dump.nt
+
+[13] World Wide Web Consortium. 2013. SPARQL 1.1 Query Language.
+
+https:
+
+//www.w3.org/TR/sparql11-query/
+
+[14] Yanlei Diao, Paweł Guzewicz, Ioana Manolescu, and Mirjana Mazuran. 2019.
+Spade: A Modular Framework for Analytical Exploration of RDF Graphs (demon-
+stration). In PVLDB. VLDB Endowment, Los Angeles, California, USA, 1926–1929.
+https://doi.org/10.14778/3352063.3352101
+
+[15] Yanlei Diao, Ioana Manolescu, and Shu Shang. 2017. Dagger: Digging for Inter-
+esting Aggregates in RDF Graphs. In ISWC Posters & Demonstrations and Industry
+Tracks. CEUR-WS.org.
+
+[16] Rui Ding, Shi Han, Yong Xu, Haidong Zhang, and Dongmei Zhang. 2019. QuickIn-
+sights: Quick and Automatic Discovery of Insights from Multi-Dimensional Data.
+In SIGMOD. Association for Computing Machinery, Amsterdam, The Netherlands,
+317–332.
+
+[17] Leigh Dodds. 2010. NASA dataset. https://old.datahub.io/dataset/data-incubator-
+
+nasa Additional resources: https://data.nasa.gov/.
+
+[18] Leigh Dodds. 2011. Foodista dataset. https://old.datahub.io/dataset/foodista
+[19] Humaira Ehsan, Mohamed A. Sharaf, and Panos K. Chrysanthis. 2018. Efficient
+Recommendation of Aggregate Data Visualizations. IEEE Transactions on Knowl-
+edge and Data Engineering 30, 2 (2018), 263–277. https://doi.org/10.1109/TKDE.
+2017.2765634
+
+[20] Ronald Fagin, R. Guha, Ravi Kumar, Jasmine Novak, D. Sivakumar, and Andrew
+Tomkins. 2005. Multi-Structural Databases. In PODS. Association for Comput-
+ing Machinery, Baltimore, Maryland, 184–195. https://doi.org/10.1145/1065167.
+1065191
+
+[21] Linked Data Fragments. 2017.
+
+http://downloads.
+linkeddatafragments.org/hdt/dblp-20170124.hdt Additional resources: https:
+//www.rdfhdt.org/datasets/ and https://linkeddatafragments.org/.
+
+DBLP dataset.
+
+[22] François Goasdoué, Paweł Guzewicz, and Ioana Manolescu. 2020. RDF graph
+summarization for first-sight structure discovery. The VLDB Journal 29, 5 (2020),
+1191–1218. https://doi.org/10.1007/s00778-020-00611-y
+
+[23] François Goasdoué, Ioana Manolescu, and Alexandra Roatis. 2013. Efficient
+Query Answering against Dynamic RDF Databases. In EDBT. Association for
+Computing Machinery, Genoa, Italy. https://doi.org/10.1145/2452376.2452412
+
+[24] Giovanni Gonzalez. 2016. Airline delays causes dataset. https://www.kaggle.
+
+com/giovamata/airlinedelaycauses
+
+[25] Karam Gouda and Mohammed Javeed Zaki. 2001. Efficiently Mining Maximal
+
+Frequent Itemsets. In ICDM. IEEE, San Jose, California, USA, 163–170.
+
+[26] PostgreSQL Global Development Group. 2015.
+
+PostgreSQL support
+for GROUPING SETS, CUBE and ROLLUP in one pass over the in-
+put.
+https://git.postgresql.org/gitweb/?p=postgresql.git;a=commitdiff;h=
+f3d3118532175541a9a96ed78881a3b04a057128
+
+[27] PostgreSQL Global Development Group. 2020. PostgreSQL 12 CUBE. https:
+
+//www.postgresql.org/docs/12/cube.html
+
+[28] P. J. Haas. 1997. Large-sample and deterministic confidence intervals for on-
+line aggregation. In SSDBM. Association for Computing Machinery, Olympia,
+Washington, USA, 51–62.
+
+[29] Venky Harinarayan, Anand Rajaraman, and Jeffrey D. Ullman. 1996. Implement-
+ing Data Cubes Efficiently. In SIGMOD. Association for Computing Machinery,
+Montreal, Quebec, Canada, 205–216.
+
+[30] Joseph M. Hellerstein, Peter J. Haas, and Helen J. Wang. 1997. Online Aggregation.
+In SIGMOD. Association for Computing Machinery, Tucson, Arizona, USA, 171–
+182.
+
+[31] Manas Joglekar, Hector Garcia-Molina, and Aditya G. Parameswaran. 2019. Inter-
+active Data Exploration with Smart Drill-Down. IEEE Transactions on Knowledge
+and Data Engineering 31, 1 (2019), 46–60. https://doi.org/10.1109/TKDE.2017.
+2685998
+
+[32] Daniel Lemire, Gregory Ssi Yan Kai, and Owen Kaser. 2016. Consistently faster
+and smaller compressed bitmaps with Roaring. Software: Practice and Experience
+46, 11 (2016), 1547–1569. https://doi.org/10.1002/spe.2402
+
+[33] Matteo Lissandrini, Davide Mottin, Themis Palpanas, and Yannis Velegrakis. 2018.
+Multi-Example Search in Rich Information Graphs. In ICDE. IEEE, Paris, France,
+809–820. https://doi.org/10.1109/ICDE.2018.00078
+
+[34] Yike Liu, Tara Safavi, Abhilash Dighe, and Danai Koutra. 2018. Graph Summa-
+rization Methods and Applications: A Survey. Comput. Surveys 51, 3, Article 62
+(2018), 34 pages. https://doi.org/10.1145/3186727
+
+[35] Yuyu Luo, Xuedi Qin, Nan Tang, Guoliang Li, and Xinran Wang. 2018. DeepEye:
+Creating Good Data Visualizations by Keyword Search. In SIGMOD. Association
+for Computing Machinery, Houston, Texas, USA, 1733–1736.
+
+[36] Ioana Manolescu and Mirjana Mazuran. 2019. Speeding up RDF Aggregate
+
+Discovery through Sampling. In EDBT Workshops. CEUR-WS.org.
+
+[37] Mirjana Mazuran. 2020. CEOs dataset.
+
+https://www.dropbox.com/s/
+
+af8kzjwesz1vs2y/CEOsWithAllTheirData%5FPlus2hops.nt
+
+[38] Zhengjie Miao, Andrew Lee, and Sudeepa Roy. 2019. LensXPlain: Visualizing
+and Explaining Contributing Subsets for Aggregate Query Answers. PVLDB 12,
+12 (2019), 1898–1901. https://doi.org/10.14778/3352063.3352094
+
+[39] Konstantinos Morfonios, Stratis Konakas, Yannis E. Ioannidis, and Nikolaos
+Kotsis. 2007. ROLAP implementations of the data cube. ACM Computing Surveys
+39, 4 (2007), 12.
+
+[40] Laura Po, Nikos Bikakis, Federico Desimoni, and George Papastefanatos.
+Linked Data Visualization: Techniques, Tools, and Big Data. Vol. 10.
+https://doi.org/10.2200/
+
+2020.
+Morgan & Claypool Publishers. 1–157 pages.
+S00967ED1V01Y201911WBE019
+
+[41] T. Popoviciu and Béla Szőkefalvi-Nagy. 1935. Popoviciu’s and Szőkefalvi-Nagy’s
+https://en.wikipedia.org/wiki/Popoviciu%27s%
+
+inequalities on variances.
+5Finequality%5Fon%5Fvariances
+
+[42] Bo Tang, Shi Han, Man Lung Yiu, Rui Ding, and Dongmei Zhang. 2017. Extract-
+ing Top-K Insights from Multi-dimensional Data. In SIGMOD. Association for
+Computing Machinery, Chicago, Illinois, Unirted States, 1509–1524.
+
+[43] Manasi Vartak, Sajjadur Rahman, Samuel Madden, Aditya Parameswaran, and
+Neoklis Polyzotis. 2015. SeeDB: Efficient Data-Driven Visualization Recom-
+PVLDB 8, 13 (2015), 2182–2193.
+mendations to Support Visual Analytics.
+https://doi.org/10.14778/2831360.2831371
+
+[44] Jeffrey S. Vitter. 1985. Random Sampling with a Reservoir. ACM Transactions on
+
+Mathematical Software 11, 1 (1985), 37–57. https://doi.org/10.1145/3147.3165
+[45] Yuhao Wen, Xiaodan Zhu, Sudeepa Roy, and Jun Yang. 2018. Interactive Summa-
+rization and Exploration of Top Aggregate Query Answers. PVLDB 11, 13 (2018),
+2196–2208. https://doi.org/10.14778/3275366.3275369
+
+[46] Yuhao Wen, Xiaodan Zhu, Sudeepa Roy, and Jun Yang. 2018. QAGView: In-
+teractively Summarizing High-Valued Aggregate Query Answers. In SIGMOD.
+Association for Computing Machinery, Houston, Texas, USA, 1709–1712.
+[47] You Wu, Pankaj K. Agarwal, Chengkai Li, Jun Yang, and Cong Yu. 2017. Com-
+putational Fact Checking through Query Perturbations. ACM Transactions on
+Database Systems 42, 1, Article 4 (2017), 41 pages. https://doi.org/10.1145/2996453
+Interactive
+View Recommendation with a Utility Function of a General Form. In SIGMOD
+Workshops. Association for Computing Machinery, Portland, Oregon, USA.
+[49] Yihong Zhao, Prasad Deshpande, and Jeffrey F. Naughton. 1997. An Array-
+Based Algorithm for Simultaneous Multidimensional Aggregates. In SIGMOD.
+Association for Computing Machinery, Tucson, Arizona, USA, 159–170.
+
+[48] Xiaozhong Zhang, Xiaoyu Ge, and Panos K. Chrysanthis. 2020.
+
+APPENDIX
+
+A SKEWNESS AND KURTOSIS AS
+
+INTERESTINGNESS FUNCTIONS IN
+EARLY-STOP
+In case of variance ∂ (cid:98)Hr (y)
+
+(cid:19)
+
+= 2
+G−1
+
+(cid:18)
+ys − 1
+G
+
+∂ys
+
+G
+(cid:205)
+i=1
+
+yi
+
+for 1 ≤ s ≤ G
+
+(recall Section 5).
+
+In case of skewness, (cid:98)Ir (y) =
+
+First, we derive ∂(cid:98)Ir (y)
+∂ys
+
+:
+
+(cid:32)
+yi − 1
+G
+
+1
+G
+
+G
+(cid:205)
+i=1
+
+G
+(cid:205)
+j=1
+
+yj
+
+
+
+
+
+
+
+
+(cid:33)3
+
+
+
+
+
+
+
+
+(cid:104)
+(cid:98)Hr (y)
+
+·
+
+(cid:105) 2
+3 .
+
+=
+
++
+
+In case of kurtosis, (cid:98)Jr (y) =
+
+(cid:104) G−1
+
+G (cid:98)Hr (y)
+
+(cid:105) −2
+
+∂(cid:98)Jr (y)
+∂ys
+
+= ∂
+∂ys
+
+:
+
+·
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+− 3. First, we derive ∂(cid:98)Jr (y)
+∂ys
+4
+
+G
+(cid:213)
+
+i=1
+
+G
+(cid:213)
+
+i=1
+
+
+
+
+
+1
+
+G
+
+1
+
+G
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+G
+(cid:213)
+
+i=1
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+1
+
+G
+(cid:213)
+
+G
+
+j=1
+
+1
+
+G
+
+1
+
+G
+
+G
+(cid:213)
+
+j=1
+
+G
+(cid:213)
+
+j=1
+4
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+4
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+(cid:40)
+
+·
+
+
+
+
+
+
+
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+∂
+∂ys
+
+∂
+∂ys
+
+
+
+
+
+1
+
+
+
+
+
+
+G
+
+(cid:32)
+yi − 1
+G
+
+1
+G
+
+G
+(cid:205)
+i=1
+
+G
+(cid:205)
+j=1
+
+yj
+
+
+
+
+
+
+
+
+(cid:33)4
+
+
+
+
+
+
+
+
+·
+
+(cid:20) G − 1
+G
+
+(cid:21) −2
+
+− 3
+
+(cid:98)Hr (y)
+
+
+
+
+
+·
+
+(cid:20) G − 1
+G
+
+(cid:98)Hr (y)
+
+(cid:21) −2
+
+(cid:21) −2(cid:41)
+
+(cid:20) G − 1
+G
+
+(cid:98)Hr (y)
+
+∂(cid:98)Ir (y)
+∂ys
+
+= ∂
+∂ys
+
+
+
+
+
+G
+(cid:213)
+
+i=1
+
+G
+(cid:213)
+
+i=1
+
+1
+
+G
+
+1
+
+G
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+∂
+∂ys
+
+=
+
++
+
+
+
+
+
+1
+
+
+
+
+
+
+G
+
+G
+(cid:213)
+
+i=1
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+1
+
+G
+(cid:213)
+
+G
+
+j=1
+
+1
+
+G
+
+1
+
+G
+
+G
+(cid:213)
+
+j=1
+
+G
+(cid:213)
+
+j=1
+3
+
+3
+
+3
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+
+
+
+
+
+
+
+
+yj (cid:170)
+
+(cid:174)
+
+
+(cid:172)
+
+(cid:26) ∂
+∂ys
+
+·
+
+
+
+
+
+
+
+
+
+
+
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+(cid:105) 2
+
+3
+
+(cid:104)
+
+·
+
+(cid:98)Hr (y)
+
+
+
+
+(cid:105) 2
+
+3
+
+(cid:104)
+(cid:98)Hr (y)
+
+·
+
+3 (cid:27)
+(cid:105) 2
+
+(cid:104)
+(cid:98)Hr (y)
+
+Second, we derive the sub-expressions
+
+∂
+∂ys
+
+=
+
+3
+
+G
+
+G
+(cid:213)
+
+i=1
+
+2
+s −
+
+1
+
+G
+
+
+
+
+
+
+
+
+
+
+y
+
+
+
+
+
+3
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+2yi
+G
+
+1
+
+G
+
+G
+(cid:213)
+
+j=1
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+1
+
+2
+i −
+
+G
+(cid:213)
+(cid:169)
+(cid:173)
+(cid:171)
+
+i=1
+
+(cid:169)
+y
+(cid:173)
+(cid:171)
+
+G
+
+
+
+
+
+
+
+G
+(cid:213)
+
+j=1
+
++ 2ys
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+G
+(cid:213)
+
+j=1
+
+
+
+
+
+
+
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+and
+
+(cid:104)
+(cid:98)Hr (y)
+
+(cid:105) 2
+3 =
+
+(cid:104)
+
+2
+3
+
+(cid:98)Hr (y)
+
+(cid:105) − 1
+
+3
+
+∂
+∂ys
+
+·
+
+∂ (cid:98)Hr (y)
+∂ys
+
+Then, coming back to the original equation, we have that
+
+∂(cid:98)Ir (y)
+∂ys
+
+=
+
+3
+
+G
+
++
+
+2
+3
+
+
+
+y
+
+
+
+
+
+1
+
+
+
+
+
+
+G
+
+2
+s −
+
+1
+
+G
+
+(cid:169)
+(cid:173)
+(cid:171)
+
+G
+(cid:213)
+
+i=1
+
+2
+i −
+
+(cid:169)
+y
+(cid:173)
+(cid:171)
+1
+
+2yi
+G
+
+3
+
+G
+(cid:213)
+
+j=1
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
++ 2ys
+
+G
+(cid:213)
+
+i=1
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+
+G
+(cid:213)
+
+G
+
+j=1
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+(cid:104)
+(cid:98)Hr (y)
+
+·
+
+(cid:105) − 1
+
+3
+
+·
+
+
+
+
+
+
+
+
+G
+(cid:213)
+
+j=1
+
+·
+
+
+
+yj (cid:170)
+
+(cid:174)
+
+
+(cid:172)
+
+∂ (cid:98)Hr (y)
+∂ys
+
+Therefore, ∂(cid:98)Ir (y)
+∂ys
+
+, as a combination of:
+
+Second, we derive the sub-expressions
+
+∂
+∂ys
+
+=
+
+4
+
+G
+
+1
+
+G
+
+
+
+
+
+
+
+
+
+
+
+y
+
+
+
+
+
+3
+s −
+
+1
+
+G
+
++3y
+
+2
+s
+
+G
+(cid:213)
+
+j=1
+
+yj +
+
+G
+(cid:213)
+
+i=1
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+
+1
+
+G
+
+G
+(cid:213)
+
+j=1
+
+4
+
+
+
+yj (cid:170)
+
+(cid:174)
+
+
+(cid:172)
+
+2
+3y
+i
+G
+
+G
+(cid:213)
+
+i=1
+
+(cid:169)
+(cid:173)
+(cid:173)
+(cid:171)
+3ys
+G
+
+3
+i −
+
+(cid:169)
+y
+(cid:173)
+(cid:171)
+
+G
+(cid:213)
+
+j=1
+
+(cid:169)
+(cid:173)
+(cid:171)
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+2
+
+
+
+
+
+
+
+
+
+(cid:170)
+(cid:174)
+(cid:174)
+(cid:172)
+
+G
+(cid:213)
+
+j=1
+
+yj +
+
+3yi
+G2
+
+G
+(cid:213)
+
+j=1
+
+(cid:169)
+(cid:173)
+(cid:171)
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+2
+
+(cid:170)
+(cid:174)
+(cid:174)
+(cid:172)
+
+and
+
+∂
+∂ys
+
+(cid:20) G − 1
+G
+
+(cid:98)Hr (y)
+
+(cid:21) −2
+
+=
+
+=
+
+·
+
+2(G − 1)
+G[ (cid:98)Hr (y)]3
+2(G − 1)2
+G2[ (cid:98)Hr (y)]3
+
+G − 1
+G
+
+∂ (cid:98)Hr (y)
+∂ys
+
+·
+
+∂ (cid:98)Hr (y)
+∂ys
+
+Then, coming back to the original equation, we have that
+
+∂(cid:98)Jr (y)
+∂ys
+
+=
+
+4
+
+G
+
+3
+s −
+
+1
+
+G
+
+
+
+
+y
+
+
+
+
+
++3y
+
+2
+s
+
+G
+(cid:213)
+
+j=1
+
+yj +
+
+(cid:105) 2
+
+3
+
+(cid:104)
+(cid:98)Hr (y)
+
+G
+(cid:213)
+
+i=1
+
+(cid:169)
+(cid:173)
+(cid:173)
+(cid:171)
+3ys
+G
+
++
+
+2(G − 1)2
+G2[ (cid:98)Hr (y)]3
+
+G
+(cid:213)
+
+i=1
+
+1
+
+G
+
+
+
+
+
+
+
+
+(cid:169)
+yi −
+(cid:173)
+(cid:171)
+
+Therefore, ∂(cid:98)Jr (y)
+
+∂ys
+
+, as a combination of:
+
+2
+3y
+i
+G
+
+G
+(cid:213)
+
+j=1
+
+yj +
+
+3yi
+G2
+
+3
+i −
+
+(cid:169)
+y
+(cid:173)
+(cid:171)
+
+G
+(cid:213)
+
+j=1
+
+(cid:169)
+(cid:173)
+(cid:171)
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+2
+
+(cid:170)
+(cid:174)
+(cid:174)
+(cid:172)
+
+2
+
+G
+(cid:213)
+
+j=1
+
+(cid:169)
+(cid:173)
+(cid:171)
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+
+
+(cid:170)
+
+(cid:174)
+
+(cid:174)
+
+
+(cid:172)
+
+1
+
+G
+
+·
+
+(cid:20) G − 1
+G
+
+(cid:98)Hr (y)
+
+(cid:21) −2
+
+G
+(cid:213)
+
+j=1
+
+4
+
+
+
+
+
+
+
+
+yj (cid:170)
+(cid:174)
+(cid:172)
+
+·
+
+∂ (cid:98)Hr (y)
+∂ys
+
+(1) (cid:98)Hr (y), which is itself a combination of elementary (thus
+
+continuous) functions
+
+(1) (cid:98)Hr (y), which is itself a combination of elementary (thus
+
+continuous) functions
+
+(2) ∂ (cid:98)Hr (y)
+(3) other elementary (thus continuous) functions
+
+, which we showed previously to be continuous
+
+∂ys
+
+(2) ∂ (cid:98)Hr (y)
+(3) other elementary (thus continuous) functions
+
+, which we showed previously to be continuous
+
+∂ys
+
+is also continuous.
+
+is also continuous.
+
+B SUM AS AN AGGREGATE FUNCTION IN
+
+EARLY-STOP
+
+To obtain the sum estimate, we compute the product of the size
+of the i-th aggregate group ci and the sample mean. We estimate
+ci while sampling during Data Translation: the count in the root
+node of the lattice is always correct, whereas in the other lattice
+nodes, depending on the presence of multi-valued dimensions, it
+may be overestimated. Recall from Section 5.2 the sample mean es-
+σ 2
+timator ¯Yi = 1
+r ) as r → ∞. We now
+i
+r
+¯Yi . As a consequence,
+
+r
+(cid:205)
+j=1
+construct a new estimator Si = ci
+r
+
+X j , and that ¯Yi ∼ N (µi ,
+
+X j = ci
+
+r
+(cid:205)
+j=1
+
+c 2
+i σ 2
+r
+
+i
+
+) as r → ∞. This leads to the correct
+we have that Si ∼ N (cµi ,
+sum estimate thanks to the estimator mean equal to ci µi . While
+deriving the CI bounds in the proof, we account for the different
+variance of the estimator by applying Var(Ss ) = c 2
+2.
+for
+Finally, the CI bounds are scaled by the constant factor of c
+each aggregate group w.r.t. the case of the average estimate: the
+
+to obtain τ
+
+s σ 2
+r
+
+2
+s
+
+s
+
+2. We
+impact of the scaling is hidden within (cid:98)τ 2, the estimator of τ
+thus obtain the formula for our sum-estimate confidence interval:
+
+(cid:32)
+
+P
+
+(cid:12)
+(cid:12)
+(cid:12) (cid:98)Hr (S) − (cid:98)Hr (cµ)
+
+(cid:12)
+(cid:12)
+(cid:12)
+
+≤
+
+(cid:114)
+
+(cid:33)
+
+z2
+1−α (cid:99)τ 2
+r
+
+≈ (1 − α)
+
+where S = (S1, S2, . . . , SG )⊺ and c = (c1, c2, . . . , cG )⊺ (the correct
+aggregate group sizes).
+
+C MIN AND MAX AS AGGREGATE
+FUNCTIONS IN EARLY-STOP
+
+Point estimates for min, and max are sample min, respectively,
+max: the function applied over the sample, i.e., (cid:98)Zr (x) = min
+(x)
+(x). We then bound (cid:98)Hr (y), the variance of y =
+or (cid:98)Zr (x) = max
+(cid:98)Zr (x), with Popoviciu’s inequality for the upper bound: (cid:98)Hr (y) ≤
+1
+4 ((cid:98)Zr (x) − b)2, where b is the lower bound on min (respectively the
+upper bound on max).
+
+r
+
+r
+
+Analogically, we apply Szőkefalvi-Nagy’s inequality for the
+
+lower bound: (cid:98)Hr (y) ≤ ( (cid:98)Zr (x )−b)2
+. We obtain the global statistics
+for b for each attribute during Online Attribute Analysis step (Sec-
+tion 3).
+
+2r
+
+

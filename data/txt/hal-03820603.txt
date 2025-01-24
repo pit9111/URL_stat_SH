@@ -1,0 +1,6653 @@
+An Accurate, Scalable and Verifiable Protocol for
+Federated Differentially Private Averaging
+César Sabater, Aurélien Bellet, Jan Ramon
+
+To cite this version:
+
+César Sabater, Aurélien Bellet, Jan Ramon. An Accurate, Scalable and Verifiable Protocol for Fed-
+erated Differentially Private Averaging. Machine Learning, 2022, ￿10.1007/s10994-022-06267-9￿. ￿hal-
+03820603v2￿
+
+HAL Id: hal-03820603
+
+https://inria.hal.science/hal-03820603v2
+
+Submitted on 19 Oct 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Machine Learning Journal manuscript No.
+(will be inserted by the editor)
+
+An Accurate, Scalable and Veriﬁable Protocol for
+Federated Diﬀerentially Private Averaging
+
+César Sabater · Aurélien Bellet · Jan
+Ramon
+
+Received: date / Accepted: date
+
+Keywords privacy · federated learning · diﬀerential privacy · robustness
+Abstract Learning from data owned by several parties, as in federated learning,
+raises challenges regarding the privacy guarantees provided to participants and
+the correctness of the computation in the presence of malicious parties. We tackle
+these challenges in the context of distributed averaging, an essential building
+block of federated learning algorithms. Our ﬁrst contribution is a scalable protocol
+in which participants exchange correlated Gaussian noise along the edges of a
+graph, complemented by independent noise added by each party. We analyze
+the diﬀerential privacy guarantees of our protocol and the impact of the graph
+topology under colluding malicious parties, showing that we can nearly match the
+utility of the trusted curator model even when each honest party communicates
+with only a logarithmic number of other parties chosen at random. This is in
+contrast with protocols in the local model of privacy (with lower utility) or based
+on secure aggregation (where all pairs of users need to exchange messages). Our
+second contribution enables users to prove the correctness of their computations
+without compromising the eﬃciency and privacy guarantees of the protocol. Our
+construction relies on standard cryptographic primitives like commitment schemes
+and zero knowledge proofs.
+
+1 Introduction
+
+Individuals are producing ever growing amounts of personal data, which in turn
+fuel innovative services based on machine learning (ML). The classic centralized
+
+C. Sabater
+INRIA Lille - Nord Europe, 59650 Villeneuve d’Ascq, France
+E-mail: cesar.sabater@inria.fr
+
+A. Bellet
+INRIA Lille - Nord Europe, 59650 Villeneuve d’Ascq, France
+E-mail: aurelien.bellet@inria.fr
+
+J. Ramon
+INRIA Lille - Nord Europe, 59650 Villeneuve d’Ascq, France
+E-mail: jan.ramon@inria.fr
+
+2
+
+César Sabater et al.
+
+paradigm consists in collecting, storing and analyzing this data on a (supposedly
+trusted) central server or in the cloud, which poses well documented privacy risks for
+the users. With the increase of public awareness and regulations, we are witnessing
+a shift towards a more decentralized paradigm where personal data remains on
+each user’s device, as can be seen from the growing popularity of federated learning
+[48]. In this setting, users typically do not trust the central server (if any), or
+each other, which introduces new issues regarding privacy and security. First, the
+information shared by users during the decentralized training protocol can reveal
+a lot about their private data (see [56, 59, 38] for inference attacks on federated
+learning). Formal guarantees such as diﬀerential privacy (DP) [31] are needed to
+provably mitigate this and convince users to participate. Second, malicious users
+may send incorrect results to bias the learned model in arbitrary ways [43, 12, 3].
+Ensuring the correctness of the computation is crucial to persuade service providers
+to move to a more decentralized and privacy-friendly setting.
+
+In this work, we tackle these challenges in the context of private distributed
+averaging. In this canonical problem, the objective is to privately compute an
+estimate of the average of values owned by many users who do not want to disclose
+them. Beyond simple data analytics, distributed averaging is of high relevance
+to modern ML. Indeed, it is the key primitive used to aggregate user updates in
+gradient-based distributed and federated learning algorithms [54, 62, 55, 45, 2, 48].
+It also allows to train ML models whose suﬃcient statistics are averages (e.g.,
+linear models and decision trees). Distributed averaging with diﬀerential privacy
+guarantees has thus attracted a lot of interest in recent years. In the strong model
+of local diﬀerential privacy (LDP) [51, 30, 49, 50, 46, 22], each user randomizes its
+input locally before sending it to an untrusted aggregator. Unfortunately, the
+n)
+best possible error for the estimated average with n users is of the order O(
+larger than in the centralized model of DP where a trusted curator aggregates
+data in the clear and perturbs the output [20]. To ﬁll this gap, some work has
+explored relaxations of LDP that make it possible to match the utility of the trusted
+curator model. This is achieved through the use of cryptographic primitives such
+as secure aggregation [32, 21, 61, 16, 45] and secure shuﬄing [34, 23, 5, 39]. Many of
+these solutions however assume that all users truthfully follow the protocol (they
+are honest-but-curious) and/or give signiﬁcant power (ability to reveal sensitive
+data) to a small number of servers. Furthermore, their practical implementation
+poses important challenges when the number of parties is large: for instance, the
+popular secure aggregation approach of [16] requires all O(n2) pairs of users to
+exchange messages.
+
+√
+
+In this context, our contribution is fourfold.
+
+– First, we propose Gopa, a novel decentralized diﬀerentially private averaging
+protocol that relies on users exchanging (directly or through a server) some
+pairwise-correlated Gaussian noise terms along the edges of a graph so as to
+mask their private values without aﬀecting the global average. This ultimately
+canceling noise is complemented by the addition of independent (non-canceling)
+Gaussian noise by each user.
+
+– Second, we analyze the diﬀerential privacy guarantees of Gopa. Remarkably, we
+establish that our approach can achieve nearly the same privacy-utility trade-oﬀ
+as a trusted curator who would average the values of honest users, provided that
+the graph of honest-but-curious users is connected and the pairwise-correlated
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+3
+
+noise variance is large enough. In particular, for nH honest-but-curious users
+and any ﬁxed DP guarantee, the variance of the estimated average is only
+nH /(nH − 1) times larger than with a trusted curator, a factor which goes
+to 1 as nH grows. We further show that if the graph is well-connected, the
+pairwise-correlated noise variance can be signiﬁcantly reduced.
+
+– Third, to ensure both scalability and robustness to malicious users, we propose a
+randomized procedure in which each user communicates with only a logarithmic
+number of other users while still matching the privacy-utility trade-oﬀ of the
+trusted curator. Our analysis is novel and requires to leverage and adapt results
+from random graph theory on embedding spanning trees in random graphs.
+Additionally, we show our protocol is robust to a fraction of users dropping out.
+– Finally, we propose a procedure to make Gopa veriﬁable by untrusted external
+parties, i.e., to enable users to prove the correctness of their computations
+without compromising the eﬃciency or the privacy guarantees of the protocol.
+To the best of our knowledge, we are the ﬁrst to propose such a procedure. It
+oﬀers a strong preventive countermeasure against various attacks such as data
+poisoning or protocol deviations aimed at reducing utility. Our construction
+relies on commitment schemes and zero knowledge proofs (ZKPs), which are
+very popular in auditable electronic payment systems and cryptocurrencies.
+These cryptographic primitives scale well both in communication and computa-
+tional requirements and are perfectly suitable in our untrusted decentralized
+setting. We use classic ZKPs to design a procedure for the generation of noise
+with veriﬁable distribution, and ultimately to prove the correctness of the
+ﬁnal computation (or detect malicious users who did not follow the protocol).
+Crucially, the privacy guarantees of the protocol are not compromised by this
+procedure, while the integrity of the computation relies on a standard discrete
+logarithm assumption. In the end, we argue that our protocol oﬀers correctness
+guarantees that are essentially equivalent to the case where a trusted curator
+would hold the private data of users.
+
+The paper is organized as follows. Section 2 introduces the problem setting.
+We discuss the related work in more details in Section 3. The Gopa protocol
+is introduced in Section 4 and we analyze its diﬀerential privacy guarantees in
+Section 5. We present our procedure to ensure correctness against malicious behavior
+in Section 6, and summarize computational and communication costs in Section 7.
+Finally, we present some experimental results in Section 8 and conclude with future
+lines of research in Section 9.
+
+2 Notations and Setting
+
+We consider a set U = {1, . . . , n} of n ≥ 3 users (parties). Each user u ∈ U holds
+a private value Xu, which can be thought of as being computed from the private
+dataset of user u. We assume that Xu lies in a bounded interval of R (without
+loss of generality, we assume Xu ∈ [0, 1]). The extension to the vector case is
+straightforward. We denote by X the column vector X = [X1, . . . , Xn](cid:62) ∈ [0, 1]n
+of private values. Unless otherwise noted, all vectors are column vectors. Users
+communicate over a network represented by a connected undirected graph G =
+(U, E), where {u, v} ∈ E indicates that users u and v are neighbors in G and
+can exchange secure messages. For a given user u, we denote by N (u) = {v :
+
+4
+
+César Sabater et al.
+
+{u, v} ∈ E} the set of its neighbors. We note that in settings where users can only
+communicate with a server, the latter can act as a relay that forwards (encrypted
+and authenticated) messages between users, as done in secure aggregation [16].
+
+The users aim to collaboratively estimate the average value X avg = 1
+n
+
+u=1 Xu
+without revealing their individual private values. Such a protocol can be readily
+used to privately execute distributed ML algorithms that interact with data through
+averages over values computed locally by the participants, but do not actually need
+to see the individual values. We give two concrete examples below.
+
+(cid:80)n
+
+(cid:80)
+
+uφj
+
+u∈U φi
+
+u, . . . , φd
+
+u for all i, j ∈ {1, . . . , d}.
+
+Example 1 (Linear regression) Let λ ≥ 0 be a public parameter. Each user u holds
+u] ∈ Rd and a private label yu ∈ R. The
+a private feature vector φu = [φ1
+(cid:80)
+u θ − yu)2 +
+goal is to solve a ridge regression task, i.e. ﬁnd θ∗ ∈ arg minθ
+1
+n
+λ(cid:107)θ(cid:107)2. θ∗ can be computed in closed form from the quantities 1
+uyu and
+n
+1
+n
+Example 2 (Federated ML) In federated learning [48] and distributed empirical
+risk minimization, each user u holds a private dataset Du and the goal is to ﬁnd θ∗
+such that θ∗ ∈ arg minθ
+u∈U f (θ; Du) where f is some loss function. Popular
+algorithms [54, 62, 55, 45, 2] all follow the same high-level procedure: at round t,
+each user u computes a local update θt
+u based on Du and the current global model
+θt−1, and the updated global model is computed as θt = 1
+n
+
+u∈U (φ(cid:62)
+(cid:80)
+
+u∈U φi
+
+u θt
+u.
+
+(cid:80)
+
+(cid:80)
+
+1
+n
+
+Threat model. We consider two commonly adopted adversary models formalized
+by [40] and used in the design of many secure protocols. A honest-but-curious
+(honest for short) user will follow the protocol speciﬁcation, but may use all the
+information obtained during the execution to infer information about other users.
+A honest user may accidentally drop out at any point of the execution (in a way
+that is independent of the private values X). On the other hand, a malicious user
+may deviate from the protocol execution (e.g, sending incorrect values or dropping
+out on purpose). Malicious users can collude, and thus will be seen as a single
+malicious party (the adversary) who has access to all information collected by
+malicious users. Our privacy guarantees will hold under the assumption that honest
+users communicate through secure channels, while the correctness of our protocol
+will be guaranteed under some form of the Discrete Logarithm Assumption (DLA),
+a standard assumption in cryptography.
+
+For a given execution of the protocol, we denote by U O the set of the users
+who remained online until the end (i.e., did not drop out). Users in U O are either
+honest or malicious: we denote by U H ⊆ U O those who are honest, by nH = |U H |
+their number and by ρ = nH /n their proportion with respect to the total number
+of users. We also denote by GH = (U H , EH ) the subgraph of G induced by the
+set of honest users U H , i.e., EH = {{u, v} ∈ E : u, v ∈ U H }. The properties of G
+and GH will play a key role in the privacy and scalability guarantees of our protocol.
+
+Privacy deﬁnition. Our goal is to design a protocol that satisﬁes diﬀerential privacy
+(DP) [31], which has become a gold standard in private information release.
+
+Deﬁnition 1 (Diﬀerential privacy) Let ε > 0, δ ≥ 0. A (randomized) protocol
+A is (ε, δ)-diﬀerentially private if for all neighboring datasets X = [X1, . . . , Xn]
+and X (cid:48) = [X (cid:48)
+1, . . . , Xn] diﬀering only in a single data point, and for all sets of
+possible outputs O, we have:
+
+Pr(A(X) ∈ O) ≤ eε Pr(A(X (cid:48)) ∈ O) + δ.
+
+(1)
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+5
+
+Com. per party MSE
+Approach
+Central DP [33]
+O(1/n2)
+O(1)
+Local DP [51]
+O(1/n)
+O(1)
+Veriﬁable secret sharing [32]
+O(1/n2)
+O(n)
+Secure agg. [16] + DP [47, 1] O(n)
+O(1/n2)
+CAPE [44]
+O(1/n2)
+O(n)
+Shuﬄing [5]
+O(1 + log(1/δ)) O(1/n2)
+O(1/n2)
+O(log n)
+GOPA (this work)
+
+Verif Risks
+No
+No
+Yes
+No
+No
+No
+Yes
+
+Trusted curator
+
+Honest users
+
+Trusted shuﬄer
+
+Table 1 Comparison of GOPA with previous DP averaging approaches with their communica-
+tion cost per party, mean squared error (MSE), veriﬁability (Verif) and additional risks.
+
+3 Related Work
+
+In this section we review the most important work related to ours. A set of key
+approaches together with their main features are summarized in Table 1.
+
+Distributed averaging is a key subroutine in distributed and federated learning
+[54, 62, 55, 45, 2, 48]. Therefore, any improvement in the privacy-utility-communication
+trade-oﬀ for averaging implies gains for many ML approaches downstream.
+
+Local diﬀerential privacy (LDP) [51, 30, 49, 50, 46] requires users to locally ran-
+domize their input before they send it to an untrusted aggregator. This very strong
+model of privacy comes at a signiﬁcant cost in utility: the best possible mean
+squared is of order 1/n2 in the trusted curator model while it is of order 1/n in
+LDP [20, 22]. This limits the usefulness of the local model to industrial settings
+where the number of participants is huge [35, 28]. Our approach belongs to the
+recent line of work which attempts to relax the LDP model so as to improve utility
+without relying on a trusted curator (or similarly on a small ﬁxed set of parties).
+Previous work considered the use of cryptographic primitives like secure aggre-
+gation protocols, which can be used to compute the (exact) average of private values
+[32, 61, 16, 21]. While secure aggregation allows in principle to recover the utility
+of the trusted curator model, it suﬀers three main drawbacks. Firstly, existing
+protocols require Ω(n) communication per party, which is hardly feasible beyond a
+few hundred or thousand users. In contrast, we propose a protocol which requires
+only O(log n) communication.1 Secondly, combining secure aggregation with DP is
+nontrivial as the noise must be added in a distributed fashion and in the discrete
+domain. Existing complete systems [47, 1] assume an ideal secure aggregation func-
+tionality which does not reﬂect the impact of colluding/malicious users. In these
+more challenging settings, it is not clear how to add the necessary noise for DP and
+what the resulting privacy/utility trade-oﬀs would be. Alternatively, [45] adds the
+noise within the secure protocol but relies on two non-colluding servers. Thirdly,
+most of the above schemes are not veriﬁable. One exception is the veriﬁable secret
+sharing approach of [32], which again induces Ω(n) communication. Finally, we note
+that secure aggregation typically uses uniformly distributed pairwise masks, hence
+a single residual term completely destroys the utility. In contrast, we use Gaussian
+pairwise masks that have zero mean and bounded variance, which provides more
+robustness but requires the more involved privacy analysis we present in Section 5.
+
+1 We note that, independently and in parallel to our work, [8] recently proposed a secure
+aggregation protocol with O(log n) communication at the cost of relaxing the functionality
+under colluding/malicious users.
+
+6
+
+César Sabater et al.
+
+Recently, the shuﬄe model of privacy [23, 34, 42, 5, 39], where inputs are passed
+to a trusted/secure shuﬄer that obfuscates the source of the messages, has been
+studied theoretically as an intermediate point between the local and trusted curator
+models. For diﬀerentially private averaging, the shuﬄe model allows to match
+the utility of the trusted curator setting [5]. However, practical implementations
+of secure shuﬄing are not discussed in these works. Existing solutions typically
+rely on multiple layers of routing servers [29] with high communication overhead
+and non-collusion assumptions. Anonymous communication is also potentially at
+odds with the identiﬁcation of malicious parties. To the best of our knowledge, all
+protocols for averaging in the shuﬄe model assume honest-but-curious parties.
+
+The protocol proposed in [44] uses correlated Gaussian noise to achieve trusted
+curator utility for averaging, but the dependence structure of the noise must be only
+at the global level (i.e., noise terms sum to zero over all users). Generating such
+noise actually requires a call to a secure aggregation primitive, which incurs Ω(n)
+communication per party as discussed above. In contrast, our pairwise-canceling
+noise terms can be generated with only O(log n) communication. Furthermore, [44]
+assume honest parties, while our protocol is robust to malicious participants.
+
+In summary, an original aspect of our work is to match the privacy-utility
+trade-oﬀ of the trusted curator model at a relatively low cost without requiring to
+trust a ﬁxed small set of parties. By spreading trust over suﬃciently many parties,
+we ensure that even in the unlikely case where many parties collude they will not
+be able to infer much sensitive information, reducing the incentive to collude. We
+are not aware of other diﬀerential privacy work sharing this feature. Overall, our
+protocol provides a unique combination of three important properties: (a) utility
+of same order as trusted curator setting, (b) logarithmic communication per user,
+and (c) robustness to malicious users.
+
+4 Proposed Protocol
+
+In this section we describe our protocol called Gopa (GOssip noise for Private
+Averaging). The high-level idea of Gopa is to have each user u mask its private
+value by adding two diﬀerent types of noise. The ﬁrst type is a sum of pairwise-
+correlated noise terms ∆u,v over the set of neighbors v ∈ N (u) such that each ∆u,v
+cancels out with the ∆v,u of user v in the ﬁnal result. The second type of noise
+is an independent term ηu which does not cancel out. At the end of the protocol,
+each user has generated a noisy version ˆXu of its private value Xu, which takes
+the following form:
+
+ˆXu = Xu + (cid:80)
+
+v∈N (u) ∆u,v + ηu.
+
+(2)
+
+Algorithm 1 presents the detailed steps. Neighboring nodes {u, v} ∈ E contact
+each other to draw a real number from the Gaussian distribution N (0, σ2
+∆), that u
+adds to its private value and v subtracts. Intuitively, each user thereby distributes
+noise masking its private value across its neighbors so that even if some of them
+are malicious and collude, the remaining noise values will be enough to provide
+the desired privacy guarantees. The idea is reminiscent of uniformly random
+pairwise masks in secure aggregation [16] but we use Gaussian noise and restrict
+exchanges to the edges of the graph instead of requiring messages between all pairs
+of users. As in gossip algorithms [17], the pairwise exchanges can be performed
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+7
+
+∆, σ2
+
+Algorithm 1 Gopa protocol
+Input: G = (U, E), (Xu)u∈U , σ2
+1: for all neighbor pairs {u, v} ∈ E s.t. u < v do
+u and v draw a random y ∼ N (0, σ2
+2:
+3: end for
+4: for all users u ∈ U do
+5:
+6: end for
+
+u draws a random ηu ∼ N (0, σ2
+
+η ∈ R+
+
+∆) and set ∆u,v ← y, ∆v,u ← −y
+
+η) and reveals noisy value ˆXu ← Xu +(cid:80)
+
+v∈N (u) ∆u,v +ηu
+
+∆ and σ2
+
+asynchronously and in parallel. Additionally, every user u ∈ U adds an independent
+noise term ηu ∼ N (0, σ2
+η) to its private value. This noise will ensure that the ﬁnal
+estimate of the average satisﬁes diﬀerential privacy (see Section 5). The pairwise
+and independent noise variances σ2
+η are public parameters of the protocol.
+Utility of Gopa. The protocol generates a set of noisy values ˆX = [ ˆX1, . . . , ˆXn](cid:62)
+which are then publicly released. They can be sent to an untrusted aggregator,
+or averaged in a decentralized way via gossiping [17]. In any case, the estimated
+average is given by ˆX avg = 1
+u∈U ηu, which has expected
+n
+value X avg and variance σ2
+η/n. Recall that the local model of DP, where each user
+releases a locally perturbed input without communicating with other users, would
+require σ2
+η = O(1). In contrast, we would like the total amount of independent
+noise to be of order O(1/nH ) as needed to protect the average of honest users with
+the standard Gaussian mechanism in the trusted curator model of DP [33]. We
+will show in Section 5 that we can achieve this privacy-utility trade-oﬀ by choosing
+an appropriate variance σ2
+∆ for our pairwise noise terms.
+
+ˆXu = X avg + 1
+n
+
+u∈U
+
+(cid:80)
+
+(cid:80)
+
+Dealing with dropout. A user u /∈ U O who drops out during the execution of
+the protocol does not actually publish any noisy value (i.e., ˆXu is empty). The
+estimated average is thus computed by averaging only over the noisy values of
+users in U O. Additionally, any residual noise term that a user u /∈ U O may have
+exchanged with a user v ∈ U O before dropping out can be “rolled back” by having
+v reveal ∆u,v so it can be subtracted from the result (we will ensure this does not
+threaten privacy by having suﬃciently many neighbors, see Section 5.4). We can
+η/|U O|. Note that even
+thus obtain an estimate of
+if some residual noise terms are not rolled back, e.g. to avoid extra communication,
+the estimate remains unbiased (with a larger variance that depends on σ2
+∆). This
+is a rather unique feature of Gopa which comes from the use of Gaussian noise
+rather than the uniformly random noise used in secure aggregation [16]. We discuss
+strategies to handle users dropping out in more details in Appendix B.2.
+
+u∈U O Xu with variance σ2
+
+1
+|U O |
+
+(cid:80)
+
+5 Privacy Guarantees
+
+Our goal is to prove diﬀerential privacy guarantees for Gopa. First, we develop
+in Section 5.1 a general result providing privacy guarantees as a function of the
+structure of the communication graph GH , i.e., the subgraph of G induced by U H .
+Then, in Sections 5.2 and 5.3, we study the special cases of the path graph and the
+complete graph respectively, showing they are the worst and best cases in terms
+of privacy. Yet, we show that as long as GH is connected and the variance σ2
+∆
+
+8
+
+César Sabater et al.
+
+for the pairwise (canceling) noise is large enough Gopa can (nearly) match the
+privacy-utility trade-oﬀ of the trusted curator setting. In Section 5.4, we propose a
+randomized procedure to construct the graph G and show that it strikes a good
+balance between privacy and communication costs. In each section, we ﬁrst discuss
+the result and its consequences, and then present the proof. In Section 5.5, we
+summarize our results and provide further discussion.
+
+5.1 Eﬀect of the Communication Structure on Privacy
+
+The strength of the privacy guarantee we can prove depends on the communication
+graph GH over honest users. Intuitively, this is because the more terms ∆u,v a
+given honest user u exchanges with other honest users v, the more he/she spreads
+his/her secret over others and the more diﬃcult it becomes to estimate the private
+value Xu. We ﬁrst introduce in Section 5.1.1 a number of preliminary concepts.
+Next, in Section 5.1.2, we prove an abstract result, Theorem 1, which gives DP
+guarantees for Gopa that depend on the choice of a labeling t of the graph GH .
+In Section 5.1.3 we discuss a number of implications of Theorem 1 which provide
+some insight into the dependency between the structure of GH and the privacy of
+Gopa, and will turn out helpful in the proofs of Theorems 2, 3 and 4.
+
+5.1.1 Preliminary Concepts
+
+Recall that each user u ∈ U O who does not drop out generates ˆXu from its
+private value Xu by adding pairwise noise terms ¯∆u = (cid:80)
+v∈N (u) ∆u,v (with
+∆u,v + ∆v,u = 0) as well as independent noise ηu. All random variables ∆u,v (with
+u < v) and ηu are independent. We thus have the system of linear equations
+
+ˆX = X + ¯∆ + η,
+
+where ¯∆ = ( ¯∆u)u∈U O and η = (ηu)u∈U O .
+
+We now deﬁne the knowledge acquired by the adversary (colluding malicious
+
+users) during a given execution of the protocol. It consists of the following:
+i. the noisy value ˆXu of all users u ∈ U O who did not drop out,
+ii. the private value Xu and the noise ηu of the malicious users, and
+iii. all ∆u,v’s for which u or v is malicious.
+
+We also assume that the adversary knows the full network graph G and all the
+pairwise noise terms exchanged by dropped out users (since they can be rolled
+back, as explained in Section 4). The only unknowns are thus the private value Xu
+and independent noise ηu of each honest user u ∈ U H , as well as the ∆u,v values
+exchanged between pairs of honest users {u, v} ∈ EH .
+
+Letting N H (u) = {v : {u, v} ∈ EH }, from the above knowledge the adversary
+
+can subtract (cid:80)
+
+v∈N (u)\N H (u) ∆u,v from ˆXu to obtain
+
+ˆX H
+
+u = Xu +
+
+(cid:88)
+
+∆u,v + ηu
+
+u∈N H (u)
+
+for every honest u ∈ U H . The view of the adversary can thus be summarized
+by the vector ˆX H = ( ˆX H
+u )u∈U H and the correlation between its elements. Let
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+9
+
+u = ˆXu − (cid:80)
+
+ˆX H
+v∈N (u)\N H (u) ∆u,v. Let X H = (Xu)u∈U H be the vector of private
+values restricted to the honest users and similarly ηH = (ηu)u∈U H . Let the
+directed graph (U H , (cid:126)EH ) be an arbitrary orientation of the undirected graph
+GH = (U H , EH ), i.e., for every edge {u, v} ∈ EH , the set (cid:126)EH either contains the
+arc (u, v) or the arc (v, u). For every arc (u, v) ∈ (cid:126)EH , let ∆(u,v) = ∆u,v = −∆v,u.
+Let ∆H = (∆H
+e )e∈ (cid:126)EH be a vector of pairwise noise values indexed by arcs from
+(cid:126)EH . Let K ∈ RU H × (cid:126)EH
+denote the oriented incidence matrix of the graph GH , i.e.,
+for (u, v) ∈ (cid:126)EH and w ∈ U H \ {u, v} there holds Ku,(u,v) = −1, Kv,(u,v) = 1 and
+Kw,(u,v) = 0. In this way, we can rewrite the system of linear equations as
+
+ˆX H = X H + K∆H + ηH .
+
+(3)
+
+Now, adapting diﬀerential privacy (Deﬁnition 1) to our setting, for any input X
+and any possible outcome ˆX, we need to compare the probability of the outcome
+being equal to ˆX when a (non-malicious) user v1 ∈ U participates in the compu-
+tation with private value X A
+v1 to the probability of obtaining the same outcome
+when the value of v1 is exchanged with an arbitrary value X B
+v1 ∈ [0, 1]. Since honest
+users drop out independently of X and do not reveal anything about their private
+value when they drop out, in our analysis we will ﬁx an execution of the protocol
+where some set U H of nH honest users have remained online until the end of the
+protocol. For notational simplicity, we denote by X A the vector of private values
+(Xu)u∈U H of these honest users in which a user v1 has value X A
+v1 , and by X B the
+vector where v1 has value X B
+v1 . X A and X B diﬀer in only in the v1-th coordinate,
+and their maximum diﬀerence is 1.
+
+All noise variables are zero mean, so the expectation and covariance matrix of
+
+ˆX H are respectively given by:
+
+(cid:104) ˆX H (cid:105)
+
+E
+
+= X H ,
+
+(cid:16) ˆX H (cid:17)
+
+var
+
+= σ2
+
+ηIU H + σ2
+
+∆L,
+
+where IU H ∈ RnH ×nH is the identity matrix and L = KK (cid:62) is the graph Laplacian
+matrix of GH .
+
+Now consider the real vector space Z = RnH × R|EH | of all possible values
+pairs (ηH , ∆H ) of noise vectors of honest users. For the sake of readability, in the
+remainder of this section we will often drop the superscript H and write (η, ∆)
+when it is clear from the context that we work in the space Z.
+
+Let
+
+Σ(g) =
+
+(cid:20) σ2
+
+ηIU H
+0
+
+(cid:21)
+
+,
+
+0
+σ2
+∆IEH
+
+and let Σ(−g) =
+pendent Gaussians:
+
+Σ(g)(cid:17)−1
+(cid:16)
+
+, we then have a joint probability distribution of inde-
+
+P ((η, ∆)) = C1 exp
+
+−
+
+(cid:18)
+
+(η, ∆)(cid:62)Σ(−g)(η, ∆)
+
+(cid:19)
+
+,
+
+1
+2
+
+where C1 = (2π)−(nH +|EH |)/2|Σ(g)|−1/2.
+Consider the following subspaces of Z:
+
+Z A = {(η, ∆) ∈ Z | η + K∆ = ˆX H − X A},
+Z B = {(η, ∆) ∈ Z | η + K∆ = ˆX H − X B}.
+
+10
+
+César Sabater et al.
+
+v1
+
+0
+
+0
+
+1
+
+0
+
+0
+
+0
+
+0
+
+0
+
+0
+
+1
+9
+
+1
+9
+
+1
+9
+
+0
+
+1
+9
+
+1
+9
+0
+
+3
+9
+
+1
+9
+
+1
+9
+
+5
+9
+
+1
+9
+
+1
+9
+
+3
+9
+
+1
+9
+
+1
+9
+
+1
+9
+
+1
+9
+
+1
+9
+
+(a) Graph GH
+
+(b) X A − X B
+
+(c) Labeling t
+
+Fig. 1 An example of valid t over a communication graph of honest users GH . The graph GH
+is shown in Figure 1(a), the diﬀerence of neighboring databases X A − X B in Figure 1(b), and
+a possible value of t which evenly distributes the ﬂow of information in Figure 1(c).
+
+Assume that the (only) vertex for which X A and X B diﬀer is v1. Recall that
+without loss of generality, private values are in the interval [0, 1]. Hence, if we set
+X A
+v1 = 1 then X A and X B are maximally apart and also the diﬀerence
+between P ( ˆX | X A) and P ( ˆX|X B) will be maximal.
+
+v1 − X B
+
+Now choose any vector t = (tη, t∆) ∈ Z with tη = (tu)u∈U H and t∆ = (te)e∈EH
+such that tη + Kt∆ = X A − X B. It follows that Z B = Z A + t, i.e., Y ∈ Z A if and
+only if Y + t ∈ Z B. This only imposes one linear constraint on the vector t: later
+we will choose t more precisely in a way which is most convenient to prove our
+privacy claims. In particular, for any ˆX H we have that X A + η + K∆ = ˆX H if
+and only if X B + (η + tη) + K(∆ + t∆) = ˆX H . The key idea is that appropriately
+choosing t allows us to map any noise (η, ∆) which results in observing ˆX H given
+dataset X A on a similarly likely noise (η + tη, ∆ + t∆) which results in observing
+ˆX H given the adjacent dataset X B.
+
+We illustrate the meaning of t using the example of Figure 1. Consider the
+graph GH of honest users shown in Figure 1(a) and databases X A and X B as
+deﬁned above. The diﬀerence of neighboring databases X A − X B is shown in Figure
+1(b). Figure 1(c) illustrates a possible assignment of t, where tη = ( 1
+9 ) and
+t∆ = ( 5
+
+9 , . . . , 1
+
+9 , 3
+
+9 , 3
+
+9 , 1
+
+9 , . . . , 1
+
+9 , 0, 0).
+
+One can see that t = (tη, t∆) can be interpreted as a ﬂow on GH where t∆
+represents the values ﬂowing through edges, and tη represents the extent to which
+vertices are sources or sinks. The requirement tη + Kt∆ = X A − X B means that
+for a given user u we have (cid:80)
+(v,u)∈ (cid:126)EH t(v,u) − (cid:80)
+u − tu,
+which can be interpreted as the property of a ﬂow, i.e., the value of incoming edges
+minus the value of outgoing edges equals the extent to which the vertex is a source
+or sink (here −tu except for v1 where it is 1 − tv1 ). We will use this ﬂow t to ﬁrst
+distribute X A − X B as equally as possible over all users, and secondly to avoid
+huge ﬂows through edges. For example, in Figure 1(c), we choose tη in such a way
+that the diﬀerence X A
+v1 = 1 is spread over a diﬀerence of 1/9 at each node,
+and t∆ is chosen to let a value 1/9 ﬂow from each of the vertices in U H \ {v1} to
+v1, making the ﬂow consistent.
+
+(u,v)∈ (cid:126)EH t(u,v) = X A
+
+v1 − X B
+
+u − X B
+
+In the following we will ﬁrst prove generic privacy guarantees for any (ﬁxed) t,
+which will be used to map elements of Z A and Z B and bound the overall probability
+diﬀerences of outcomes of adjacent datasets. Next, we will instantiate t for diﬀerent
+graphs GH and obtain concrete guarantees.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+11
+
+5.1.2 Abstract Diﬀerential Privacy Result
+
+We start by proving diﬀerential privacy guarantees which depend on the particular
+choice of labeling t. Theorem 1 holds for all possible choices of t, but some choices
+will lead to more advantageous results than others. Later, we will apply this
+theorem for speciﬁc choices of t for proving theorems giving privacy guarantees for
+communication graphs GH with speciﬁc properties.
+
+We ﬁrst deﬁne the function Θmax : R+ × (0, 1) (cid:55)→ R+ such that Θmax maps
+
+pairs (ε, δ) on the largest positive value of θ satisfying
+
+ε ≥ θ1/2 + θ/2,
+(cid:18) 2
+√
+δ
+
+≥ 2 log
+
+2π
+
+(ε − θ/2)2
+θ
+
+(cid:19)
+
+.
+
+(4)
+
+(5)
+
+Note that for any ε and δ, any θ ∈ (0, Θmax] satisﬁes Eqs (4) and (5).
+
+Theorem 1 Let ε, δ ∈ (0, 1). Choose a vector t = (tη, t∆) ∈ Z with tη = (tu)u∈U H
+and t∆ = (te)e∈EH such that tη + Kt∆ = X A − X B and let θ = t(cid:62)Σ(−g)t. Under
+the setting introduced above, if θ ≤ Θmax(ε, δ) then Gopa is (ε, δ)-DP, i.e.,
+
+P ( ˆX | X A) ≤ eεP ( ˆX | X B) + δ.
+
+The proof of this theorem is in Appendix A.1. Essentially, we adapt ideas from
+
+the privacy proof of the Gaussian mechanism [33] to our setting.
+
+5.1.3 Discussion
+
+Essentially, given some ε, Equation (4) provides a lower bound for the noise (the
+diagonal of Σ(g)) to be added. Equation (4) also implies that the left hand side of
+Equation (5) is larger than 1. Equation (5) may then require the noise or ε to be
+even higher if 2 log(2/δ
+
+2π) ≥ 1, i.e., δ ≤ 0.48394.
+
+√
+
+If δ is ﬁxed, both (4) and (5) allow for smaller ε if θ is smaller. Let us analyze the
+implications of this result. We know that θ = σ−2
+∆t∆. As we can make
+σ∆ arbitrarily large without aﬀecting the variance of the output of the algorithm
+(the pairwise noise terms canceling each other) and thus make the second term
+σ−2
+∆ t(cid:62)
+∆t∆ arbitrarily small, our ﬁrst priority to achieve a strong privacy guarantee
+will be to chose a t making σ−2
+
+η tη small. We have the following lemma.
+
+η tη + σ−2
+
+∆ t(cid:62)
+
+η t(cid:62)
+
+η t(cid:62)
+
+Lemma 1 In the setting described above, for any t chosen as in Theorem 1 we have:
+
+(cid:88)
+
+u∈U H
+
+tu = 1.
+
+(6)
+
+Therefore, the vector tη satisfying Equation (6) and minimizing t(cid:62)
+
+η tη is the
+vector 1nH /nH , i.e., the vector containing nH components with value 1/nH . The
+proofs of the several specializations of Theorem 1 we will present will all be based
+on this choice for tη. The proof of Lemma 1 can be found in Appendix A.2, along
+with the proof of another constraint that we derive from these observations.
+
+Lemma 2 In the setting described above with t as deﬁned in Theorem 1, if tη =
+1nH /nH , then GH must be connected.
+
+12
+
+César Sabater et al.
+
+Given a ﬁxed privacy level and ﬁxed variance of the output, a second priority is
+to minimize σ∆, as this may be useful when a user drops out and the noise he/she
+exchanged cannot be rolled back or would take too much time to roll back (see
+Appendix B.2). For this, having more edges in GH implies that the vector t∆ has
+more components and therefore typically allows a solution to tη + Kt∆ = X A − X B
+with a smaller t(cid:62)
+
+∆t∆ and hence a smaller σ∆.
+
+5.2 Worst Case Topology
+
+We now specialize Theorem 1 to obtain a worst-case result.
+
+Theorem 2 (Privacy guarantee for worst-case graph) Let X A and X B
+be two databases (i.e., graphs with private values at the vertices) which diﬀer
+. If GH is
+only in the value of one user. Let ε, δ ∈ (0, 1) and θp = 1
+σ2
+connected and θp ≤ Θmax(ε, δ), then Gopa is (ε, δ)-diﬀerentially private, i.e.,
+P ( ˆX | X A) ≤ eεP ( ˆX | X B) + δ.
+
++ nH
+3σ2
+∆
+
+η nH
+
+Crucially, Theorem 2 holds as soon as the subgraph GH of honest users who did
+not drop out is connected. Note that if GH is not connected, we can still obtain a
+similar but weaker result for each connected component separately (nH is replaced
+by the size of the connected component).
+
+In order to get a constant ε, inspecting the term θp shows that the variance
+σ2
+η of the independent noise must be of order 1/nH . This is in a sense optimal as
+it corresponds to the amount of noise required when averaging nH values in the
+trusted curator model. It also matches the amount of noise needed when using
+secure aggregation with diﬀerential privacy in the presence of colluding users, where
+honest users need to add n/nH more noise to compensate for collusion [61].
+
+Further inspection of the conditions in Theorem 2 also shows that the variance
+σ2
+∆ of the pairwise noise must be large enough. How large it must be actually
+depends on the structure of the graph GH . Theorem 2 describes the worst case,
+which is attained when every node has as few neighbors as possible while still being
+connected, i.e., when GH is a path. In this case, Theorem 2 shows that the variance
+σ2
+∆ needs to be of order nH . Recall that this noise cancels out, so it does not impact
+the utility of the ﬁnal output. It only has a minor eﬀect on the communication
+cost (the representation space of reals needs to be large enough to avoid overﬂows
+with high probability), and on the variance of the ﬁnal result if some residual noise
+terms of dropout users are not rolled back (see Section 4).
+
+Proof (of Theorem 2)
+
+Let T be a spanning tree of the (connected) communication graph GH . Let ET
+
+be the set of edges in T . Let t ∈ RnH +|EH | be a vector such that:
+
+– For vertices u ∈ U H , tu = 1/nH .
+– For edges e ∈ EH \ ET , te = 0.
+– Finally, for edges e ∈ ET , we choose te in the unique way such that tη + Kt∆ =
+
+(X A − X B).
+
+In this way, tη + Kt∆ is a vector with a 1 on the v1 position and 0 everywhere else.
+We can ﬁnd a unique vector t using this procedure for any communication graph
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+13
+
+GH and spanning tree T . It holds that
+(cid:18) 1nH
+nH
+
+t(cid:62)
+η tη =
+
+(cid:19)(cid:62) (cid:18) 1nH
+nH
+
+(cid:19)
+
+=
+
+1
+nH
+
+.
+
+(7)
+
+Both Equations (4) and (5) of Theorem 1, require t(cid:62)Σ(−g)t to be suﬃciently
+small. We can see t(cid:62)
+∆ t∆ is maximized (thus producing the worst case) if the
+spanning tree T is a path (v1 v2 . . . vnH ), in which case t{vi,vi+1} = (nH − i)/nH .
+Therefore,
+
+∆σ−2
+
+t(cid:62)
+∆t∆ ≤
+
+nH −1
+(cid:88)
+
+i=1
+
+(cid:19)2
+
+(cid:18) nH − i
+nH
+
+=
+
+nH (nH − 1)(2nH − 1)/6
+n2
+H
+
+=
+
+(nH − 1)(2nH − 1)
+6nH
+
+.(8)
+
+Combining Equations (7) and (8) we get
+
+θ = t(cid:62)Σ(−g)t ≤ σ−2
+
+η
+
+1
+nH
+
++ σ−2
+∆
+
+nH (nH − 1)(2nH − 1)/6
+n2
+H
+
+We can see that θ ≤ θp and hence θ ≤ Θmax(ε, δ) satisﬁes the conditions of
+Theorem 1 and Gopa is (ε, δ)-diﬀerentially private.
+(cid:117)(cid:116)
+In conclusion, we see that in the worst case σ2
+∆ should be large (linear in nH ) to
+keep ε small, which has no direct negative eﬀect on the utility of the resulting
+ˆX. On the other hand, σ2
+η can be small (of the order 1/nH ), which means that
+independent of the number of participants or the way they communicate a small
+amount of independent noise is suﬃcient to achieve DP as long as GH is connected.
+
+5.3 The Complete Graph
+
+The necessary value of σ2
+∆ depends strongly on the network structure. This becomes
+clear in Theorem 3, which covers the case of the complete graph and shows that for
+a fully connected GH , σ2
+∆ can be of order O(1/nH ), which is a quadratic reduction
+compared to the path case.
+
+Theorem 3 (Privacy guarantee for complete graph) Let ε, δ ∈ (0, 1) and
+let GH be the complete graph. Let θC = 1
+. If θC ≤ Θmax(ε, δ), then
+σ2
+Gopa is (ε, δ)-DP.
+
++ 1
+σ2
+
+∆nH
+
+η nH
+
+Proof If the communication graph is fully connected, we can use the following
+values for the vector t:
+– As earlier, for v ∈ U H , let tv = 1/nH .
+– For edges {u, v} with v1 (cid:54)∈ {u, v}, let t{u,v} = 0.
+– For u ∈ U H \ {v1}, let t{u,v1} = 1/nH .
+Again, one can verify that tη + Kt∆ = X A − X B is a vector with a 1 on the
+v1 position and 0 everywhere else. In this way, again t(cid:62)
+η tη = 1/nH but now
+∆t∆ = (nH − 1)/n2
+t(cid:62)
+
+H is much smaller. We now get
+∆ (nH − 1)/n2
+
+η /nH + σ−2
+
+θ = t(cid:62)Σ(−g)t = σ−2
+
+H ≤ θC ≤ Θmax(ε, δ).
+Hence, we can apply Theorem 1 and Gopa is (ε, δ)-diﬀerentially private.
+
+(cid:117)(cid:116)
+
+A practical communication graph will be between the two extremes of the path
+
+and the complete graph, as shown in the next section.
+
+14
+
+César Sabater et al.
+
+5.4 Practical Random Graphs
+
+Our results so far are not fully satisfactory from the practical perspective, when the
+number of users n is large. Theorem 2 assumes that we have a procedure to generate
+a graph G such that GH is guaranteed to be connected (despite dropouts and
+malicious users), and requires a large σ2
+∆ of O(nH ). Theorem 3 applies if we pick
+G to be the complete graph, which ensures connectivity of GH and allows smaller
+O(1/nH ) variance but is intractable as all n2 pairs of users need to exchange noise.
+To overcome these limitations, we propose a simple randomized procedure to
+construct a sparse network graph G such that GH will be well-connected with
+high probability, and prove a DP guarantee for the whole process (random graph
+generation followed by Gopa), under much less noise than the worst-case. The
+idea is to make each (honest) user select k other users uniformly at random among
+all users. Then, the edge {u, v} ∈ E is created if u selected v or v selected u (or
+both). Such graphs are known as random k-out or random k-orientable graphs [15,
+36]. They have very good connectivity properties [36, 63] and are used in creating
+secure communication channels in distributed sensor networks [19]. Note that Gopa
+can be conveniently executed while constructing the random k-out graph. Recall
+that ρ = nH /n is the proportion of honest users. We have the following privacy
+guarantees (which we prove in Appendix A.3).
+
+Theorem 4 (Privacy guarantee for random k-out graphs) Let ε, δ ∈ (0, 1)
+and let G be obtained by letting all (honest) users randomly choose k ≤ n neighbors.
+Let k and ρ = nH /n be such that ρn ≥ 81, ρk ≥ 4 log(2ρn/3δ), ρk ≥ 6 log(ρn/3)
+and ρk ≥ 3
+
+2 + 9
+
+4 log(2e/δ). Let
+
+θR =
+
+1
+nH σ2
+η
+
++
+
+(cid:16)
+
+1
+σ2
+∆
+
+1
+(cid:98)(k − 1)ρ/3(cid:99) − 1
+
++
+
+12 + 6 log(nH )
+nH
+
+(cid:17)
+
+If θR ≤ Θmax(ε, δ) then Gopa is (ε, 3δ)-diﬀerentially private.
+
+This result has a similar form as Theorems 2 and 3 but requires k to be large enough
+(of order log(ρn)/ρ) so that GH is suﬃciently connected despite dropouts and
+malicious users. Crucially, σ2
+∆ only needs to be of order 1/kρ to match the utility
+of the trusted curator, and each user needs to exchange with only 2k = O(log n)
+peers in expectation, which is much more practical than a complete graph.
+
+Notice that up to a constant factor this result is optimal. Indeed, in general,
+random graphs are not connected if their average degree is smaller than logarithmic
+in the number of vertices. The constant factors mainly serve for making the result
+practical and (unlike asymptotic random graph theory) applicable to moderately
+small communication graphs, as we illustrate in the next section.
+
+5.5 Scaling the Noise
+
+Using these results, we can precisely quantify the amount of independent and
+pairwise noise needed to achieve a desired privacy guarantee depending on the
+topology, as illustrated in the corollary below.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+15
+
+Table 2 Value of σ∆ needed to ensure (ε, δ)-DP with trusted curator utility for n = 10000,
+ε = 0.1, δ(cid:48) = 1/n2
+, δ = 10δ(cid:48) depending on the topology, as obtained from Corollary 1 or
+H
+numerical simulation.
+
+Complete
+k-out (Corollary 1)
+k-out (simulation)
+Worst-case
+
+ρ = 1
+1.7
+32.4 (k = 105)
+33.8 (k = 20)
+9392.0
+
+ρ = 0.5
+2.2
+32.5 (k = 203)
+33.4 (k = 40)
+6112.5
+
+η = c2/nH ε2, where c2 > 2 log(1.25/δ(cid:48)).
+Corollary 1 Let ε, δ(cid:48) ∈ (0, 1), and σ2
+Given some κ > 0, let σ2
+1
+(cid:98)(k−1)ρ/3(cid:99)−1 +
+(12 + 6 log(nH ))/nH ) if it is a random k-out graph with k and ρ as in Theorem 4,
+H /3 for an arbitrary connected GH . Then Gopa is (ε, δ)-DP with
+and σ2
+δ ≥ a(δ(cid:48)/1.25)κ/κ+1, where a = 3.75 for the k-out graph and 1.25 otherwise.
+
+η if G is complete, σ2
+
+∆ = κσ2
+
+∆ = κσ2
+
+∆ = κσ2
+
+ηnH (
+
+ηn2
+
+We prove Corollary 1 in Appendix A.4. The value of σ2
+
+∆ is large enough. As expected, we see that as σ2
+
+η is set such that after all
+noisy values are aggregated, the variance of the residual noise matches that required
+by the Gaussian mechanism [33] to achieve (ε, δ(cid:48))-DP for an average of nH values
+in the centralized setting. The privacy-utility trade-oﬀ achieved by Gopa is thus
+the same as in the trusted curator model up to a small constant in δ, as long as the
+pairwise variance σ2
+∆ → +∞ (that
+is, as κ → +∞), we have δ → δ(cid:48) for worst case and complete graphs, or δ → 3δ(cid:48)
+for k-out graphs. Given the desired δ ≥ δ(cid:48), we can use Corollary 1 to determine
+∆ that is suﬃcient for Gopa to achieve (ε, δ)-DP. Table 2 shows a
+a value for σ2
+numerical illustration with δ only a factor 10 larger than δ(cid:48). For random k-out
+graphs, we report the values of σ∆ and k given by Theorem 4, as well as smaller
+(yet admissible) values obtained by numerical simulation (see Appendix A.5).
+Although the conditions of Theorem 4 are a bit conservative (constants can likely
+be improved), they still lead to practical values. Clearly, random k-out graphs
+provide a useful trade-oﬀ in terms of scalability and robustness. Note that in
+practice, one often does not know in advance the exact proportion ρ of users who
+are honest and will not drop out, so a lower bound can be used instead.
+
+Remark 1 For clarity of presentation, our privacy guarantees protect against an
+adversary that consists of colluding malicious users. To simultaneously protect
+against each single honest-but-curious user (who knows his own independent noise
+term), we can simply replace nH by n(cid:48)
+H = nH − 1 in our results. This introduces
+a factor nH /(nH − 1) in the variance, which is negligible for large nH . Note
+that the same applies to other approaches which distribute noise-generation over
+data-providing users, e.g., [32].
+
+6 Correctness Against Malicious Users
+
+While the privacy guarantees of Section 5 hold regardless of the behavior of the
+(bounded number of) malicious users, the utility guarantees discussed in Section 4
+are not valid if malicious users tamper with the protocol. In this section, we add
+to our protocol the capability of being audited to ensure the correctness of the
+computations while preserving privacy guarantees. In particular, while Section 5
+guarantees privacy and prevents inference attacks where attackers infer sensitive
+
+16
+
+César Sabater et al.
+
+information illegally, tampering with the protocol can be part of poisoning attacks
+which aim to change the result of the computation. We argue that we can detect all
+attacks to poison the output which can also be detected in the centralized setting.
+As we will explain we don’t assume prior knowledge about data distributions or
+patterns, and in such conditions neither in the centralized setting nor in our setting
+one can detect behavior which could be legal but may be unlikely.
+
+We present here the main ideas. In Appendix B and Appendix D, we review
+some cryptographic background required to understand and verify the details of
+our construction.
+
+Objective. Our goal is to (i) verify that all calculations are performed correctly even
+though they are encrypted, and (ii) identify any malicious behavior. As a result, we
+guarantee that given the input vector X a truthfully computed ˆX avg is generated
+which excludes any faulty contributions.
+
+Concretely, users will be able to prove the following properties:
+
+ˆXu = Xu + (cid:80)
+
+v∈N (u) ∆u,v + ηu,
+
+∆u,v = −∆v,u,
+ηu ∼ N (0, σ2
+Xu is a valid input,
+
+η),
+
+∀u ∈ U,
+
+(9)
+
+∀{u, v} ∈ E,
+
+(10)
+
+∀u ∈ U,
+
+(11)
+
+∀u ∈ U.
+
+(12)
+
+It is easy to see that the correctness of the computation is guaranteed if Properties
+(9)-(12) are satisﬁed. Note that, as long as they are self-canceling and not excessively
+large (avoiding overﬂows and additional costs if a user drops out, see Appendix B.2),
+we do not need to ensure that pairwise noise terms ∆u,v have been drawn from the
+prescribed distribution, as these terms do not inﬂuence the ﬁnal result and only
+those involving honest users aﬀect the privacy guarantees of Section 5. In contrast,
+Properties (11) and (12) are necessary to prevent a malicious user from biasing the
+outcome of the computation. Indeed, (11) ensures that the independent noise is
+generated correctly, while (12) ensures that input values are in the allowed domain.
+Moreover, we can force users to commit to input data so that they consistently use
+the same values for data over multiple computations.
+
+We ﬁrst explain the involved tools to verify computations in Section 6.1 and
+
+we present our veriﬁcation protocol in Section 6.2.
+
+6.1 Tools for verifying computations.
+
+Our approach consists in publishing an encrypted log of the computation using
+cryptographic commitments and proving that it is performed correctly without
+revealing any additional information using zero knowledge proofs. These techniques
+are popular in a number of applications such as privacy-friendly ﬁnancial systems
+such as [58, 9]. We explain below diﬀerent tools to robustly verify our computations.
+Namely, a structure to post the encrypted log of our computations, hash functions
+to generate secure random numbers, commitments and zero knowledge proofs.
+
+Public bulletin board. We implement the publication of commitments and proofs
+using a public bulletin board so that any party can verify the validity of the protocol,
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+17
+
+avoiding the need for a trusted veriﬁcation entity. Users sign their messages so they
+cannot deny them. More general purpose distributed ledger technology [57] could
+be used here, but we aim at an application-speciﬁc, light-weight and hence more
+scalable solution.
+
+Representations. We will represent numbers by elements of cyclic groups isomorphic
+to Zq for some large prime q. To be able to work with signed ﬁxed-precision values,
+we encode them in Zq by multiplying them by a constant 1/ψ and using the upper
+half of Zq, i.e., {x ∈ Zq : x ≥ (cid:100)q/2(cid:101)} to represent negative values. Unless we
+explicitly state otherwise, properties (such as linear relationships) we establish
+for the Zq elements translate straightforwardly to the ﬁxed-precision values they
+represent. We choose the precision so that the error of approximating real numbers
+up to a multiple of ψ does not impact our results.
+
+Cryptographic hash functions. We also use hash functions H : Z → Z2T for an inte-
+ger T such that 2T is a few orders of magnitude bigger than q, so that numbers
+uniformly distributed over Z2T modulo q are indistinguishable from numbers uni-
+formly distributed over Zq. Such function is easy to evaluate, but predicting its
+outcome or distinguishing it from random numbers is intractable for polynomially
+bounded algorithms [64]. Practical instances of H can be found in [6, 11].
+
+Pedersen commitments. Commitments, ﬁrst introduced by [14], allow users to
+commit to values while keeping them hidden from others. After a commitment is
+performed, the committer cannot change its value, but can later prove properties
+of it or reveal it. For our protocol we use the Pedersen commitment scheme [60].
+Pedersen commitments have as public parameters Θ = (q, G, g, h) where G is
+a cyclic multiplicative group of prime order q, and g and h are two generators
+of G chosen at random. A commitment is computed by applying the function
+ComΘ : Zq × Zq → G, deﬁned as
+
+ComΘ(x, r) = gx · hr,
+where (·) is the product operation of G, x ∈ Zq is the committed value, and r ∈ Zq
+is a random number to ensure that ComΘ(x, r) perfectly hides x. When r is not
+relevant, we simply denote by ComΘ(x) a commitment of x and assume r is drawn
+appropriately. Under the Discrete Logarithm Assumption (DLA) ComΘ is binding
+as long as g and h are picked at random such that no one knows the discrete
+logarithm base g of h. That is, no computationally eﬃcient algorithm can ﬁnd
+x1, x2, r1, r2 ∈ Zq such that x1 (cid:54)= x2 and ComΘ(x1, r1) = ComΘ(x2, r2). As the
+parameters Θ are public, many parties can share the same scheme, but parameters
+must be sampled with unbiased randomness to ensure the binding property.
+
+(13)
+
+Pedersen commitments are homomorphic, as ComΘ(x + y, r + s) = ComΘ(x, r) ·
+ComΘ(y, s). This is already enough to verify linear relations, such as the ones in
+Properties (9) and (10).
+
+It is sometimes needed to let users prove that they know the values underlying
+commitments. In our discussion we will implicitly assume proofs of knowledge [26]
+(see also below) are inserted where needed.
+
+Zero Knowledge Proofs. To verify other than linear relationships, we use a family
+of techniques called Zero Knowledge Proofs (ZKPs), ﬁrst proposed in [41]. In these
+
+18
+
+César Sabater et al.
+
+proofs, a party called the prover convinces another party, the veriﬁer, about a
+statement over committed values. For our scope and informally speaking, ZKPs2
+
+– allow the prover to successfully prove true a statement (completeness),
+– allow the veriﬁer to discover with arbitrarily large probability any attempt to
+
+prove a false statement (soundness),
+
+– guarantee that by performing the proof, no information about the knowledge
+of the prover other than the proven statement is revealed (zero knowledge).
+
+Importantly, the zero knowledge property of our proofs does not rely on any com-
+putational hardness assumption.
+
+Σ-protocols. We use a family of ZKPs called Σ-protocols and introduced in [25].
+They allow to prove the knowledge of committed values, relations between them
+that involve arithmetic circuits in Zq [26] (i.e. functions that only contain additions
+and products in Zq), and the disjunction of statements involving this kind of
+relations [27]. Let Ccst be the cost of computing an arithmetic circuit C : Zm
+q → Zs
+q,
+then the computational cost of proving the correct computation of C requires
+O(Ccst) cryptographic computations (mainly exponentiations in G) and a transfer
+of O(Ccst) elements of G. Proving the disjunction S1 ∨ S2 of two statements S1
+and S2 costs the sum of proving S1 and S2 separately. For simplicity, we say
+that a proof has cost c if the cost of generating a proof and its veriﬁcation is at
+most c cryptographic computations each, and the communication cost is at most c
+elements of G. We denote by W the size in bits of an element of G.
+
+Proving that a commitment to a number a ∈ Zq is in a certain range [0, 2k − 1]
+for some integer k can be derived from circuit proofs with the following folklore
+protocol: commit to each bit of b1, . . . , bk of a and prove that they are indeed
+bits, for example by proving that bi(1 − bi) = 0 for all i ∈ {1, . . . , k}, then prove
+that a = (cid:80)k
+i=1 2i−1bi. This proof has a cost of 5k. The homomorphic property of
+commitments allows one to easily generalize this proof to any range [a, b] ⊂ Zp
+with a cost of 10(cid:100)log2(b − a)(cid:101).
+
+Σ-protocols require that the prover interacts with a honest veriﬁer. This is not
+applicable to our setting where veriﬁers can be malicious. We can turn our proofs
+into non-interactive ones with negligible additional cost with the strong Fiat-Shamir
+heuristic [10]. In that way, for a statement S each user generates a proof transcript
+πS together with the involved commitments and publish it in the bulletin board.
+Any party can later verify oﬄine the correctness of πS. The transcript size is equal
+to the amount of exchanged elements in the original protocol.
+
+6.2 Veriﬁcation Protocol
+
+Our veriﬁcation protocol, based on the primitives described in Section 6.1, consists
+of four phases:
+
+1. Private data commit. At the start of our protocol, we assume users have
+committed to their private data. In particular, for every user u a commitment
+
+2 Strictly speaking, the proofs we will use are called arguments, as the soundness property
+relies on the computational boundedness of the Prover P through the DLA described above,
+but as for general reference to the family of techniques we use the term proofs.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+19
+
+is available, either directly published by u or available through a distributed
+ledger or other suitable mechanism. This attenuates data poisoning, as it forces
+users to use the same value for Xu in each computation where it is needed.
+2. Setup. In a setup phase at the start of our protocol, users generate Pedersen
+commitment parameters Θ and private random seeds that will be used to prove
+Property (11). Details are discussed in Appendix B.1.
+
+3. Veriﬁcation. During our protocol, users can prove that execution is performed
+correctly and verify logs containing such proofs by others. If during the protocol
+one detects a user has cheated he/she is added to a cheater list. After the
+protocol, one can verify that all steps were performed correctly and that the
+protocol has been completed. We give details on this key step below.
+
+4. Mitigation. Cheaters and drop-out users (who got oﬀ-line for a too long period
+of time) detected during the protocol are excluded from the computation, and
+their contributions are rolled back. Details are provided in Appendix B.2.
+
+Veriﬁcation phase. First, we use the homomorphic property of Pedersen commit-
+ments to prove Properties (9) and (10). Note that Property (10) involves secrets
+of two diﬀerent users u and v. This is not a problem as these pairwise noise
+terms are known by both involved users, so they can use negated randomnesses
+r∆u,v = −r∆v,u in their commitments of ∆u,v and ∆v,u such that everybody
+can verify that ComΘ(∆u,v, r∆u,v ) · ComΘ(∆v,u, r∆v,u ) = ComΘ(0, 0). Users can
+choose how they generate pairwise Gaussian noise (e.g., by convention, the user
+that initiates the exchange can generate the noise). We just require that each
+user holds a message on the agreed noise terms signed by the other user before
+publishing commitments, so that if one of them cheats, it can be easily discovered.
+Verifying the correct drawing of Gaussian numbers is more involved and requires
+private seeds r1, . . . , rn generated in Phase 2. We explain the procedure step by
+step in Appendix D.3. The proof generates a transcript πηu for each user u.
+
+To verify Property (12), we verify its domain and its consistency. For the
+domain, we prove that Xu ∈ [0, 1] with the range proof outlined in Section 6.1.
+For the consistency, users u publish a Pedersen commitment cXu = ComΘ(Xu)
+and prove its consistency with private data committed to in Phase 1 denoted as
+cD. Such proof depends on the nature of the commitment in Phase 1: if the same
+Pedersen commitment scheme is used nothing needs to be done, but users could
+also prove consistency with a record in a blockchain (which is also used for other
+applications) or they may need to prove more complex consistency relationships.
+We denote the entire proof transcript as πXu . As an illustration, consider ridge
+regression in Example 1. Every user u can publish commitments cyu = ComΘ(yu),
+u) for i ∈ {1, . . . , d} (computed with the appropriately drawn
+cφi
+randomness), and additionally commit to φi
+u, for i, j ∈ {1, . . . , d}.
+Then it can be veriﬁed that all these commitments are computed coherently, i.e,
+that the commitment of φi
+uyu is the product of secrets committed in cyu and cφi
+for i ∈ {1, . . . , d}, and analogously for the commitment of φi
+u in relation with
+cφi
+
+and cφj
+We note that if poisoned private values are used consistently after committing
+to them, this will remain undetected. However, if our veriﬁcation methodology is
+applied in the training of many diﬀerent models over time, it could be required
+that users prove consistency over values that have been committed long time
+
+, for i, j ∈ {1, . . . , d}.
+
+= ComΘ(φi
+
+uyu and φi
+
+uφj
+
+uφj
+
+u
+
+u
+
+u
+
+u
+
+20
+
+César Sabater et al.
+
+Algorithm 2 Veriﬁcation of Gopa
+1: (1) Input. Import any previous commitments to private data cD
+2: (2) Setup. All users jointly run Phase 2 Setup to generate Pedersen parameters Θ and
+
+that ηu is drawn from Gaussian distribution
+
+private seeds r1, . . . , rn. Each user u publishes cru = ComΘ(ru)
+
+for all user u ∈ U , publish as soon as available:
+
+− cXu = ComΘ(Xu) and proof πXu
+− cηu = ComΘ(ηu) and proof πηu
+− c∆u,v = ComΘ(∆u,v)
+− ˆXu and randomness to compute its commitment
+
+that Xu is valid
+
+3: (3a) Veriﬁcation - commits.
+4:
+5:
+6:
+7:
+8:
+9: (3b) Veriﬁcation - checks.
+10:
+11:
+
+for all u ∈ U verify when commitments/proofs are available:
+
+− (πXu , cXu , cD) is correct,
+− cXu ·
+− (πηu , cru , cηu ) is correct.
+
+v∈N (u) c∆u,v
+
+(cid:16)(cid:81)
+
+(cid:17)
+
+· cηu = ComΘ( ˆXu),
+
+If a check is incorrect, add u to cheaters list.
+
+for all user v ∈ N (u) do:
+
+− if c∆u,v · c∆v,u (cid:54)= ComΘ(0, 0): add u and/or v as cheater
+
+12:
+
+13:
+14:
+15:
+16:
+17: (4) Mitigation.
+18:
+19:
+
+−Roll back contributions of drop-outs and exchange more noise if necessary
+−If a harmless amount of non-canceled pairwise noise remains,
+
+declare the computation successful, otherwise abort.
+
+ago. Therefore, cheating is discouraged and these attacks are attenuated by the
+impossibility to adapt corrupted contributions to speciﬁc computations.
+
+Compared to the central setting with a trusted curator, encrypting the input
+does not make the veriﬁcation of input more problematic. Both in the central
+setting and in our setting one can perform domain tests, ask certiﬁcation of values
+from independent sources, and require consistency of the inputs over multiple
+computations, even though in some cases both the central curator and our setting
+may be unable to verify the correctness of some input.
+
+Algorithm 2 gives a high level overview of the 4 veriﬁcation steps described
+above. By composition of ZKPs, these steps allow each user to prove the correctness
+of their computations and preserve completeness, soundness and zero knowledge
+properties, thereby leading to our security guarantees:
+
+Theorem 5 (Security guarantees of Gopa) Under the DLA, a user u ∈
+U that passes the veriﬁcation protocol proves that ˆXu was computed correctly.
+Additionally, u does not reveal any additional information about Xu by running
+the veriﬁcation, even if the DLA does not hold.
+
+To reduce the veriﬁcation load, we note that it is possible to perform the
+veriﬁcation for only a subset of users picked at random (for example, sampled using
+public unbiased randomness generated in Phase 2) after users have published the
+involved commitments. In this case, we obtain probabilistic security guarantees,
+which may be suﬃcient for some applications.
+
+We can conclude that Gopa is an auditable protocol that, through existing
+eﬃcient cryptographic primitives, can oﬀer guarantees similar to the automated
+auditing which is possible for data shared with a central party.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+21
+
+7 Computation and Communication Costs
+
+Our cost analysis considers user-centered costs, which is natural as most opera-
+tions can be performed asynchronously and in parallel. The following statement
+summarizes our results (concrete non-asymptotic costs are in Appendix C).
+
+Theorem 6 (Complexity of Gopa) Let ψ > 0 be the desired ﬁxed precision
+such that the number 1 would be represented as 1/ψ. Let B > 0 be such that the
+ηu’s are drawn from a Gaussian distribution approximated with 1/B equiprobable
+bins. Then, each user u, to perform and prove its contribution, requires O(|N (u)| +
+log(1/ψ) log(1/B) + log(1/B) + log(1/ψ)) computations and transferred bits. The
+veriﬁcation of its contribution requires the same cost.
+
+Unlike other frameworks like fully homomorphic encryption and secure multi-
+
+party computation, our cryptographic primitives [37] scale well to large data.
+
+8 Experiments
+
+η and σ2
+
+Private averaging. We present some numerical simulations to study the empirical
+utility of Gopa and in particular the inﬂuence of malicious and dropped out users.
+We consider n = 10000, ε = 0.1, δ = 1/n2 and set the values of k, σ2
+∆ using
+Corollary 1 so that Gopa satisﬁes (ε, δ)-DP. Figure 2 (left) shows the utility of
+Gopa when executed with k-out graphs as a function of ρ , which is the (lower
+bound on) the proportion of users who are honest and do not drop out. The
+curves in the ﬁgure are closed form formulas given by Corollary 1 (for Gopa) and
+Appendix A of [33] (for local DP and central DP). As long as the value of k is
+admissible, it does not change ση. The utility of Gopa is shown for diﬀerent values
+of κ. This parameter allows to obtain diﬀerent trade-oﬀs between magnitudes of
+ση and σ∆. While a very small κ degrades the utility, this impact quickly becomes
+negligible as κ reaches 10 (which also has a minor eﬀect in σ∆). With κ = 10 and
+even for reasonably small ρ, Gopa already approaches a utility of the same order
+as a trusted curator that would average the values of all n users. Further increasing
+κ would not be of any use as this will not have a signiﬁcant impact in utility and
+will simply increase σ∆.
+
+While the values of ε and δ obviously impact the utility, we stress the fact
+that they only have a uniform scaling eﬀect which does not aﬀect the relative
+distance between the utility of Gopa and that of a trusted curator. Regarding the
+communication graph GH , it greatly inﬂuences the communication cost and σ∆,
+but only aﬀects ση via parameter a of Corollary 1 which has a negligible impact in
+utility.
+
+In Appendix B.2, we further describe the ability of Gopa to tolerate a small
+number of residual pairwise noise terms of variance σ2
+∆ in the ﬁnal result. We
+note that this feature is rather unique to Gopa and is not possible with secure
+aggregation [16, 8].
+
+Application to federated SGD. We present some experiments on training a logistic
+regression model in a federated learning setting. We use a binarized version of UCI
+Housing dataset with standardized features and points normalized to unit L2 norm
+to ensure a gradient sensitivity bounded by 2. We set aside 20% of the points as
+
+22
+
+César Sabater et al.
+
+(a) Utility with respect to ρ
+
+(b) A typical run of FedSGD (c) Test accuracy of FedSGD
+
+Fig. 2 Comparing Gopa to central and local DP. Left: Utility of Gopa (measured by the
+variance of the estimated average) w.r.t. ρ. Middle: Evolution of the objective for a typical run
+of FedSGD. Right: Test accuracy of models learned with FedSGD. See text for details.
+
+test set and split the rest uniformly at random across n = 10000 users so that each
+user u has a local dataset Du composed of 1 or 2 points.
+
+We use the Federated SGD algorithm, which corresponds to FedAvg with a
+single local update [55]. At each iteration, each user computes a stochastic gradient
+using one sample of their local dataset; these gradients are then averaged and used
+to update the model parameters. To privately average the gradients, we compare
+Gopa (using k-out graphs with ρ = 0.5 and κ = 10) to (i) a trusted aggregator
+that averages all n gradients in the clear and adds Gaussian noise to the result as
+per central DP, and (ii) local DP. We ﬁx the total privacy budget to ε = 1 and
+δ = 1/(ρn)2 and use advanced composition (in Section 3.5.2 of [33]) to compute
+the budget allocated to each iteration. Speciﬁcally, we use Corollary 3.21 of [33] by
+requiring that each update is (εs, δs)-DP for εs = ε/2(cid:112)2T ln(1/δs), δs = δ/T + 1
+and T equal to the total number of iterations. This ensures (ε, δ)-DP for the overall
+algorithm. The step size is tuned for each approach, selecting the value with the
+highest accuracy after a predeﬁned number T of iterations.
+
+Figure 2 (middle) shows a typical run of the algorithm for T = 50 iterations.
+Local DP is not shown as it diverges unless the learning rate is overly small. On
+the other hand, Gopa is able to decrease the objective function steadily, although
+we see some diﬀerence with the trusted aggregator (this is expected since ρ = 0.5).
+Figure 2 (right) shows the ﬁnal test accuracy (averaged over 10 runs) for diﬀerent
+numbers of iterations T . Despite the small gap in objective function, Gopa nearly
+matches the accuracy achieved by the trusted aggregator, while local DP is unable
+to learn useful models.
+
+We provide the code to reproduce the experimental results presented in Figures
+2 and 3 (see Appendix B.2) and in Tables 2 (see Section 5.5) and 3 (see Appendix
+A.5) in a public repository.3
+
+9 Conclusion
+
+We proposed Gopa, a protocol to privately compute averages over the values of
+many users. Gopa satisﬁes DP, can nearly match the utility of a trusted curator,
+and is robust to malicious parties. It can be used in distributed and federated ML
+[45, 48] in place of more costly secure aggregation schemes. In future work, we plan
+
+3 https://gitlab.inria.fr/cesabate/mlj2022-gopa
+
+0.30.40.50.60.70.80.9Proportion of honest users  that did not drop out104103102101Variance of estimated average=0.1, =1e-08GOPA, w. kappa=0.2GOPA, w. kappa=0.4GOPA, w. kappa=1GOPA, w. kappa=10GOPA, w. kappa=100Central DP with n usersLocal DP w. n users01020304050Number of iterations0.20.30.40.50.60.7Objective functionFedSGD with GOPA (=0.5)FedSGD with Trusted curator (Central DP)1020304050Number of iterations0.40.50.60.70.80.9Test accuracyFedSGD w. trusted curator (Central DP)FedSGD w. GOPA (=0.5)FedSGD w. local DPAn Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+23
+
+to provide eﬃcient implementations, to integrate our approach in complete ML
+systems, and to exploit scaling to reduce the cost per average. We think that our
+work is also relevant beyond averaging, e.g. in the context of robust aggregation
+for distributed SGD [13] and for computing pairwise statistics [7].
+
+Declarations
+
+This work was partially supported by ANR project ANR-20-CE23-0013 ’PMR’ and
+the ’Chair TIP’ project funded by ANR, I-SITE, MEL, ULille and INRIA. We
+thank Pierre Dellenbach and Alexandre Huat for the fruitful discussions. There
+are no conﬂicts of interest. No ethical approval was needed. As there were no
+participants no consent was needed to participate nor to publish. Code and data
+can be accessed by following the links in the text. The authors made approximately
+equal contributions.
+
+References
+
+1. Agarwal, N., Kairouz, P., Liu, Z.: The skellam mechanism for diﬀerentially private federated
+
+learning. In: NeurIPS (2021)
+
+2. Agarwal, N., Suresh, A.T., Yu, F.X., Kumar, S., McMahan, B.: cpSGD: Communication-
+
+eﬃcient and diﬀerentially-private distributed SGD. In: NeurIPS (2018)
+
+3. Bagdasaryan, E., Veit, A., Hua, Y., Estrin, D., Shmatikov, V.: How to backdoor federated
+
+learning. In: AISTATS (2020)
+
+4. Balcer, V., Vadhan, S.: Diﬀerential Privacy on Finite Computers. In: ITCS (2018)
+5. Balle, B., Bell, J., Gascón, A., Nissim, K.: Private Summation in the Multi-Message Shuﬄe
+
+Model. In: CCS (2020)
+
+6. Barker, E.B., Kelsey, J.M.: Recommendation for random number generation using deter-
+ministic random bit generators (revised). NIST Special Publication (NIST SP) (2007)
+7. Bell, J., Bellet, A., Gascón, A., Kulkarni, T.: Private Protocols for U-Statistics in the Local
+
+Model and Beyond. In: AISTATS (2020)
+
+8. Bell, J.H., Bonawitz, K.A., Gascón, A., Lepoint, T., Raykova, M.: Secure Single-Server
+
+Aggregation with (Poly)Logarithmic Overhead. In: CCS (2020)
+
+9. Ben Sasson, E., Chiesa, A., Garman, C., Green, M., Miers, I., Tromer, E., Virza, M.:
+
+Zerocash: Decentralized Anonymous Payments from Bitcoin. In: S&P (2014)
+
+10. Bernhard, D., Pereira, O., Warinschi, B.: How Not to Prove Yourself: Pitfalls of the
+
+Fiat-Shamir Heuristic and Applications to Helios. In: ASIACRYPT (2012)
+
+11. Bertoni, G., Daemen, J., Peeters, M., Van Assche, G.: Sponge-based pseudo-random number
+generators. In: International Workshop on Cryptographic Hardware and Embedded Systems
+(2010)
+
+12. Bhagoji, A.N., Chakraborty, S., Mittal, P., Calo, S.B.: Analyzing federated learning through
+
+an adversarial lens. In: ICML (2019)
+
+13. Blanchard, P., Mhamdi, E.M.E., Guerraoui, R., Stainer, J.: Machine learning with adver-
+
+saries: Byzantine tolerant gradient descent. In: NIPS (2017)
+
+14. Blum, M.: Coin ﬂipping by telephone a protocol for solving impossible problems. ACM
+
+SIGACT News 15(1), 23–27 (1983)
+
+15. Bollobás, B.: Random Graphs (2nd edition). Cambridge University Press (2001)
+16. Bonawitz, K., Ivanov, V., Kreuter, B., Marcedone, A., McMahan, H.B., Patel, S., Ramage,
+D., Segal, A., Seth, K.: Practical Secure Aggregation for Privacy-Preserving Machine
+Learning. In: CCS (2017)
+
+17. Boyd, S., Ghosh, A., Prabhakar, B., Shah, D.: Randomized gossip algorithms. IEEE/ACM
+
+Transactions on Networking 14(SI), 2508–2530 (2006)
+
+18. Camenisch, J., Michels, M.: Proving in Zero-Knowledge that a Number is the Product of
+
+Two Safe Primes. In: EUROCRYPT (1999)
+
+19. Chan, H., Perrig, A., Song, D.X.: Random Key Predistribution Schemes for Sensor Networks.
+
+In: S&P (2003)
+
+24
+
+César Sabater et al.
+
+20. Chan, T.H.H., Shi, E., Song, D.: Optimal Lower Bound for Diﬀerentially Private Multi-party
+
+Aggregation. In: ESA (2012)
+
+21. Chan, T.H.H., Shi, E., Song, D.: Privacy-preserving stream aggregation with fault tolerance.
+
+In: Financial Cryptography (2012)
+
+22. Chen, W.N., Kairouz, P., Ozgur, A.: Breaking the communication-privacy-accuracy
+
+trilemma. In: NeurIPS (2020)
+
+23. Cheu, A., Smith, A.D., Ullman, J., Zeber, D., Zhilyaev, M.: Distributed Diﬀerential Privacy
+
+via Shuﬄing. In: EUROCRYPT (2019)
+
+24. Chevillard, S., Revol, N.: Computation of the error functions erf & erfc in arbitrary precision
+
+with correct rounding. Research Report RR-6465, INRIA (2008)
+
+25. Cramer, R.: Modular Design of Secure yet Practical Cryptographic Protocols. Ph.D. thesis,
+
+University of Amsterdam (1997)
+
+26. Cramer, R., Damgård, I.: Zero-knowledge proofs for ﬁnite ﬁeld arithmetic, or: Can zero-
+
+knowledge be for free? In: CRYPTO (1998)
+
+27. Cramer, R., Damgård, I., Schoenmakers, B.: Proofs of Partial Knowledge and Simpliﬁed
+
+Design of Witness Hiding Protocols. In: CRYPTO (1994)
+
+28. Ding, B., Kulkarni, J., Yekhanin, S.: Collecting telemetry data privately. In: NIPS (2017)
+29. Dingledine, R., Mathewson, N., Syverson, P.: Tor: The second-generation onion router.
+
+Tech. rep., Naval Research Lab Washington DC (2004)
+
+30. Duchi, J.C., Jordan, M.I., Wainwright, M.J.: Local privacy and statistical minimax rates.
+
+In: FOCS (2013)
+
+31. Dwork, C.: Diﬀerential Privacy. In: ICALP (2006)
+32. Dwork, C., Kenthapadi, K., McSherry, F., Mironov, I., Naor, M.: Our Data, Ourselves:
+
+Privacy Via Distributed Noise Generation. In: EUROCRYPT (2006)
+
+33. Dwork, C., Roth, A.: The Algorithmic Foundations of Diﬀerential Privacy. Foundations
+
+and Trends in Theoretical Computer Science 9(3–4), 1–277 (2014)
+
+34. Erlingsson, U., Feldman, V., Mironov, I., Raghunathan, A., Talwar, K.: Ampliﬁcation by
+Shuﬄing: From Local to Central Diﬀerential Privacy via Anonymity. In: SODA (2019)
+35. Erlingsson, U., Pihur, V., Korolova, A.: Rappor: Randomized aggregatable privacy-
+
+preserving ordinal response. In: CCS (2014)
+
+36. Fenner, T.I., Frieze, A.M.: On the connectivity of random m-orientable graphs and digraphs.
+
+Combinatorica 2(4), 347–359 (1982)
+
+37. Franck, C., Großschädl, J.: Eﬃcient Implementation of Pedersen Commitments Using
+Twisted Edwards Curves. In: Mobile, Secure, and Programmable Networking (2017)
+38. Geiping, J., Bauermeister, H., Dröge, H., Moeller, M.: Inverting gradients - how easy is it
+
+to break privacy in federated learning? In: NeurIPS (2020)
+
+39. Ghazi, B., Kumar, R., Manurangsi, P., Pagh, R.: Private counting from anonymous messages:
+
+Near-optimal accuracy with vanishing communication overhead. In: ICML (2020)
+40. Goldreich, O.: Secure multi-party computation. Manuscript. Preliminary version (1998)
+41. Goldwasser, S., Micali, S., Rackoﬀ, C.: The Knowledge Complexity of Interactive Proof
+
+Systems. SIAM Journal on Computing 18(1), 186–208 (1989)
+
+42. Hartmann, V., West, R.: Privacy-Preserving Distributed Learning with Secret Gradient
+
+Descent. Tech. rep., arXiv:1906.11993 (2019)
+
+43. Hayes, J., Ohrimenko, O.: Contamination attacks and mitigation in multi-party machine
+
+learning. In: NeurIPS (2018)
+
+44. Imtiaz, H., Mohammadi, J., Sarwate, A.D.: Distributed diﬀerentially private computation
+
+of functions with correlated noise. arXiv preprint arXiv:1904.10059 (2021)
+
+45. Jayaraman, B., Wang, L., Evans, D., Gu, Q.: Distributed learning without distress: Privacy-
+
+preserving empirical risk minimization. In: NeurIPS (2018)
+
+46. Kairouz, P., Bonawitz, K., Ramage, D.: Discrete distribution estimation under local privacy.
+
+In: ICML (2016)
+
+47. Kairouz, P., Liu, Z., Steinke, T.: The distributed discrete gaussian mechanism for federated
+
+learning with secure aggregation. In: ICML (2021)
+
+48. Kairouz, P., McMahan, H.B., Avent, B., Bellet, A., et al.: Advances and open problems in
+federated learning. Foundations and Trends® in Machine Learning 14(1–2), 1–210 (2021)
+49. Kairouz, P., Oh, S., Viswanath, P.: Secure multi-party diﬀerential privacy. In: NIPS (2015)
+50. Kairouz, P., Oh, S., Viswanath, P.: Extremal Mechanisms for Local Diﬀerential Privacy.
+
+Journal of Machine Learning Research 17, 1–51 (2016)
+
+51. Kasiviswanathan, S.P., Lee, H.K., Nissim, K., Raskhodnikova, S., Smith, A.D.: What Can
+
+We Learn Privately? In: FOCS (2008)
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+25
+
+52. Katz, J., Lindell, Y.: Introduction to Modern Cryptography, Second Edition. CRC Press
+
+(2014)
+
+53. Krivelevich, M.: Embedding spanning trees in random graphs. SIAM J. Discret. Math.
+
+24(4) (2010)
+
+54. Lin, T., Stich, S.U., Patel, K.K., Jaggi, M.: Don’t Use Large Mini-batches, Use Local SGD.
+
+In: ICLR (2020)
+
+55. McMahan, H.B., Moore, E., Ramage, D., Hampson, S., Agüera y Arcas, B.: Communication-
+
+eﬃcient learning of deep networks from decentralized data. In: AISTATS (2017)
+
+56. Melis, L., Song, C., Cristofaro, E.D., Shmatikov, V.: Exploiting unintended feature leakage
+
+in collaborative learning. In: S&P (2019)
+
+57. Nakamoto, S.: Bitcoin: A Peer-to-Peer Electronic Cash System. Available online at
+
+http://bitcoin.org/bitcoin.pdf (2008)
+
+58. Narula, N., Vasquez, W., Virza, M.: zkLedger: Privacy-Preserving Auditing for Distributed
+
+Ledgers. In: USENIX Security (2018)
+
+59. Nasr, M., Shokri, R., Houmansadr, A.: Comprehensive privacy analysis of deep learning:
+Passive and active white-box inference attacks against centralized and federated learning.
+In: S&P (2019)
+
+60. Pedersen, T.P.: Non-interactive and information-theoretic secure veriﬁable secret sharing.
+
+In: CRYPTO (1991)
+
+61. Shi, E., Chan, T.H.H., Rieﬀel, E.G., Chow, R., Song, D.: Privacy-Preserving Aggregation
+
+of Time-Series Data. In: NDSS (2011)
+
+62. Stich, S.U.: Local SGD Converges Fast and Communicates Little. In: ICLR (2019)
+63. Yağan, O., Makowski, A.M.: On the Connectivity of Sensor Networks Under Random
+Pairwise Key Predistribution. IEEE Transactions on Information Theory 59(9), 5754–5762
+(2013)
+
+64. Yao, A.C.: Theory and application of trapdoor functions. In: FOCS (1982)
+
+26
+
+César Sabater et al.
+
+Appendix A Proofs of Diﬀerential Privacy Guarantees
+
+In this appendix, we provide derivations for our diﬀerential privacy guarantees.
+
+A.1 Proof of Theorem 1
+
+Theorem 1. Let ε, δ ∈ (0, 1). Choose a vector t = (tη, t∆) ∈ Z with tη = (tu)u∈U H and
+t∆ = (te)e∈EH such that tη + Kt∆ = X A − X B and let θ = t(cid:62)Σ(−g)t. Under the setting
+introduced above, if θ ≤ Θmax(ε, δ) then Gopa is (ε, δ)-DP, i.e.,
+
+P ( ˆX | X A) ≤ eεP ( ˆX | X B) + δ.
+
+Proof We adapt ideas from [33] to our setting. First, we show that it is suﬃcient to prove that
+
+In particular, if Eq (14) holds we have that
+
+P ((η, ∆)) ≤ P ((η, ∆) + t)eε + δ.
+
+(14)
+
+P ( ˆX | X A) =
+
+≤
+
+=
+
+=
+
+(cid:90)
+
+(cid:90)
+
+(cid:90)
+
+(cid:90)
+
+P ((η, ∆))dηd∆
+
+(P ((η, ∆) + t)eε + δ) dηd∆
+
+(η,∆)∈ZA
+
+(η,∆)∈ZA
+
+(P ((η, ∆))eε + δ) dηd∆
+
+(η,∆)−t∈ZA
+
+(P ((η, ∆))eε + δ) dηd∆
+
+(η,∆)∈ZB
+
+= P ( ˆX | X B)eε + δ,
+
+which proves the required bound. Hence, it is suﬃcient to prove Eq (14), or else to prove that
+P ((η, ∆)) ≤ eεP ((η, ∆)+t) with probability at least 1−δ. Denoting γ = (η, ∆) for convenience,
+we need to prove that with probability 1 − δ it holds that | log(P (γ)/P (γ + t))| ≤ eε. We have
+
+(cid:12)
+(cid:12)
+(cid:12) log
+
+P (γ)
+P (γ + t)
+
+(cid:12)
+(cid:12)
+(cid:12) =
+
+=
+
+(cid:12)
+(cid:12)
+(cid:12) −
+(cid:12)
+1
+(cid:12)
+(cid:12)
+2
+
+1
+2
+
+γ(cid:62)Σ(−g)γ +
+
+1
+2
+(cid:12)
+(2γ + t)(cid:62)Σ(−g)t
+(cid:12)
+(cid:12).
+
+(cid:12)
+(γ + t)(cid:62)Σ(−g)(γ + t)
+(cid:12)
+(cid:12)
+
+To ensure that | log(P (γ)/P (γ + t))| ≤ eε holds with probability at least 1 − δ, since we are
+interested in the absolute value, we will show that
+
+(cid:16) 1
+2
+the proof of the other direction is analogous. This is equivalent to
+
+(2γ + t)(cid:62)Σ(−g)t ≥ ε
+
+≤ δ/2,
+
+P
+
+(cid:17)
+
+P (γΣ(−g)t ≥ ε − t(cid:62)Σ(−g)t/2) ≤ δ/2.
+
+(15)
+
+The variance of γΣ(−g)t is
+
+var(γΣ(−g)t) =
+
+=
+
+=
+
+=
+
+(cid:88)
+
+v
+(cid:88)
+
+v
+(cid:88)
+
+v
+(cid:88)
+
+v
+
+var (cid:0)ηvσ−2
+
+η tv
+
+(cid:1) +
+
+(cid:88)
+
+var
+
+(cid:16)
+
+(cid:17)
+
+∆eσ−2
+
+∆ te
+
+var (ηv) σ−4
+
+η t2
+
+v +
+
+e
+(cid:88)
+
+var (∆e) σ−4
+
+∆ t2
+
+e
+
+ησ−4
+σ2
+
+η t2
+
+v +
+
+(cid:88)
+
+e
+∆σ−4
+σ2
+
+∆ t2
+
+e
+
+η t2
+σ−2
+
+v +
+
+e
+σ−2
+∆ t2
+
+e
+
+(cid:88)
+
+e
+
+= t(cid:62)Σ(−g)t.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+27
+
+For any centered Gaussian random variable Y with variance σ2
+Y
+
+, we have that
+
+P (Y ≥ λ) ≤
+
+σY
+√
+
+2π
+
+λ
+
+exp (cid:0)−λ2/2σ2
+Y
+
+(cid:1) .
+
+Let Y = γΣ(−g)t, σ2
+
+Y = t(cid:62)Σ(−g)t and λ = ε − t(cid:62)Σ(−g)t/2, then satisfying
+
+σY
+√
+
+2π
+
+λ
+
+exp (cid:0)−λ2/2σ2
+Y
+
+(cid:1) ≤ δ/2
+
+implies (15). Equation (17) is equivalent to
+
+or, after taking logarithms on both sides, to
+
+exp (cid:0)λ2/2σ2
+Y
+
+(cid:1) ≥ 2/δ
+
+√
+
+2π,
+
+λ
+σY
+
+log
+
+(cid:18) λ
+σY
+
+(cid:19)
+
++
+
+1
+2
+
+(cid:18) λ
+σY
+
+(cid:19)2
+
+≥ log
+
+(cid:18) 2
+√
+δ
+
+2π
+
+(cid:19)
+
+.
+
+To make this inequality hold, we require
+
+log
+
+(cid:19)
+
+(cid:18) λ
+σY
+
+≥ 0
+
+and
+
+1
+2
+Equation (18) is equivalent to λ ≥ σY . Substituting λ and σY we get
+
+≥ log
+
+2π
+
+.
+
+(cid:18) 2
+√
+δ
+
+(cid:18) λ
+σY
+
+(cid:19)2
+
+(cid:19)
+
+(16)
+
+(17)
+
+(18)
+
+(19)
+
+ε − t(cid:62)Σ(−g)t/2 ≥ (t(cid:62)Σ(−g)t)1/2,
+
+which is equivalent to (4). Substituting λ and σY in Equation (19) gives (5). Hence, if Equations
+(4) and (5) are satisﬁed the desired diﬀerential privacy follows.
+(cid:117)(cid:116)
+
+A.2 Proofs for Section 5.1.3
+
+Lemma 1. In the setting described above, for any t chosen as in Theorem 1 we have:
+
+(cid:88)
+
+u∈U H
+
+tu = 1.
+
+(6)
+
+Proof Due to the properties of the incidence matrix K, i.e., ∀u, v : Ku,{u,v} = −Kv,{u,v}, the
+sum of the components of the vector K∆ is zero, i.e.,
+
+(cid:88)
+
+u∈U H
+
+(K∆)u =
+
+(cid:88)
+
+
+
+
+
+(cid:88)
+
+u∈U H
+
+{u,v}∈EH
+
+
+
+Ku,{u,v}∆{u,v}
+
+
+
+= 0
+
+u
+
+Combining this with the fact that tη + Kt∆ = X A − X B with (cid:80)
+obtain Equation (6).
+
+u∈U H (X A − X B)u = 1 we
+(cid:117)(cid:116)
+
+Lemma 2. In the setting described above with t as deﬁned in Theorem 1, if tη = 1nH /nH ,
+
+then GH must be connected.
+
+and ∆C = (∆e)e∈ (cid:126)EH ∩(C×C)
+
+Proof Suppose GH is not connected, then there is a connected component C ⊆ U H \ {v1}.
+Let tC = (tu)u∈C
+be the
+incidence matrix of GH [C], the subgraph of GH induced by C. Due to the properties of the
+incidence matrix of a graph there would hold (cid:80)
+u∈C (KC ∆C )u = 0. As there would be no edges
+between vertices in C and vertices outside C, we would have (cid:80)
+u∈C (K∆)u = 0. There would
+follow (cid:80)
+u∈C (X A − X B − K∆)u = 0 which would contradict with tη = 1nH /nH .
+In conclusion, GH must be connected.
+(cid:117)(cid:116)
+
+. Let KC = (Ku,e)u∈C,e∈ (cid:126)EH ∩(C×C)
+
+u∈C tu = (cid:80)
+
+28
+
+César Sabater et al.
+
+A.3 Random k-out Graphs
+
+In this section, we will study the diﬀerential privacy properties for the case where all users
+select k neighbors randomly, leading to a proof of Theorem 4. We will start by analyzing
+the properties of GH (Section A.3.1). Section A.3.2 consists of preparations for embedding a
+suitable spanning tree in GH . Next, in Section A.3.3 we will prove a number of lemmas showing
+that such suitable spanning tree can be embedded almost surely in GH . Finally, we will apply
+these results to proving diﬀerential privacy guarantees for Gopa when communicating over
+such a random k-out graph G in Section A.3.4, proving Theorem 4.
+
+In this section, all newly introduced notations and deﬁnitions are local and will not be
+used elsewhere. At the same time, to follow more closely existing conventions in random graph
+theory, we may reuse in this section some variable names used elsewhere and give them a
+diﬀerent meaning.
+
+A.3.1 The Random Graph GH
+
+Recall that the communication graph GH is generated as follows:
+– We start with n = |U | vertices where U is the set of agents.
+– All (honest) agents randomly select k neighbors to obtain a k-out graph G.
+– We consider the subgraph GH induced by the set U H of honest users who did not drop
+out. Recall that nH = |U H | and that a fraction ρ of the users is honest and did not drop
+out, hence nH = ρn.
+Let kH = ρk. The graph GH is a subsample of a k-out-graph, which for larger nH and kH
+follows a distribution very close to that of Erdős-Rényi random graphs Gp(nH , 2kH /nH ). To
+simplify our argument, in the sequel we will assume GH is such random graph as this does not
+aﬀect the obtained result. In fact, the random k-out model concentrates the degree of vertices
+more narrowly around the expected value than Erdős-Rényi random graphs, so any tail bound
+our proofs will rely on that holds for Erdős-Rényi random graphs also holds for the graph GH
+we are considering. In particular, for v ∈ U H , the degree of v is a random variable which we will
+approximate for suﬃciently large nH and kH by a binomial B(nH , 2kH /nH ) with expected
+value 2kH and variance 2kH (1 − 2kH /nH ) ≈ 2kH .
+
+A.3.2 The Shape of the Spanning Tree
+
+Remember that our general strategy to prove diﬀerential privacy results is to ﬁnd a spanning
+tree in GH and then to compute the norm of the vector t∆ that will “spread” the diﬀerence
+between X A and X B over all vertices (so as to get a ση of the same order as in the trusted
+curator setting). Here, we will ﬁrst deﬁne the shape of a rooted tree and then prove that with
+high probability this tree is isomorphic to a spanning tree of GH . Of course, we make a crude
+approximation here, as in the (unlikely) case that our predeﬁned tree cannot be embedded in
+GH it is still possible that other trees could be embedded in GH and would yield similarly
+good diﬀerentially privacy guarantees. While our bound on the risk that our privacy guarantee
+does not hold will not be tight, we will focus on proving our result for reasonably-sized U and
+k, and on obtaining interesting bounds on the norm of t∆.
+
+Let GH = ([nH ], EH ) be a random graph where between every pair of vertices there is an
+
+edge with probability 2kH /nH . The average degree of GH is 2kH .
+
+Let kH ≥ 4. Let q ≥ 3 be an integer. Let ∆1, ∆2 . . . ∆q be a sequence of positive integers
+
+such that
+
+
+
+
+
+q
+(cid:88)
+
+i
+(cid:89)
+
+
+ − (∆q + 1)
+
+∆j
+
+q−2
+(cid:89)
+
+∆j < nH ≤
+
+q
+(cid:88)
+
+i
+(cid:89)
+
+∆j .
+
+(20)
+
+i=1
+
+j=1
+
+j=1
+Let T = ([nH ], ET ) be a balanced rooted tree with nH vertices, constructed as follows.
+First, we deﬁne for each level l a variable zl representing the number of vertices at that level,
+and a variable Zl representing the total number of vertices in that and previous levels. In
+particular: at the root Z−1 = 0, Z0 = z0 = 1 and for l ∈ [q − 2] by induction zl = zl−1∆l and
+Zl = Zl−1 + zl. Then, zq−1 = (cid:100)(nH − Zq−2)/(∆q + 1)(cid:101), Zq−1 = Zq−2 + zq−1, zq = nH − Zq−1
+and Zq = nH . Next, we deﬁne the set of edges of T :
+
+j=1
+
+i=1
+
+ET = {{Zl−2 + i, Zl−1 + zl−1j + i} | l ∈ [q] ∧ i ∈ [zl−1] ∧ zl−1j + i ∈ [zl]}.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+29
+
+So the tree consists of three parts: in the ﬁrst q − 2 levels, every vertex has a ﬁxed, level-
+dependent number of children, the last level is organized such that a maximum of parents
+has ∆q children, and in level q − 1 parent nodes have in general ∆q−1 − 1 or ∆q−1 children.
+Moreover, for 0 ≤ l ≤ q − 2, the diﬀerence between the number of vertices in the subtrees
+rooted by two vertices in level l is at most ∆q + 2. We also deﬁne the set of children of a vertex,
+i.e., for l ∈ [q] and i ∈ [zl−1],
+
+ch(Zl−2 + i) = {Zl−1 + zl−1j + i | zl−1j + i ∈ [zl]}.
+
+In Section A.3.3, we will show conditions on nH , ∆1 . . . ∆q, kH and δ such that for a
+random graph GH on nH vertices and a vertex v1 of GH , with high probability (at least 1 − δ)
+GH contains a subgraph isomorphic to T whose root is at v1.
+
+A.3.3 Random Graphs Almost Surely Embed a Balanced Spanning Tree
+
+The results below are inspired by [53]. We specialize this result to our speciﬁc problem, obtaining
+proofs which are also valid for graphs smaller than 1010 vertices, even if the bounds get slightly
+weaker when we drop terms of order O(log(log(nH ))) for the simplicity of our derivation.
+
+Let F be the subgraph of T induced by all its non-leafs, i.e., F = ([Zq−1], EF ) with
+
+EF = {{i, j} ∈ ET | i, j ≤ Zq−1}.
+
+Lemma 3 Let GH and F be deﬁned as above. Let v1 be a vertex of GH . Let nH ≥ kH ≥
+∆i ≥ 3 for i ∈ [l]. Let γ = maxq−1
+H ≤ 1. Let
+kH ≥ 4 log(2nH /δF (∆q + 2)). Then, with probability at least 1 − δF , there is an isomorphism
+φ from F to a subgraph of GH , mapping the root 1 of F on v1.
+
+l=1 ∆l/kH and let γ + 4(∆q + 2)−1 + 2n−1
+
+Proof We will construct φ by selecting images for the children of vertices of F in increasing
+order, i.e., we ﬁrst select φ(1) = v1, then map children {2 . . . ∆1 + 1} of 1 to vertices adjacent to
+v1, then map all children of 2 to vertices adjacent to φ(2), etc. Suppose we are processing level
+l ∈ [q − 1] and have selected φ(j) for all j ∈ ch(i(cid:48)) for all i(cid:48) < i for some Zl−1 < i ≤ Zl. We
+now need to select images for the ∆l children j ∈ ch(i) of vertex i (or in case l = q − 1 possibly
+only ∆l − 1 children). This means we need to ﬁnd ∆l neighbors of i not already assigned as
+image to another vertex (i.e., not belonging to ∪0≤i(cid:48)<iφ(ch(i(cid:48)))). We compute the probability
+that this fails. For any vertex j ∈ [nH ] with i (cid:54)= j, the probability that there is an edge between
+i and j in GH is 2kH /nH . Therefore, the probability that we fail to ﬁnd ∆l free neighbors of i
+can be upper bounded as
+
+P r [FailF (i)] = P r
+
+(cid:20)
+
+Bin
+
+(cid:18)
+
+nH − Zl,
+
+(cid:19)
+
+2kH
+nH
+
+(cid:21)
+
+< ∆l
+
+≤ exp
+
+
+
+
+
+
+−
+
+(cid:16)
+(nH − Zl) 2kH
+nH
+
+− ∆l
+
+2(nH − Zl) 2kH
+nH
+
+(cid:17)2
+
+
+
+.(21)
+
+
+
+
+We know that nH − Zl ≥ zq. Moreover, (zq + ∆q − 1)/∆q ≥ zq−1 and Zq−2 + 1 ≤ zq−1, hence
+2(zq + ∆q − 1)/∆q ≥ Zq−2 + zq−1 + 1 = Zq−1 + 1 and 2(zq + ∆q − 1)/∆q + zq ≥ nH + 1.
+There follows
+
+zq(2 + ∆q) ≥ nH + 1 − 2(∆q − 1)/∆q ≥ nH − 1.
+
+Therefore,
+
+Substituting this and ∆l ≥ γkH in Equation (21), we get
+
+nH − Zl ≥ zq ≥ nH (1 − 2(∆q + 2)−1 − n−1
+
+H ).
+
+(22)
+
+P r [FailF (i)] ≤ exp
+
+≤ exp
+
+≤ exp
+
+
+
+
+
+
+
+
+
+
+
+(cid:32)
+
+(cid:16)
+
+−
+
+nH (1 − 2(∆q + 2)−1 − n−1
+
+H ) 2kH
+nH
+H ) 2kH
+2nH (1 − 2(∆q + 2)−1 − n−1
+nH
+(cid:17)2
+
+(cid:16)
+2(1 − 2(∆q + 2)−1 − n−1
+
+H ) − γ
+
+−k2
+H
+
+− kH γ
+
+(cid:17)2
+
+
+
+
+
+
+
+
+
+
+
+4kH
+
+(cid:33)
+
+−k2
+H
+4kH
+
+= exp
+
+(cid:18) −kH
+4
+
+(cid:19)
+
+,
+
+30
+
+César Sabater et al.
+
+where the latter inequality holds as γ +4(∆q +2)−1 +2n−1
+we can conclude that
+
+H ≤ 1. As kH ≥ 4 log(2nH /δF (∆q +2))
+
+The total probability of failure to embed F in GH is therefore given by
+
+P r [FailF (i)] ≤
+
+δF (∆q + 2)
+2nH
+
+.
+
+Zq−1
+(cid:88)
+
+i=2
+
+FailF (i) ≤ (Zq−1 − 1)
+
+δF (∆q + 2)
+2nH
+
+(cid:16)
+nH (2(∆q + 2)−1 + n−1
+
+≤
+
+H ) − 1
+
+(cid:17) δF (∆q + 2)
+2nH
+
+where we again applied (22).
+
+=
+
+2nH
+∆q + 2
+
+δF (∆q + 2)
+2nH
+
+= δF ,
+
+(cid:117)(cid:116)
+
+Now that we can embed F in GH , we still need to embed the leaves of T . Before doing
+so, we review a result on matchings in random graphs. The next lemma mostly follows [15]
+(Theorem 7.11 therein), we mainly adapt to our notation, introduce a conﬁdence parameter
+and make a few less crude approximations4.
+
+Lemma 4 Let m ≥ 27 (in our construction, m = zq) and ζ ≥ 4. Consider a random bipartite
+graph with vertex partitions A = {a1 . . . am} and B = {b1 . . . bm}, where for every i, j ∈ [m]
+the probability of an edge {ai, bj } is p = ζ(log(m))/m. Then, the probability of a complete
+matching between A and B is higher than
+
+1 −
+
+em−2(ζ−1)/3
+1 − m−(ζ−1)/3
+
+.
+
+Proof For a set X of vertices, let Γ (X) be the set of all vertices adjacent to at least one member
+of X. Then, if there is no complete matching between A and B, there is some set X, with either
+X ⊂ A or X ⊂ B, which violates Hall’s condition, i.e., |Γ (X)| < |X|. Let X be the smallest set
+satisfying this property (so the subgraph induced by X ∪ Γ (X) is connected). The probability
+that such sets X and Γ (X) of respective sizes i and j = |Γ (X)| exist is upper bounded by
+appropriately combining:
+
+– the number of choices for X, i.e., 2 (for selecting A or B) times
+
+(cid:19)
+
+,
+
+(cid:18) m
+i
+
+– the number of choices for Γ (X), i.e.,
+
+(cid:19)
+
+(cid:18) m
+i − 1
+
+(considering that j ≤ i − 1),
+
+– an upper bound for the probability that under these choices of X and Γ (X) there are at
+(cid:19)
+
+(cid:18)
+
+least 2i − 2 edges (as the subgraph induced by X ∪ Γ (X) is connected), i.e.,
+
+ij
+i + j − 1
+
+possible choices of the vertex pairs and pi+j−1 the probability that these vertex pairs all
+form edges, and
+
+– the probability that there is no edge between any of X ∪ Γ (X) and the other vertices, i.e.,
+
+(1 − p)i(m−j)+j(m−i) = (1 − p)m(i+j)−2ij .
+Thus, we upper bound the probability of observing such sets X and Γ (X) of sizes i and j
+
+as follows:
+
+FailB(i, j) ≤
+
+(cid:18) m
+i
+
+(cid:19) (cid:18)
+
+(cid:19) (cid:18) m
+j
+(cid:17)i (cid:18) me
+j
+
+ij
+i + j − 1
+(cid:19)j (cid:18) ije
+
+i + j − 1
+
+≤
+
+(cid:16) me
+i
+
+(cid:19)
+
+pi+j−1(1 − p)m(i+j)−2ij
+
+(cid:19)i+j−1
+
+pi+j−1(1 − p)m(i+j)−2ij .
+
+4 In particular, even though Bollobas’s proof is asymptotically tight, its last line uses the
+fact that (e log n)3an1−a+a2/n = o(1) for all a ≤ n/2. This expression is only lower than 1 for
+n ≥ 5.6 · 1010, and as the sum of this expression over all possible values of a needs to be smaller
+than δF , we do not expect this proof applies to graphs representing current real-life datasets.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+31
+
+Here, in the second line the classic upper bound for combinations is used:
+
+(cid:19)
+
+(cid:18) m
+i
+
+< (cid:0) me
+i
+
+(cid:1)i. As
+
+2j ≤ i + j − 1, we get
+
+FailB(i, j) ≤
+
+≤
+
+(cid:16) me
+i
+
+(cid:17)i (cid:18) me
+j
+
+(cid:19)j (cid:18) ie
+2
+mi+j e2i+2j−1ij−1
+jj 2i+j−1
+
+(cid:19)i+j−1
+
+pi+j−1(1 − p)m(i+j)−2ij
+
+pi+j−1(1 − p)m(i+j)−2ij .
+
+(23)
+
+As 0 < p < 1, there also holds
+
+and therefore
+
+(1 − p)1/p < 1/e,
+
+(1 − p)m(i+j)−2ij = (1 − p)
+
+1
+
+p p(m(i+j)−2ij) < (1/e)p(m(i+j)−2ij).
+
+We can substitute p = ζ(log(m))/m to obtain
+
+(1 − p)m(i+j)−2ij < (1/e)(ζ(log(m))/m)(m(i+j)−2ij) =
+
+(cid:19)ζ(m(i+j)−2ij)/m
+
+.
+
+(cid:18) 1
+m
+
+Substituting this into Equation (23), we get
+
+FailB(i, j) ≤
+
+mi+j e2i+2j−1ij−1
+jj 2i+j−1
+
+=
+
+meij−1
+jj
+
+(cid:18) log(m)ζe2
+2
+
+(cid:19)ζ(m(i+j)−2ij)/m
+
+(cid:19)i+j−1 (cid:18) 1
+m
+(cid:19)ζ((i+j)−2ij/m)
+
+(cid:18) log(m)ζ
+m
+(cid:19)i+j−1 (cid:18) 1
+m
+
+.
+
+Given that mζ/3 ≥ ζ log(m)e2/2 holds for m ≥ 27 and ζ ≥ 4, we get
+
+(cid:18) log(m)ζe2
+2mζ/3
+
+(cid:19)i+j−1
+
+m−ζ((i+j)−2ij/m)+ζ(i+j−1)/3
+
+FailB(i, j) ≤
+
+≤
+
+≤
+
+As ζ ≥ 4, this implies
+
+meij−1
+jj
+eij−1
+jj
+eij−1
+jj
+
+m−ζ( 2
+
+3 (i+j)+1/3−2ij/m)+1
+
+m−ζ( 1
+
+3 i+ 1
+
+3 )+1.
+
+FailB(i, j) ≤
+
+(cid:19)j
+
+(cid:18) i
+j
+
+e
+i
+
+m− ζi
+
+3 − 1
+3 .
+
+(24)
+
+There holds:
+
+(cid:19)j
+
+i−1
+(cid:88)
+
+j=1
+
+(cid:18) i
+j
+
+=
+
+≤
+
+<
+
+≤
+
+(cid:19)j
+
+(cid:19)j
+
+(cid:19)j
+
+(cid:98)i/3(cid:99)
+(cid:88)
+
+j=1
+
+(cid:98)i/3(cid:99)
+(cid:88)
+
+j=1
+
+(cid:98)i/3(cid:99)
+(cid:88)
+
+j=1
+
+(cid:18) i
+j
+
+(cid:18) i
+j
+
+(cid:18) i
+j
+
++
+
++
+
+i
+(cid:88)
+
+j=(cid:98)i/3(cid:99)+1
+
+i
+(cid:88)
+
+j=(cid:98)i/3(cid:99)+1
+
+(cid:19)j
+
+(cid:18) i
+j
+
+3j =
+
+(cid:19)j
+
+(cid:98)i/3(cid:99)
+(cid:88)
+
+j=1
+
+(cid:18) i
+j
+
++ 3(cid:98)i/3(cid:99)+1 3i−(cid:98)i/3(cid:99) − 1
+
+3 − 1
+
++
+
+3i+1
+2
+
+<
+
+(cid:98)i/3(cid:99)
+(cid:88)
+
+j=1
+
+ii/3 +
+
+3i+1
+2
+
+ii/3 +
+
+i
+3
+
+3i+1
+2
+
+.
+
+32
+
+César Sabater et al.
+
+Substituting in Equation (24) gives
+
+FailB =
+
+<
+
+<
+
+m/2
+(cid:88)
+
+i−1
+(cid:88)
+
+i=2
+
+j=1
+
+m/2
+(cid:88)
+
+i−1
+(cid:88)
+
+i=2
+
+j=1
+
+FailB(i, j)
+
+(cid:19)j
+
+(cid:18) i
+j
+
+e
+i
+
+m− ζi
+
+3 − 1
+
+3 <
+
+(cid:32)
+
+m/2
+(cid:88)
+
+i=2
+
+ii/3+1
+3
+
++
+
+3i+1
+2
+
+(cid:33)
+
+e
+i
+
+m− ζi
+
+3 − 1
+3
+
+m/2
+(cid:88)
+
+(cid:16)
+
+i=2
+
+ii/3 + 3i+1(cid:17) e
+2
+
+m− ζi
+
+3 − 1
+
+3 <
+
+m/2
+(cid:88)
+
+i=2
+
+ii/3 e
+2
+
+m− ζi
+
+3 − 1
+
+3 + 3i+1 e
+2
+
+m− ζi
+
+3 − 1
+3 .
+
+As m ≥ 27 = 33 we can now write
+
+FailB <
+
+e
+2
+
+m/2
+(cid:88)
+
+i=2
+
+m− (ζ−1)i
+
+3 − 1
+
+3 + m(i+1)/3m− ζi
+
+3 − 1
+
+3 <
+
+e
+2
+
+m/2
+(cid:88)
+
+i=2
+
+m− (ζ−1)i
+
+3 − 1
+
+3 + m− (ζ−1)i
+
+3
+
+< e
+
+m/2
+(cid:88)
+
+i=2
+
+m− (ζ−1)i
+
+3 = em− 2(ζ−1)
+
+3
+
+m/2−2
+(cid:88)
+
+(cid:16)
+
+m− ζ−1
+
+3
+
+(cid:17)i
+
+= em− 2(ζ−1)
+
+3
+
+1 −
+
+i=0
+
+(cid:17)m/2−1
+
+(cid:16)
+m− ζ−1
+(cid:16)
+
+3
+
+1 −
+
+m− ζ−1
+
+3
+
+< em− 2(ζ−1)
+
+3
+
+(cid:17)
+
+1
+(cid:16)
+m− ζ−1
+
+3
+
+(cid:17) .
+
+1 −
+
+(cid:117)(cid:116)
+
+This concludes the proof.
+
+Lemma 5 Let m ≥ 27 and δB > 0. Let
+
+ζ = max
+
+(cid:18)
+
+4, 1 +
+
+3 log(2e/δB)
+2 log(m)
+
+(cid:19)
+
+.
+
+Consider a random bipartite graph as described in Lemma 4 above. Then, with probability at
+least 1 − δB there is a complete matching between A and B.
+
+Proof From the given ζ, we can infer that
+
+ζ − 1 ≥ 3 log(2e/δB )
+
+2 log(m)
+
+ζ − 1 ≥ −3 log(δB /2e)
+
+2 log(m)
+
+− 2
+
+3 (ζ − 1) log(m) ≤ log (δB/2e)
+m−2(ζ−1)/3 ≤ δB/2e
+
+We also know that ζ ≥ 4 and m ≥ 27, hence (ζ − 1)/3 ≥ 1 and 1 − m−(ζ−1)/3 ≥ 26/27 ≥ 1/2.
+We know from Lemma 4 that the probability of having a complete matching is at least
+
+1 −
+
+em−2(ζ−1)/3
+1 − m−(ζ−1)/3
+
+≥ 1 −
+
+e(δB/2e)
+1/2
+
+= 1 − δB.
+
+Lemma 6 Let δB > 0, ∆ ≥ 1 (in our construction, ∆ = ∆q) and m ≥ 27. Let d1 . . . dl be
+positive numbers, with di = ∆ for i ∈ [l − 1], dl ∈ [∆] and (cid:80)l
+i=1 di = m. Let A = {a1 . . . al}
+and B = {b1 . . . bm} be disjoint sets of vertices in a random graph GH where the probability to
+have an edge {ai, bj } is p = 2kH /nH for any i and j. Let
+
+p ≥ 1 −
+
+(cid:18)
+
+1 − max
+
+(cid:18)
+
+4, 1 +
+
+3 log(2e/δB)
+2 log(m)
+
+(cid:19) log(m)
+m
+
+(cid:19)∆
+
+.
+
+(25)
+
+Then with probability at least 1 − δB, GH contains a collection of disjoint di-stars with centers
+ai and leaves in B.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+33
+
+Proof Deﬁne an auxiliary random bipartite graph G(cid:48) with sides A(cid:48) = {a(cid:48)
+m} and B =
+{b1 . . . bm}. For every i, j ∈ [m], the probability of having an edge between ai and bj in G(cid:48) is
+p(cid:48) = 1 − (1 − p)1/∆. We relate the distributions on the edges of GH and G(cid:48) by requiring there
+is an edge between ai and bj if and only if there is an edge between a(cid:48)
+∆(i−1)+i(cid:48) and bj for all
+i(cid:48) ∈ [∆].
+
+1 . . . a(cid:48)
+
+From Equation (25) we can derive
+
+p(cid:48) ≥ max
+
+(cid:18)
+
+4, 1 +
+
+3 log(2e/δB)
+2 log(m)
+
+(cid:19) log(m)
+m
+
+.
+
+(26)
+
+Setting
+
+ζ = max
+
+(cid:18)
+
+4, 1 +
+
+3 log(2e/δB)
+2 log(m)
+
+(cid:19)
+
+,
+
+this ensures p(cid:48) satisﬁes the constraints of Lemma 5:
+
+p(cid:48) = ζ log(m)/m.
+
+As a result, there is a complete matching in G(cid:48) with probability at least 1 − δB, and hence
+(cid:117)(cid:116)
+
+the required stars can be found in GH with probability at least 1 − δB.
+
+Lemma 7 Let δF > 0 and δB > 0. Let GH and T and their associated variables be as deﬁned
+above. Assume that the following conditions are satisﬁed:
+
+(a) nH ≥ 27(∆q + 2)/∆q,
+(b) γ + 2(∆q + 2)−1 + n−1
+(c) kH ≥ 4 log(2nH /δF (∆q + 2)),
+
+H ≤ 1,
+
+(d) kH ≥ max
+
+(cid:18)
+
+4, 1 +
+
+3 log(2e/δB)
+2 log(nH ∆q/(∆q + 2))
+
+(cid:19) ∆q + 2
+2
+
+log
+
+(cid:18) nH ∆q
+∆q + 2
+
+(cid:19)
+
+,
+
+(e) γ = max q−1
+
+l=1 ∆l/kH .
+
+Let GH be a random graph where there is an edge between any two vertices with probability
+p. Let v1 be a vertex of GH . Then, with probability at least 1 − δF − δB, there is a subgraph
+isomorphism between the tree T deﬁned above and GH such that the root of T is mapped on
+v1.
+
+Proof The conditions of Lemma 3 are clearly satisﬁed, so with probability 1 − δF there is a tree
+isomorphic to F in GH . Then, from condition (d) above and knowing that the edge probability
+is p = 2kH /nH , we obtain
+
+p ≥ max
+
+(cid:18)
+
+4, 1 +
+
+3 log(2e/δB)
+2 log(nH ∆q/(∆q + 2))
+
+(cid:19)
+
+1
+nH ∆q/(∆q + 2)
+
+log
+
+(cid:19)
+
+(cid:18) nH ∆q
+∆q + 2
+
+∆q.
+
+Taking into account that m = nH ∆q/(∆q + 2), we get
+
+p ≥ max
+
+(cid:18)
+
+4, 1 +
+
+3 log(2e/δB)
+2 log(m)
+
+(cid:19) 1
+m
+
+log (m) ∆q,
+
+which implies the condition on p in Lemma 5. The other conditions of that lemma can be easily
+veriﬁed. As a result, with probability at least 1 − δB there is a set of stars in GH linking the
+leaves of F to the leaves of T , so we can embed T completely in GH .
+(cid:117)(cid:116)
+
+A.3.4 Running Gopa on Random Graphs
+
+Assume we run Gopa on a random graph satisfying the properties above, what can we say about
+the diﬀerential privacy guarantees? According to Theorem 1, it is suﬃcient that there exists a
+spanning tree and vectors tη and t∆ such that tη + Kt∆ = X A − X B. We ﬁx tη in the same way
+as for the other discussed topologies (see sections 5.2 and 5.3) in order to achieve the desired
+ση and focus our attention on t∆. According to Lemma 7, with high probability there exists
+
+34
+
+César Sabater et al.
+
+in GH a spanning tree rooted at the vertex where X A and X B diﬀer and a branching factor
+∆l speciﬁed per level. So given a random graph on nH vertices with edge density 2kH /nH ,
+if the conditions of Lemma 7 are satisﬁed we can ﬁnd such a tree isomorphic to T in the
+communication graph between honest users GH . In many cases (reasonably large nH and kH ),
+this means that the lemma guarantees a spanning tree with branching factor as high as O(kH ),
+even though it may be desirable to select a small value for the branching factor of the last level
+in order to more easily satisfy condition (d) of Lemma 7, e.g., ∆q = 2 or even ∆q = 1.
+Lemma 8 Under the conditions described above,
+(cid:18)
+
+(cid:19)(cid:19)(cid:19)
+
+(cid:18)
+
+(cid:18)
+
+t(cid:62)
+∆t∆ ≤
+
+1 +
+
+1 +
+
+1
+∆3
+
+. . .
+
+1
+∆q
+
++
+
+(∆q + 2)(∆q + 2 + 2q)
+nH
+
+(27)
+
+1
+∆1
+1
+∆1
+
+1
+∆2
+2
+∆2
+
+≤
+
+(cid:18)
+
+1 +
+
+(cid:19)
+
++ O(n−1
+
+H ).
+
+Proof Let q be the depth of the tree T . The tree is balanced, so in every node the number
+of vertices in the subtrees of its children diﬀers in at most ∆q + 2. For edges e incident with
+the root (at level 0 node), |te − ∆−1
+H (∆q + 2). In general, for a node at level l (except
+leaves or parents of leaves), there are (cid:81)l
+i=1 ∆i vertices, each of which have ∆l+1 children, and
+for every edge e connecting such a node with a child,
+
+1 | ≤ n−1
+
+(cid:12)
+(cid:12)
+(cid:12)
+te −
+(cid:12)
+(cid:12)
+
+l+1
+(cid:89)
+
+i=1
+
+∆−1
+i
+
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+
+≤ (∆q + 2)/nH .
+
+For a complete tree (of 1 + ∆ + . . . + ∆q vertices), we would have
+
+t(cid:62)
+∆t∆ =
+
+q
+(cid:88)
+
+l
+(cid:89)
+
+(cid:32) l
+
+(cid:89)
+
+∆i
+
+l=1
+
+i=1
+
+i=1
+
+(cid:33)2
+
+∆−1
+i
+
+=
+
+q
+(cid:88)
+
+(cid:32) l
+
+(cid:89)
+
+(cid:33)−1
+
+∆i
+
+,
+
+l=1
+
+i=1
+
+which corresponds to the ﬁrst term in Equation (27). As the tree may not be complete, i.e.,
+there may be less than (cid:81)q
+i=1 ∆i leaves, we analyze how much oﬀ the above estimate is. For an
+edge e connecting a vertex of level l with one of its children,
+
+(cid:12)
+(cid:12)
+(cid:12)
+te −
+(cid:12)
+(cid:12)
+
+l+1
+(cid:89)
+
+i=1
+
+∆i
+
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+
+≤ (∆q + 2)/nH ,
+
+and hence
+
+(cid:12)
+(cid:12)
+(cid:12)
+t2
+e −
+(cid:12)
+(cid:12)
+(cid:12)
+
+(cid:32)l+1
+(cid:89)
+
+i=1
+
+∆i
+
+(cid:33)2(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+
+≤
+
+≤
+
+≤
+
+(cid:12)
+(cid:12)
+(cid:12)
+te −
+(cid:12)
+(cid:12)
+
+l+1
+(cid:89)
+
+i=1
+
+∆i
+
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+
+(cid:32)
+
+te +
+
+(cid:33)
+
+∆i
+
+l+1
+(cid:89)
+
+i=1
+
+∆q + 2
+nH
+
+(cid:32)
+
+te −
+
+l+1
+(cid:89)
+
+i=1
+
+∆i + 2
+
+(cid:33)
+
+∆i
+
+l+1
+(cid:89)
+
+i=1
+
+(cid:19)2
+
+(cid:18) ∆q + 2
+nH
+
++ 2
+
+∆q + 2
+nH
+
+l+1
+(cid:89)
+
+i=1
+
+∆i.
+
+Summing over all edges gives
+
+t(cid:62)
+∆t∆ −
+
+q
+(cid:88)
+
+(cid:32) l
+
+(cid:89)
+
+l=1
+
+i=1
+
+(cid:33)−1
+
+∆i
+
+≤
+
+q
+(cid:88)
+
+l=1
+
+zl
+
+
+(∆q + 2)/n2
+
+H + 2
+
+(cid:32)l+1
+(cid:89)
+
+i=1
+
+(cid:33)−1
+
+∆i
+
+(∆q + 2)/nH
+
+
+
+
+
+= (∆q + 2)2/nH +
+
+≤ (∆q + 2)2/nH +
+
+q
+(cid:88)
+
+l=1
+q
+(cid:88)
+
+l=1
+
+2zl
+
+(cid:32)l+1
+(cid:89)
+
+i=1
+
+(cid:33)−1
+
+∆i
+
+(∆q + 2)/nH
+
+2(∆q + 2)/nH
+
+=
+
+(∆q + 2)(∆q + 2 + 2q)
+nH
+
+.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+35
+
+(cid:117)(cid:116)
+
+So if we choose parameters ∆ for the tree T , the above lemmas provide values δF and δB
+such that T can be embedded in GH with probability at least 1 − δF − δB and an upper bound
+for t(cid:62)
+
+∆t∆ that can be obtained with the resulting spanning tree in GH .
+Theorem 4 in the main text summarizes these results, simplifying the conditions by assuming
+
+that ∆i = (cid:98)(k − 1)ρ/2(cid:99) for i ≤ q − 1 and ∆q = 2.
+
+Proof (Proof of Theorem 4) Let us choose ∆i = (cid:98)(k − 1)ρ/3(cid:99) for i ∈ [q − 1] and ∆q = 1 for
+some appropriate q such that Equation (20) is satisﬁed. We also set δ = δF = δB.
+
+Then, the conditions of Lemma 7 are satisﬁed. In particular, condition (a) holds as
+
+nH = ρn ≥ 81 = 27(∆q + 2)/∆q. Condition (e) implies that
+
+γ =
+
+q−1
+max
+i=1
+
+∆i/kH =
+
+1
+kH
+
+(cid:22) (k − 1)ρ
+3
+
+(cid:23)
+
+.
+
+Condition (b) holds as
+
+γ + 2(∆q + 2)−1 + n−1
+
+H =
+
+≤
+
+≤
+
+1
+kH
+1
+kH
+1
+3
+
+(cid:23)
+
+(cid:22) (k − 1)ρ
+3
+
++
+
+2
+3
+
++ n−1
+H
+
+(k − 1)ρ
+3
+
++
+
+2
+3
+
++ n−1
+
+H ≤
+
+1
+3
+
+−
+
+ρ
+3kH
+
++
+
+2
+3
+
++ n−1
+
+H =
+
+1
+3
+
+−
+
+1
+3k
+
++
+
+2
+3
+
++ n−1
+H
+
+−
+
+1
+nH
+
++
+
+2
+3
+
++ n−1
+
+H = 1.
+
+Condition (d) holds because we know that ρk ≥ 6 log(ρn/3), which is equivalent to
+
+kH ≥ 4
+
+∆ + 2
+∆
+
+log
+
+(cid:18) nH ∆q
+∆q + 2
+
+(cid:19)
+
+,
+
+and we know that ρk ≥ 3
+
+2 + 9
+
+4 log(2e/δ), which is equivalent to
+
+(cid:18)
+
+1 +
+
+kH ≥
+
+3 log(2e/δB)
+2 log(nH ∆q/(∆q + 2))
+
+(cid:19) ∆ + 2
+∆
+
+log
+
+(cid:18) nH ∆q
+∆q + 2
+
+(cid:19)
+
+.
+
+Finally, condition (c) is satisﬁed as we know that ρk ≥ 4 log(ρn/3δ). Therefore, applying the
+lemma, we can with probability at least 1 − 2δ ﬁnd a spanning tree isomorphic to T . If we ﬁnd
+one, Lemma 8 implies that
+
+t(cid:62)
+∆t∆ ≤
+
+(cid:33)−1
+
+q
+(cid:88)
+
+(cid:32) l
+
+(cid:89)
+
+l=1
+
+i=1
+
+∆i
+
++
+
+(∆q + 2)(∆q + 2 + 2q)
+nH
+
+q−1
+(cid:88)
+
+∆−l
+
+1 + ∆1−q
+
+1 ∆−1
+
+q +
+
+3(3 + 2q)
+nH
+
+= ∆−1
+
+1
+
+1 − ∆1−q
+1 − ∆−1
+
+1
+
++ ∆1−q
+
+1 ∆−1
+
+q +
+
+9 + 6q
+nH
+
++
+
+3
+nH
+
++
+
+9 + 6q
+nH
+
+=
+
+1
+(cid:98)(k − 1)ρ/3(cid:99) − 1
+
++
+
+1
+12 + 6q
+nH
+
+l=1
+1
+∆1 − 1
+
+=
+
+≤
+
+=
+
+1
+(cid:98)(k − 1)ρ/3(cid:99) − 1
+
++
+
+12 + 6 log(nH )
+nH
+
+This implies the conditions related to σ∆ and t∆ are satisﬁed. From Theorem 1, it follows
+that with probability 1 − 2δ Gopa is (ε, δ)-diﬀerentially private, or in short Gopa is (ε, 3δ)-
+diﬀerentially private.
+
+36
+
+César Sabater et al.
+
+A.4 Matching the Utility of the Centralized Gaussian Mechanism
+
+From the above theorems, we can now obtain a simple corollary which precisely quantiﬁes
+the amount of independent and pairwise noise needed to achieve a desired privacy guarantee
+depending on the topology.
+
+Proof (Proof of Corollary 1) In the centralized (trusted curator) setting, the standard central-
+ized Gaussian mechanism ([33] Theorem A.1 therein) states that in order for the noisy average
+( 1
+u∈U Xu) + η to be (ε(cid:48), δ(cid:48))-DP for some ε(cid:48), δ(cid:48) ∈ (0, 1), the variance of η needs to be:
+n
+
+(cid:80)
+
+σ2
+
+gm =
+
+c2
+(ε(cid:48)n)2
+
+.
+
+(28)
+
+where c2 > 2 log(1.25/δ(cid:48)).
+
+Based on this, we let the independent noise ηu added by each user in Gopa to have variance
+
+σ2
+
+η =
+
+n2
+nH
+
+σ2
+
+gm =
+
+c2
+(ε(cid:48))2nH
+
+,
+
+which, for the approximate average ˆX avg, gives a total variance of:
+
+V ar
+
+(cid:16) 1
+nH
+
+(cid:88)
+
+(cid:17)
+
+ηu
+
+=
+
+u∈U H
+
+1
+n2
+H
+
+nH σ2
+
+η =
+
+c2
+(ε(cid:48)nH )2
+
+.
+
+(29)
+
+(30)
+
+We can see that when nH = n (no malicious user, no dropout), Equation (30) exactly corresponds
+to the variance required by the centralized Gaussian mechanism in Equation (28), hence Gopa
+will achieve the same utility. When there are malicious users and/or dropouts, each honest
+user needs to add a factor n/nH more noise to compensate. for the fact that drop out users
+do not participate and malicious users can subtract their own inputs and independent noise
+terms from ˆX avg. This is consistent with previous work on distributed noise generation under
+malicious parties [61].
+
+Now, given some κ > 0, let σ2
+
+∆ = κσ2
+η
+
+(12 + 6 log(nH ))/nH ) for the random k-out graph, and σ2
+nected GH . In all cases, the value of θ in Theorems 2, 3 and 4 after plugging σ2
+∆
+
+∆ = κn2
+
+gives
+
+if G is the complete graph, σ2
+H σ2
+
+ηnH (
+
+∆ = κσ2
+η/3 for an arbitrary con-
+
+1
+(cid:98)(k−1)ρ/3(cid:99)−1 +
+
+θ =
+
+ε2
+c2
+
++
+
+ε2
+κc2
+
+=
+
+(κ + 1)ε2
+κc2
+
+.
+
+We set ε = ε(cid:48) and require that θ ≤ Θmax(ε, δ) as in conditions of Theorems 2, 3 and 4. Then,
+by Equation (4) we have
+
+(κ + 1)
+κ
+κ+1 c2 we can rewrite the above as ε ≥ ε2
+
+(κ + 1)ε2
+2κc2
+
+ε ≥
+
++
+
+2d2 + ε
+
+d
+
+ε
+c
+
+.
+
+(cid:114)
+
+For d2 = κ
+
+2d ≥ 1 and in turn when d ≥ 3/2, or equivalently when c ≥ 3
+
+d − ε
+inequality in Equation (5) we have:
+
+2
+
+. Since ε ≤ 1, this is satisﬁed if
+
+(cid:113) κ+1
+κ
+
+. Now analyzing the
+
+(cid:16)
+
+ε −
+
+ε2 +
+
+(κ + 1)2ε4
+4κ2c4
+
+(cid:17)2
+
+(k + 1)ε2
+2κc2
+(κ + 1)ε3
+κc2
+
+−
+
+√
+
+√
+
+≥ 2 log(2/δ
+
+≥ 2 log(2/δ
+
+2π)
+
+2π)
+
++
+
+(cid:16) ε2
+c2
+
+ε2
+κc2
+(cid:16) (κ + 1)ε2
+κc2
+
+(cid:17)
+
+(cid:17)
+
+1
+2
+
+(cid:16) κc2
+κ + 1
+
++
+
+(κ + 1)ε2
+4κc2
+
+(cid:17)
+
+− ε
+
+≥ log(2/δ
+
+√
+
+2π).
+
+Again denoting d2 = κ
+
+κ+1 c2 we can rewrite the above as
+
+(cid:16)
+
+1
+2
+
+d2 +
+
+ε2
+4d2
+
+(cid:17)
+
+− ε
+
+≥ log(2/δ
+
+√
+
+2π).
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+37
+
+Table 3 Examples of admissible values for k and σ∆, obtained by numerical simulation, to
+ensure (ε, δ)-DP with trusted curator utility for ε = 0.1, δ(cid:48) = 1/n2
+H
+
+, δ = 10δ(cid:48).
+
+n = 100
+
+n = 1000
+
+n = 10000
+
+ρ = 1
+
+ρ = 0.5
+
+ρ = 1
+
+ρ = 0.5
+
+ρ = 1
+
+ρ = 0.5
+
+k = 3
+k = 5
+k = 20
+k = 30
+k = 5
+k = 10
+k = 20
+k = 30
+k = 10
+k = 20
+k = 20
+k = 40
+
+σ∆ = 55.2
+σ∆ = 38.2
+σ∆ = 23.6
+σ∆ = 19.6
+σ∆ = 59.9
+σ∆ = 37.8
+σ∆ = 42
+σ∆ = 28.5
+σ∆ = 51.1
+σ∆ = 33.8
+σ∆ = 59.3
+σ∆ = 33.4
+
+For d ≥ 3/2 and ε ≤ 1, the derivative of d2 + ε2
+Thus, we only require d2 ≥ 2 log(1.25/δ). Therefore Equation (5) is satisﬁed when:
+
+4d2 − ε is positive, so d2 + ε2
+
+4d2 − ε > d2 − 8/9.
+
+κ
+κ + 1
+
+log(1.25/δ(cid:48)) ≥ log(1.25/δ),
+
+κ+1 . The constant 3.75 instead of 1.25 for the random
+which is equivalent to δ ≥ 1.25
+k-out graph case is because Theorem 4 guarantees (ε, 3δ)-DP instead of (ε, δ) in Theorems 2
+and 3.
+(cid:117)(cid:116)
+
+(cid:17) κ
+
+(cid:16) δ(cid:48)
+1.25
+
+A.5 Smaller k and σ2
+
+∆ via Numerical Simulation
+
+For random k-out graphs, the conditions on k and σ2
+given by Theorem 4 are quite conservative.
+∆
+While we are conﬁdent that they can be reﬁned by resorting to tighter approximations in our
+analysis in Section A.3, an alternative option to ﬁnd smaller, yet admissible values for k and
+σ2
+∆
+
+is to resort to numerical simulation.
+Given the number of users n, the proportion ρ of nodes who are honest and do not drop
+out, and a value for k, we implemented a program that generates a random k-out graph,
+checks if the subgraph GH is connected, and if so ﬁnds a suitable spanning tree for GH and
+∆t∆ needed by our diﬀerential privacy analysis (see for
+computes the corresponding value for t(cid:62)
+instance sections 5.2 and 5.3). From this, we can in turn deduce a suﬃcient value for σ2
+using
+∆
+Corollary 1.
+
+Table 3 gives examples of values obtained by simulations for various values of n, ρ and
+several choices for k. In each case, the reported σ∆ corresponds to the worst-case value required
+across 105 random runs, and the chosen value of k was large enough for GH to be connected in
+all runs. This was the case even for slightly smaller values of k. Therefore, the values reported
+in Table 3 can be considered safe to use in practice.
+
+Appendix B Details of security and cryptographic aspects
+
+We detail in this appendix some of components of the Veriﬁcation Protocol of Section 6. We
+describe the Phase 2 Setup in Appendix B.1, robustness after dropouts of the Phase 4 Mitigation
+in Appendix B.2, on measures against attacks on eﬃciency in Appendix B.3 and of issues that
+could generate the use ﬁnite precision representations in Appendix B.4.
+
+38
+
+B.1 Setup Phase
+
+César Sabater et al.
+
+Our veriﬁcation protocol requires public unbiased randomness to generate Pedersen commitment
+parameters Θ and private random seeds to generate Gaussian samples for Property (11). We
+describe below how to perform these tasks in a Setup phase.
+
+Public randomness To generate a public random seed, a simple procedure is the following.
+First, all users draw uniformly a random number and publish a commit to it. When all users
+have done so, they all reveal their random number. Then, they sum the random numbers
+(modulo the order q of the cyclic group) and use the result as public random seed. If at least
+one user was honest and drew a random number, this sum is random too, so no user can both
+claim to be honest and claim that the obtained seed is not random. Finally, the amount of
+randomness of the seed is expanded by the use of a cryptographic hash function. Appendix D.2
+provides in more detail a folklore method which evenly distributes the work over users.
+
+Private Seeds. In a second part of Setup, users collaboratively generate samples r1, . . . , rn
+such that, for all u ∈ U , ru is private to u and has uniform distribution in the interval [0, M − 1]
+for some public integer M < q/2, the number of bins to generate Gaussian samples (in Appendix
+D.3). In particular,
+
+1. For all u ∈ U : u draws uniformly zu ∈ [0, M − 1], and publishes czu = ComΘ(z).
+2. The users draw a public, uniformly distributed random number z (as above).
+3. For all u ∈ U : u computes ru ← z + tu mod M and publishes cru ← ComΘ(ru) together
+
+with the proof of the modular sum (see the Σ-protocol for modular sum in [18]).
+
+It is important that the czu
+users would try to generate several ru and check which one is most convenient for them.
+
+are published before generating the public random z to avoid that
+
+B.2 Dealing with Dropout
+
+In this section, we give additional details on the strategies for dealing with dropout outlined in
+Section 4. We consider that a user drops out of the computation if they is oﬀ-line for a period
+which is too long for the community to wait until their return. This can happen accidentally
+to honest users, e.g. due to lost network connection. Malicious users may also intentionally
+drop out to aﬀect the progress of the computation. Finally, a user detected as cheater by the
+veriﬁcation procedure of Section 6 and banned from the system may also be seen as a dropout.
+Unaddressed drop outs aﬀect the outcome of the computation as we rely on the fact
+that pairwise noise terms ∆u,v and ∆v,u cancel out for the correctness and utility of the
+computation.
+
+We propose a three-step approach for handling dropout:
+
+1. First, as a preventive measure, users should exchange pairwise noise with enough users so
+that the desired privacy guarantees hold even if some neighbors drop out. This is what
+we proposed and theoretically analyzed in Section 5.4, where the number of neighbors k
+in Theorem 4 depends on (a lower bound on) the proportion ρ of honest users who do
+not drop out. It is important to use a safe lower bound on ρ to make sure users will have
+enough safety margin to handle actual dropouts.
+
+2. Second, as long as there is time, users attempt to repair as much as possible the problems
+incurred by dropouts. A user u who did not publish ˆXu yet can just remove the corresponding
+pairwise noise (and possibly exchange noise with another active user instead). Second, a
+user u who did publish ˆXu already but has still some safety margin thanks to step 1 can
+simply reveal the noise exchanged with the user who dropped out, and subtract it from his
+published ˆXu.
+
+3. Third, it is possible that a user u did publish ˆX and afterwards still so many neighbors
+drop out that revealing all exchanged pairwise noise would aﬀect the privacy guarantees
+for u. If that happens it means a signiﬁcant fraction of the neighbors of u dropped out,
+while the neighbors of u form a random sample of all users. In such case, it is likely that
+also globally many users dropped out. If caused by a large-scale network failure the best
+strategy could be to just wait longer than initially planned. Else, given that u is unable to
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+39
+
+reveal more pairwise noise without risking their privacy, the only options are either that u
+discards all his pairwise noise and restarts with a new set of neighbors, or that u doesn’t
+address the problem and his pairwise noise is not compensated by the noise of another
+active user. To avoid such problems, in addition to step 1, it can be useful to check which
+users went oﬀ-line just before publishing ˆX and to have penalties for users who (repeatedly)
+drop out at the most inconvenient times. Note that for an adversary who wants to remain
+undetected while performing this attack, the behavior of the involved colluding users would
+need to be statistically indistinguishable from that of incidental dropouts. This would result
+in an attack with no extra impact than the one caused by such dropouts.
+
+4. Finally, when circumstances require and allow it, we can ignore the remaining problems
+and proceed with the algorithm, which will then output an estimated average with slightly
+larger error. This can be the case for instance when only a few drop outs have not yet been
+resolved, there is not much time available, and the corresponding pairwise terms ∆u,v are
+known to be not too large (e.g., by proving that they were drawn from N (0, σ2
+∆) where σ2
+∆
+is small enough, or by the use of range proofs).
+
+Fig. 3 Impact of non-rolled back dropouts on the utility of Gopa. See text for details.
+
+and σ2
+∆
+
+Figure 3 illustrates with a simple simulation the impact of a small number of residual pairwise
+noise terms of variance σ2
+in the ﬁnal result, which may happen in the rare circumstances
+∆
+that the pairwise noise terms of some users who dropped out are not “rolled back” by their
+neighbors (step 2 above). We consider n = 10000, ρ = 0.5, ε = 0.1, δ = 10/(ρn)2, κ = 0.3 and
+set the values of k, σ2
+using Corollary 1 so that Gopa satisﬁes (ε, δ)-DP (in particular
+η
+we set them in the same way as in Table 2). We simulate this by drawing a random k-out
+graph, selecting a certain number of dropout users at random, marking all their exchanged
+noise as not rolled back (in practice its is also possible that part of their noise gets rolled back)
+and computing the variance of the estimated average. The simulation is averaged over 100 runs
+(even though the standard deviation across random runs is negligible). We see that Gopa can
+tolerate a number of “catastrophic drop-outs” while remaining more accurate than local DP.
+This ability to retain a useful estimate despite residual pairwise noise terms is rather unique to
+Gopa, and not possible with secure aggregation methods which typically use uniformly random
+(i.e.,
+pairwise masks [16]. We note that this robustness can be optimized by choosing smaller σ2
+∆
+smaller κ) and compensating by adding a bit more independent noise according to Corollary 1.
+
+B.3 Robustness Against Attacks on Eﬃciency
+
+In this section, we study several attacks, their impact and Gopa’s defense against them.
+
+Dropout A malicious user could drop out of the computation intentionally, with the impact
+described in Section B.2. However, dropping out is bad for the reputation of a user, and users
+dropping out more often than agreed could be banned from future participation. One can use
+techniques from identity management (a separate branch in the ﬁeld of security) to ensure that
+
+0100200300400Amount of non-rolled back dropouts0.000.050.100.150.200.250.30Variance of the estimated averageGOPA, =0.5, k-out graph with k=203Central DP with nusersLocal DP with nusers40
+
+César Sabater et al.
+
+creating new accounts is not free, and that possibilities to create new accounts are limited,
+e.g., by requiring to link accounts to unique persons, unique bank account or similar. This also
+ensures that the risk of being banned outweighs the incentive of the (bounded) delay of the
+system one could cause by intentionally dropping out.
+
+Flooding with Neighbor Requests In Section 5, we discuss privacy guarantees for complete
+graphs, path graphs and random communication graphs. In the case of a complete communica-
+tion graph, all users exchange noise with all other users. This is slow, but there is no opportunity
+for malicious users to interfere with the selection of neighbors as the set of neighbors is ﬁxed.
+In other cases, e.g., when the number of users is too large and every user selects k neighbors
+randomly as in Section 5.4, one could wonder whether colluding malicious users could select
+neighbors in such a way that the good working of the algorithm is disturbed, e.g., a single
+honest user is ﬂooded with neighbor requests and ends up exchanging noise with O(n) others.
+We ﬁrst stress the fact that detecting such attacks is easy. If all agents randomly select
+neighbors uniformly at random as they should, then every agent expects to receive k neighbor
+invitations, perhaps plus a few standard deviations of order O(
+k). As soon as a user receives a
+suﬃciently unlikely number of neighbor invitations, we know that with overwhelming probability
+the user is targeted by malicious users.
+
+√
+
+To avoid this, we can let all users select neighbors in a deterministic way starting from
+a public random seed (e.g., take the public randomness generated in Section B.1, add the
+ID of the user to it, apply a hash function to the sum, and use the result to start selecting
+neighbors). In this way, neighbor selection is public and can’t be tampered with. It is possible
+some neighbors of a user u were oﬀ-line and u skipped them, but unless so many users are
+oﬀ-line that the community should have noticed severe problems u should be able to ﬁnd
+enough neighbors among the ﬁrst ck in his random sequence for a small constant c.
+
+Other Common Attacks We assume the algorithm is implemented on a system which is
+secure according to classic network-related attacks, such as denial-of-service (DoS) attacks.
+Such attacks are located at the network level rather than at the algorithm level. As such, they
+apply similarly to any distributed algorithm requiring communication over a network. To the
+extent such attacks can be mitigated, the solutions are on the network level, including (among
+others) a correct organization of the network and its routers.
+
+Similarly, we assume that all (honest) communication is secure and properly encrypted,
+
+referring the reader to the state-of-the-art literature for details on possible implementations.
+
+B.4 Further Discussion on the Impact of Finite Precision
+
+In practice, we cannot work with real numbers but only with ﬁnite precision approximations,
+see Section 6.1. We provide a brief discussion of the impact of this on the guarantees oﬀered by
+the protocol. There is already a large body of work addressing issues which could arise because
+of ﬁnite precision. Here are the main points:
+
+1. Finite precision can be an issue for diﬀerential privacy in general, (see e.g. [4] for a study
+of the eﬀect of ﬂoating point representations). Issues can be overcome with some care, and
+our additional encryption does not make the problem worse (in fact we can argue that
+encryption typically uses more bits and in our setting this may help).
+
+2. The issue of ﬁnite precision has been studied in cryptography. While some operations such
+as multiplication can cause diﬃculties in the context of homomorphic encryption, in our
+work we use a partially homomorphic scheme with only addition. As a result, we can just
+represent our numbers with as many bits (after the decimal dot) as in plaintext memory.
+3. If the number of users is high (and hence also the sum of the Xu and the ∆u,v variables),
+working up to the needed precision doesn’t cause a cost which is high compared to the cost
+of the digits before the decimal dot.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+41
+
+Appendix C Complexity of Gopa
+
+The cost of the protocol in terms of computation and communication was summarized in
+Theorem 6. This section summarizes each component of this cost, relying in particular on the
+cost of proving computations in 6.
+
+Dominant computations are exponentiations in the cryptographic group G deﬁned in
+Section 6.1. The cost of signing messages is negligible. We describe costs centered on any user
+u ∈ U . For simplicity, when we say a task costs c, it means that costs at most c computations
+for proving a computation, c computations for another party verifying this computation and
+it requires the exchange of cW bits, where W is the size in bits of an element of G. Some
+computations depend on ﬁxed-precision parameter ψ to represent numbers in Zq (see Section
+6.1) and the amount 1/B of equiprobable bins used to sample independent noise ηu (see
+Appendix D.3).
+
+The costs break down as follows:
+
+– The Phase 2 Setup requires generating public randomness which has constant cost (except
+for O(1) parties that perform some extra computations, see Algorithm 3) and private seeds
+that require 2 range proofs in the interval [0, 1/Bψ], with a ﬁnal cost of 20 log2(1/B) +
+20 log2(1/ψ).
+
+– Validity of input at Phase 3 Veriﬁcation requires a range proof in the interval [0, 1/ψ], with
+a cost of 10 log2(1/ψ). Extra computations of consistency cannot be accounted here as they
+depend on the nature of external computations.
+
+– Correctness of computations of properties (9) and (10) at Phase 3 Veriﬁcation cost at most
+5|N (u)| + 4, accounting the computations over commitments and proofs of knowledge of
+terms of each property.
+
+– The veriﬁcation of Property (11) at Phase 3 Veriﬁcation costs ln(1/B) · (34.1 ln(1/ψ) +
+
+7.22 ln(q)) (see Appendix D.3).
+The overall cost of a protocol for user u is at most of
+
+5|Nu| + 20 log2(1/B) + 30 log2(1/ψ) + ln(1/B) · (34.1 ln(1/ψ) + 7.22 ln(q)) + 4.
+
+42
+
+César Sabater et al.
+
+Supplementary Material
+
+This supplementary materials ﬁle contains background, often a summary of what can be found
+elsewhere in literature, and further details, which are not essential for the elaboration of the
+contribution.
+
+Appendix D Further details on cryptography and security
+
+D.1 Commitment Schemes
+
+We start by deﬁning formally a commitment and its properties. For clarity, we will use bold
+variables to denote commitments.
+
+Deﬁnition 2 (Commitment Scheme) A commitment scheme consists of a pair of (com-
+putationally eﬃcient) algorithms (Setup, Com). The setup algorithm Setup is executed once,
+with randomness t as input, and outputs a tuple Θ ← Setup(t), which is called the set of
+parameters of the scheme. The algorithm Com with parameters Θ, denoted ComΘ, is a function
+ComΘ : MΘ × RΘ → CΘ, where MΘ is called the message space, RΘ the randomness space,
+and CΘ the commitment space. For a message m ∈ MΘ, the algorithm draws r ∈ RΘ uniformly
+at random and computes commitment c ← ComΘ(m, r).
+
+The security of a commitment scheme typically depends on t not being biased, in particular, it
+must be hard to guess non-trivial information about t.
+
+We now deﬁne some key properties of commitments.
+
+Property 1 (Hiding Property) A commitment scheme is hiding if, for all secrets x ∈ MΘ and
+given that r is chosen uniformly at random from RΘ, the commitment cx = ComΘ(x, r) does
+not reveal any information about x.
+
+Property 2 (Binding Property) A commitment is binding if there exists no computationally
+eﬃcient algorithm A that can ﬁnd x1, x2 ∈ MΘ, r1, r2 ∈ RΘ such that x1 (cid:54)= x2 and
+ComΘ(x1, r1) = ComΘ(x2, r2).
+
+Property 3 (Homomorphic Property) A homomorphic commitment scheme is a commitment
+scheme such that MΘ, RΘ and CΘ are abelian groups, and for all x1, x2 ∈ MΘ, r1, r2 ∈ RΘ
+we have
+
+ComΘ(x1, r1) + ComΘ(x2, r2) = ComΘ(x1 + x2, r1 + r2).
+
+Please note that the three occurrences of the ’+’ sign in the above deﬁnition are operations
+in three diﬀerence spaces, and hence may have diﬀerent deﬁnitions and do not necessarily
+correspond to normal addition of numbers.
+
+Pedersen Commitments. Let p and q be two large primes such that q divides p − 1, and a
+let G be cyclic subgroup of order q of the multiplicative group Z∗
+. For such group, we have
+p
+that G = {ai mod p | 0 ≤ i < q} for any a ∈ G distinct to 1. In the Pedersen scheme, Setup
+is a function that samples at random parameters Θ = (G, g, h) where g, h are two generators
+of G Additionally, MΘ = RΘ = Zq, and CΘ = G. We will refer to g and h as bases. The
+commitment function ComΘ is deﬁned as
+
+ComΘ : Zq × Zq → G
+
+ComΘ(x, r) = gx · hr,
+
+(31)
+
+where (·) is the product modulo p of group G, x is the secret and r is the randomness. For
+simpliﬁcation and when r is not relevant, we relax the notation ComΘ(x, r) to ComΘ(x) and
+assume r is drawn appropriately. Pedersen commitments are homomorphic (in particular,
+ComΘ(x + y, r + s) = ComΘ(x, r) · ComΘ(y, s)), unconditionally hiding, and computationally
+binding under the Discrete Logarithm Assumption, which we succinctly describe below. For
+more details, see Chapter 7 of [52].
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+43
+
+Assumption 1 (Discrete Logarithm Assumption) Let G be a cyclic multiplicative group
+of large prime order q, and g and h two elements chosen independently and uniformly at
+random from G. Then, there exists no probabilistic polynomial time algorithm A that takes as
+input the tuple (G, q, g, h) and outputs a value b such that P (gb = h) is signiﬁcant on the size
+of q.
+
+An optimized implementation of Pedersen commitments can be found in [37]. To generate a
+common Pedersen scheme in our adversary model, the generation of the unbiased random input
+t for Setup can be done as described in Algorithm 3 of Appendix D.2.
+
+D.2 Public Randomness.
+
+We provide here an algorithm to generate public randomness which, compared to the sketch
+provided in Section B.1, distributes the cost more evenly over the participants. In particular, we
+provide a decentralized method to generate n public random numbers in Zq with a computational
+eﬀort of O(1) per user, and costs logarithmic in n for a negligible portion of users. In Gopa it is
+used among others to generate private random seeds and to initialize the Pedersen commitment
+parameters Θ shared by all users.
+
+In our procedure, we enumerate users from 1 to n = |U | and use the cryptographic hash
+function H described at the beginning of the Section to generate random numbers over Z
+2T .
+We also make use of a commitment function Com, for which a common trusted initialization is
+not required (see for example [14]). The procedure is depicted in Algorithm 3.
+
+for all i ∈ {0, . . . , (cid:98)n/2j (cid:99)} do
+
+Set s[u, u] ← su and publish it
+
+Draw su ←R Zq, compute cu ← Com(su) and publish cu
+
+Algorithm 3 Generation of Public Randomness
+1: Input: Hash function H and a commitment function Com.
+2: for all u ∈ {1, . . . , n} do
+3:
+4: end for
+5: for all u ∈ {1, . . . , n} do
+6:
+7: end for
+8: for j = 1 to (cid:98)log2(n)(cid:99) + 1 sequentially do
+9:
+10:
+11:
+12:
+13:
+14:
+15:
+16:
+17:
+18: end for
+19: for all u ∈ {1, . . . , n} do
+20:
+21: end for
+22: Output: A set of unbiased random numbers t1, . . . , tn ∈ Z
+
+Let umin = 2j i + 1 and umax = min(2j (i + 1), n)
+if s[umin, umax] is not already published then
+
+Query S ← s[1, n] and publish tu ← H(S + u)
+
+end if
+end for
+
+2T
+
+Let umid = umin + 2j−1 − 1
+A user u ∈ {umin, . . . , umax} wakes up and:
+• queries (s[umin, umid], s[umid + 1, umax]), if a value is not published, set it to 0
+• publishes s[umin, umax] ← s[umin, umid] + [umid + 1, umax] mod q
+
+The “commit-then-reveal” protocol from in lines 2-6 is to avoid users from choosing the
+value su depending on the choice of other users, which could bias the ﬁnal seed S = (cid:80)
+u∈U su
+mod q. The value S, computed in lines 8-15 in a distributed way, requires at most O(log(n))
+queries and sums for a user in the worst case, but O(1) for almost all users. Inactive users
+do not aﬀect the computation, but their su terms might be ignored. As it is computed from
+modular sums, S is uniformly distributed over Zq if at least one active user is honest. Finally,
+we compute our public random numbers t1, . . . , tn in lines 19 and 20, which are unpredictable
+due to the properties of H and the unpredictability and uniqueness of its input S + u.
+
+44
+
+César Sabater et al.
+
+To verify that a user u participated correctly, one needs to check that (1) the commitment
+cu was properly computed from su, (2) all sums s[umin, umax] that u published were computed
+correctly, and (3) the challenge tu was correctly computed from S + u by the application of H.
+The cost of the protocol for a user is dominated in the worst case at by log2(n) sums and
+3 log2(n)W bits in total, corresponding to the several queries of s[umin, umid] and s[umid +
+1, umax] and the publication of its sum. However, this is cost applies to only O(1) users, while
+the rest of the users computes one commitment, one evaluation of H and O(1) sums and
+transfers O(1) bits during the execution.
+
+D.3 Private Gaussian Sampling
+
+In our algorithm, every user u needs to generate a Gaussian distributed number ηu, which he
+does not publish, but for which we need to verify that it is generated correctly, as otherwise a
+malicious user could bias the result of the algorithm.
+
+Proving the generation of a Gaussian distributed random number is more involved than
+ZKPs such as linear relationships and range proofs we need to verify in the other parts of the
+computation.
+
+Recall that ψ is the desired ﬁxed precision and B is a precision parameter such that B2/ψ
+is an integer. We want to draw ηu from the Gaussian distribution approximated with 1/B
+equiprobable bins and we want to prove the correct drawing up to a precision B.
+
+We will start from the private seed ru, generated in the Phase 2 Setup (Section B.1), which
+is only known to user u, for which u has published a commitment ComΘ(ru) and for which
+the other users know it has been generated uniformly randomly from an interval [0, M − 1] for
+M ≈ 1/B. There are many ways now to exploit a uniformly distributed number to generate a
+Gaussian distributed one, but studying and comparing their eﬃciency and numerical quality is
+out of the scope of the current paper. Here, we only describe one strategy.
+User u will compute x(cid:48) such that ((2ru + 1)/M ) − 1 = erf(x(cid:48)/
+
+2). We know that x(cid:48)
+is normally distributed. The main task is then to provide a ZKP that y = erf(x) for y =
+((2ru + 1)/M ) − 1 and x = x(cid:48)/
+2. As erf is symmetric, we do our analysis for positive values
+of x and y, while the extension for the negative case is straightforward. We want to achieve an
+approximation where the error on y as a function of x is at most B.
+
+√
+
+√
+
+Approximating the error function. The error function relates its input and output in a way
+that cannot be expressed with additive, multiplicative or exponential equations. We therefore
+approximate erf using a converging series. In particular, we will rely on the series
+
+erf(x) =
+
+2
+√
+π
+
+∞
+(cid:88)
+
+l=0
+
+(−1)lx2l+1
+l!(2l + 1)
+
+.
+
+(32)
+
+As argued by [24], this series has two major advantages. First, it only involves additions and
+multiplications, while other known series converging to erf(x) often include multiple exp(−x2/2)
+factors which would require additional evaluations and proofs. Second, it is an alternating series,
+which means we can determine more easily in advance how many terms we need to evaluate to
+achieve a given precision.
+
+Nevertheless, Equation (32) converges slowly for large x. It is more eﬃcient to prove either
+
+that
+
+y = erf(x)
+
+or
+
+1 − y = erfc(x),
+
+as for erfc(x) = 1 − erf(x) there exist good approximations requiring only a few terms for large
+x. An example is the asymptotic expansion
+
+where
+
+erfc(x) =
+
+e−x2
+√
+π
+x
+
+Serfc(x) + RL(x),
+
+Serfc(x) =
+
+L−1
+(cid:88)
+
+l=0
+
+(−1)l(2l − 1)!!
+(2x2)l
+
+(33)
+
+(34)
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+45
+
+with l!! = 1 for l < 1 and (2l − 1)!! = (cid:81)l
+large then the remainder
+
+i=1(2i − 1). This series diverges, but if x is suﬃciently
+
+e−x2
+√
+π
+x
+after the ﬁrst L terms is suﬃciently small to be neglected. So u could prove either part of the
+disjunction depending on whether the erf or erfc approximations achieve suﬃcient precision.
+
+(2L − 1)!!
+(2x2)L
+
+RL(x) ≤
+
+(35)
+
+Zero Knowledge Proof of erf(x). We consider use ﬁxed-precision rounding operations.
+The implied rounding does not cause major problems for several reasons. First, the Gaussian
+distribution is symmetric, and hence the probability of rounding up and rounding down is
+exactly the same, making the rounding error a zero-mean random variable. Second, discrete
+approximations of the Gaussian mechanism such as binomial mechanisms have been studied
+and found to give similar guarantees as the Gaussian mechanism [2]. Third, we can require the
+cumulated rounding error to be an order of magnitude smaller than the standard deviation
+of the noise we are generating, so that any deviation due to rounding has negligible impact.
+We will use a ﬁxed precision for all numbers (except for small integer constants), and we will
+represent numbers as multiples of ψ.
+
+Let tl = x2l+1
+
+l!
+
+evaluate. We provide a ZKP of the evaluation of erf by proving that t0 = x,
+
+, and Lerf + 1 be the amount of terms of the series in Equation (32) we
+
+tl =
+
+tl−1x2
+l
+
+for all l ∈ {1, . . . , Lerf },
+
+(36)
+
+(cid:80)Lerf
+
+tl
+2l+1
+
+l=0 (−1)l
+
+. The bulk of the ZKP is in Equation (36) and in the divisions by
+
+and y = 2√
+π
+2l + 1 of the latter relation. For any ﬁxed-precision value d, let (cid:104)d(cid:105) = d
+be its integer encoding.
+ψ
+We can achieve a ZKP of the ﬁxed precision product c = ab for private a, b and c by proving
+that 1
+ψ (cid:104)c(cid:105) − (cid:104)a(cid:105)(cid:104)b(cid:105) ∈ [−1/2ψ, 1/2ψ]. For round-oﬀ division, a ZKP that a/b = c for private a, c
+and a public positive integer b is possible by proving that (cid:104)a(cid:105) − b(cid:104)c(cid:105) ∈ [−b/2, b/2]. The above
+proofs can be achieved using circuit and range proofs in Zq.
+
+Similarly for erfc, let ml = (2l − 1)!!/(2x)l and Lerfc be the amount of terms we compute
+of the series deﬁned in Equation (34), we can construct a ZKP of its evaluation by proving
+m0 = 0,
+
+ml = ml−1
+
+2l − 1
+2x2
+
+, for all l ∈ {1, . . . , Lerfc − 1}
+
+(37)
+
+x
+
+π
+
+√
+
+(cid:80)Lerfc−1
+l=0
+
+and y = e−x2
+ψ (cid:104)ml−1(cid:105) ∈ (cid:2)−(cid:104)x2(cid:105), (cid:104)x2(cid:105)(cid:3) is
+(−1)lml. Proving that (cid:104)ml(cid:105)(cid:104)x2(cid:105) − 2l−1
+equivalent to prove the relation in Equation (37). This can be done with 10Bx2 cost, where
+Bx2 is maximum number of bits of (cid:104)x2(cid:105). We can assume that Bx2 ≤ log2(q) (where q is the
+order of the Pedersen group G) which makes the cost for each term not bigger than 10 log2(q).
+All other non-dominant computations can similarly be proven with circuit proofs.
+
+To approximate the exp(−x2) term, the common series exp(z) = (cid:80)∞
+
+i=0 zi/i! is known to
+converge quickly. Even if its terms ﬁrst go up until z < i, for larger z where this could slow
+down convergence one can simply divide z by a constant a (maybe conveniently a power of
+2), approximate exp(z/a) and then compute (exp(z/a))a, which can be done eﬃciently. For
+simplicity, we omit the details here.
+
+Amount of approximation terms. Now we determine the magnitudes of Lerf and Lerfc
+needed to achieve an error smaller than B in our computation. We then require the approxi-
+mation and rounding error to be smaller than B/2. The amount of terms of the series must
+not depend on x as the latter is a private value, but we must be able to achieve the expected
+precision for all possible x.
+
+The erf series requires more approximation terms as x gets larger. On the other hand, the
+erfc series is optimal when Lerfc = (cid:98)x2 + 1/2(cid:99) terms are evaluated, and the error gets smaller
+as x increases. Then, we use erfc only when x is large enough to satisfy the required precision,
+for the application of
+and use erf for smaller values. We ﬁrst compute the lower bound xmin
+erfc
+erfc. Then the domain of erf is restricted to (cid:2)0, xmin
+(cid:1) so can obtain the an upper bound of
+erfc
+Lerf . Similarly, the restricted domain of erfc allows us to upper bound Lerfc.
+
+46
+
+César Sabater et al.
+
+Developing Equation (35), we can achieve an approximation error of erfc of
+
+Eerfc(x) ≤
+
+1
+ex2 x
+
+√
+
+π
+
+≈
+
+=
+
+1
+ex2 x
+√
+
+√
+
+π
+
+2
+√
+ex2 x
+
+π
+
+π
+
+=
+
+√
+
+√
+
+(2L − 1)!!
+(2x2)L
+√
+
+1
+ex2 x
+4πL(2L/e)2L
+2πL(L/e)L2L(2x2)L
+2LLL
+eL(2x2)L
+
+2
+√
+ex2 x
+
+√
+
+=
+
+π
+
+(2L)!
+L!2L(2x2)L
+
+√
+
+LL
+eL(x2)L
+
+.
+
+=
+
+2
+√
+ex2 x
+
+(22L)(L2L)(eL)
+(e2L)(LL)(2L)(2x2)L
+
+π
+
+This is minimal in (cid:98)x2 + 1/2(cid:99) so given x we can achieve an error of
+
+√
+
+2
+√
+ex2 x
+
+π
+
+LL
+eL(x2)L
+
+≤
+
+√
+
+2
+√
+ex2 x
+
+π
+
+(cid:98)x2 + 1/2(cid:99)(cid:98)x2+1/2(cid:99)
+e(cid:98)x2+1/2(cid:99)(x2)(cid:98)x2+1/2(cid:99)
+
+√
+
+≤
+
+√
+
+2
+π
+
+(1 + 1/2x2)(cid:98)x2+1/2(cid:99)
+xe(2x2−1/2)
+
+.
+
+As we use erfc for large values of x, we assume x ≥ 1 which will not aﬀect our reasoning, then
+and we can simplify the above by
+
+Eerfc(x) ≤
+
+√
+
+√
+
+2
+π
+
+(1 + 1/2x2)(cid:98)x2+1/2(cid:99)
+xe(2x2−1/2)
+
+√
+
+√
+
+3
+
+6/4
+
+xe(2x2+3/2)
+
+≤
+
+(cid:114) 27
+π
+
+1
+2
+
+1
+e(2x2−1/2)
+
+.
+
+(38)
+
+2
+π
+
+≤
+
+√
+
+Then, by Equation (38) and if
+
+B
+2
+
+≥
+
+(cid:114) 27
+π
+
+1
+2
+
+1
+e(2x2−1/2)
+
+≥ Eerfc(x),
+
+the prover will use the erfc series, else the erf series. In the latter case, we require that
+
+which implies
+
+The above is equivalent to
+
+which implies
+
+and
+
+(cid:114) 27
+π
+
+1
+2e(2x2−1/2)
+
+≥
+
+B
+2
+
+,
+
+(cid:114) 27
+π
+
+1
+B
+
+≥ e(2x2−1/2).
+
+ln(27/π)/2 + ln(1/B) ≥ 2x2 − 1/2,
+
+1.076 + ln(1/B)/0.434 ≥ (2x2 − 1/2)
+
+xmin
+erfc =
+
+(cid:114)
+
+ln(1/B)
+2
+
++ 0.788 ≥ x.
+
+(39)
+
+Now that we bounded the domains of erf and erfc, we can obtain the number of terms to
+evaluate for the series. As shown in Equation (32), this is an alternating series too, so to reach
+an error smaller than B/2, it is suﬃcient to truncate the series when terms get smaller than
+B/2 in absolute value. In particular, we need L terms with
+
+Using again Stirling’s approximation, this means
+
+√
+
+2x2L+1
+πL!(2L + 1)
+
+≤
+
+B
+2
+
+.
+
+2x2L+1
+
+2πL(L/e)L(2L + 1)
+
+≤
+
+B
+2
+
+.
+
+√
+
+√
+
+π
+
+Taking logarithms, we get
+
+ln(2) + (2L + 1) ln(x) − ln(π
+
+√
+
+2) − (L + 1/2) ln(L) + L − ln(2L + 1) ≤ ln(B) − ln(2).
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+47
+
+We have that 2 ln(2) − ln(π
+
+√
+
+2) − ln(2L + 1) ≤ 0, so the above inequality is satisﬁed if
+
+which is equivalent to
+
+or written diﬀerently:
+
+(2L + 1) ln(x) − (L + 1/2) ln(L) + L ≤ ln(B)
+
+(L + 1/2) ln(ex2/L) ≤ ln(B),
+
+(cid:32)
+
+(L + 1/2) ln
+
+1 −
+
+(cid:33)
+
+L − ex2
+L
+
+≤ ln(B)
+
+As ln(1 + α) ≤ α, this is satisﬁed if
+
+which is equivalent to
+
+The above is satisﬁed if
+
+It follows that we need
+
+−(L + 1/2)
+
+L − ex2
+L
+
+≤ ln(B),
+
+(L + 1/2)
+
+L − ex2
+L
+
+≥ ln(1/B).
+
+L − ex2 ≥ ln(1/B).
+
+L ≥ ln(1/B) + ex2.
+
+Substituting the worst case value xmin
+erfc
+(cid:108)(cid:16)
+
+of x from Equation (39), we get
+
+L ≥
+
+1 +
+
+ln(1/B) + 0.79e
+
+(cid:109)
+
+(cid:17)
+
+e
+2
+
+which, approximating, is implied if
+
+L ≥ (cid:100)2.36 ln(1/B) + 2.15(cid:101) = Lerf .
+
+(40)
+
+Now, to compute Lerfc, we just observe in Equation (38) that the error gets smaller as x
+increases, so the biggest error for a ﬁxed number of terms of the series is in xmin
+. Therefore,
+erfc
+plugging Equation (39) we have
+
+Lerfc = (cid:98)(xmin
+
+erfc )2 + 1/2(cid:99)
+
+=
+
+=
+
+(cid:22) ln(1/B)
+2
+(cid:22) ln(1/B)
+2
+
+(cid:23)
+
+1
+2
+
++ 0.788 +
+
+(cid:23)
+
++ 1.288
+
+.
+
+(41)
+
+Required precision ψ. Now we determine the storage needed in our ﬁxed precision represen-
+tation such that the rounding error is smaller than B/2. We have to consider error propagation
+and the errors Ediv and Emul due to division and product ZKPs respectively, which are equal
+to ψ/2. Let El be the error to compute the tl terms of the erf series. The total erf rounding
+error is then
+
+Eround
+erf
+
+=
+
+2
+√
+π
+
+
+
+
+
+Lerf
+(cid:88)
+
+l=0
+
+El
+2l + 1
+
++ Ediv
+
+
+ + Emul.
+
+We require 1/ψM 2 to be an integer so as the variable x is a multiple of 1/M , we can represent
+x and x2 without rounding. As t0 = x we have that E0 = 0, and for other terms we have
+
+tl+1 ± El+1 =
+
+=
+
+=
+
+(tl ± El)x2 ± Emul
+l + 1
+tlx2 ± Elx2 ± ψ/2
+l + 1
+(cid:18) Elx2 + ψ/2
+l + 1
+
+tlx2
+l + 1
+
+±
+
+±
+
+± Ediv
+
+ψ
+2
+
++
+
+(cid:19)
+
+.
+
+ψ
+2
+
+48
+
+César Sabater et al.
+
+Then the absolute error at term l + 1 is
+
+El+1 =
+
+Elx2 + ψ/2
+l + 1
+
++
+
+ψ
+2
+
+≤
+
+Elx2
+l + 1
+
++ ψ.
+
+For 1 ≤ l ≤ x2 − 1 we have El ≥ ψ and
+
+El+1 = El
+
+x2
+l + 1
+
++ ψ ≤ 2El
+
+x2
+l + 1
+
+.
+
+If l + 1 ≤ x2, we can easily see that
+
+El ≤ ψ2l−1 x2(l−1)
+
+l!
+
+.
+
+(42)
+
+If l + 1 > x2, we have that
+
+El+1 = El
+
+x2
+l + 1
+
++ ψ ≤ El + ψ.
+
+From the above and plugging Equation (42) we have
+
+El ≤ E(cid:98)x2(cid:99) + (l − (cid:98)x2(cid:99))ψ
+≤ ψ2(cid:98)x2(cid:99) x2(cid:98)x2(cid:99)
+(cid:98)x2(cid:99)!
+
++ (l − (cid:98)x2(cid:99))ψ.
+
+From the above, independently of x2 and l we have that
+
+El ≤ ψ2(cid:98)x2(cid:99) x2(cid:98)x2(cid:99)
+
+(cid:98)x2(cid:99)!
+
++
+
+= ψ
+
+(2x2)(cid:98)x2(cid:99)
+(cid:98)x2(cid:99)!
+
++
+
+l
+(cid:88)
+
+ψ
+
+k=(cid:98)x2(cid:99)+1
+
+l
+(cid:88)
+
+ψ.
+
+k=(cid:98)x2(cid:99)+1
+
+We assume x ≥ 1 as Eround
+can bound El to
+
+erf
+
+is smaller when x ∈ [0, 1). Using the Stirling approximation we
+
+l
+(cid:88)
+
+ψ
+
+k=(cid:98)x2(cid:99)+1
+
++
+
+ψ
+
+El ≤ ψ
+
+(2x2)(cid:98)x2(cid:99)e(cid:98)x2(cid:99)
+(cid:112)2π(cid:98)x2(cid:99)(cid:98)x2(cid:99)(cid:98)x2(cid:99)
+
+≤ ψ
+
+≤ ψ
+
+(2e)x2
+√
+2πx
+
+(2e)x2
+√
+2π
+
++
+
++
+
+l
+(cid:88)
+
+k=(cid:98)x2(cid:99)+1
+
+l
+(cid:88)
+
+ψ.
+
+k=(cid:98)x2(cid:99)+1
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+49
+
+Then
+
+Eround
+erf
+
+= Emul +
+
+2
+√
+π
+
+Lerf
+(cid:88)
+
+l=0
+
+Ediv +
+
+El
+2l + 1
+
+ψ
+2
+
+ψ
+2
+
+ψ
+2
+
+ψ
+2
+
+ψ
+2
+
+ψ
+2
+
+ψ
+2
+
+ψ
+2
+
+≤
+
+=
+
+=
+
+≤
+
+=
+
+≤
+
+≤
+
+≤
+
+≤
+
+=
+
+Lerf
+(cid:88)
+
+l=0
+
+
+ψ
+
+
+
+
+
+ψ
+
+
+
+
+
+ψ
+
+
+
+
+
+ψ
+
+
+
+
+
+ψ
+
+
+
++
+
+2
+√
+π
+
++
+
+2
+√
+π
+
++
+
+2
+√
+π
+
++
+
+2
+√
+π
+
++
+
+2
+√
+π
+
++
+
+2
+√
+π
+
+ψ
+2
+
++
+
+1
+2l + 1
+
+
+ψ
+
+(2e)x2
+√
+2π
+
++
+
+l
+(cid:88)
+
+
+
+ψ
+
+
+
+k=(cid:98)x2(cid:99)+1
+
+Lerf + 1
+2
+
++
+
+Lerf + 1
+2
+
++
+
+Lerf + 1
+2
+
++
+
+Lerf
+(cid:88)
+
+l=0
+
+Lerf
+(cid:88)
+
+l=0
+
+Lerf
+(cid:88)
+
+l=0
+
+l
+(cid:88)
+
+
+
+1
+
+
+
+1
+2l + 1
+
+(2e)x2
+√
+2π
+
+1
+2l + 1
+
+(2e)x2
+√
+2π
+
++
+
++
+
+Lerf
+(cid:88)
+
+l=0
+
+1
+2l + 1
+
+Lerf
+(cid:88)
+
+l=(cid:98)x2(cid:99)+1
+
+k=(cid:98)x2(cid:99)+1
+
+
+l − (cid:98)x2(cid:99)
+2l + 1
+
+
+
+(2e)x2
+√
+2π
+
++
+
+Lerf
+(cid:88)
+
+l=(cid:98)x2(cid:99)+1
+
+
+
+
+
+l − (cid:98)x2(cid:99)
+2l
+
+Lerf + 1
+2
+
+Lerf + 1
+2
+
++ (Lerf + 1)
+
++ (Lerf + 1)
+
+
+
+
+
+(cid:98)x2(cid:99)
+2l
+
+Lerf
+(cid:88)
+
+l=(cid:98)x2(cid:99)+1
+
+Lerf
+(cid:88)
+
++
+
++
+
+1 −
+
+
+
+1
+
+
+
+l=(cid:98)x2(cid:99)+1
+(cid:33)
+
++ Lerf + 1
+
+(2e)x2
+√
+2π
+
+(2e)x2
+√
+2π
+
+(2e)x2
+√
+2π
+
+(cid:33)
+
+(cid:32)
+
+2
+√
+π
+
+ψ
+
+Lerf + 1
+2
+
++ (Lerf + 1)
+
+2(Lerf + 1)
+√
+π
+
+ψ
+
+(cid:32)
+
+1
+2
+
++
+
+(2e)x2
+√
+2π
+
++ 1
+
+√
+
+ψ
+
+2(Lerf + 1)
+√
+π
+
+2(2e)x2
+√
+π
+8(Lerf + 1)(2e)x2
+π
+
+√
+
+(cid:33)
+
++
+
+ψ
+
++
+
++
+
++
+
+ψ
+2
+(cid:32)
+
+1
+2
+√
+
+2
+
+≤
+
+8(Lerf + 1)(2e)x2
+π
+
+ψ.
+
+By plugging Equation (40) we have
+
+Eround
+erf
+
+≤
+
+≤
+
+≤
+
+≤
+
+≤
+
+≤
+
+√
+
+2
+
+8(2.36 ln(1/B) + 2.15)(2e)x2
+π
+(13.36 ln(1/B) + 12.17)(2e)(xmin
+π
+
+ψ
+
+erfc )2
+
+ψ
+
+(13.36 ln(1/B) + 12.17)(2e)ln(1/B)/2+0.788
+π
+
+ψ
+
+(13.36 ln(1/B) + 12.17)(2e)log2e(1/B) ln(2e)/2(2e)0.788
+π
+
+ψ
+
+3.8(13.36 ln(1/B) + 12.17)(1/B)ln(2e)/2
+π
+
+ψ
+
+50.8 ln(1/B) + 48.3
+πB0.85
+
+ψ.
+
+(43)
+
+The erfc case requires a similar analysis. To compute error of terms m0, . . . , mLerfc
+
+deﬁned
+in the ZKP we take into account the error propagation and the error of our ﬁnite precision. Let
+
+50
+
+César Sabater et al.
+
+now Fi be the absolute error of the term mi. We have that F0 = 0 and
+
+mi+1 ± Fi+1 =
+
+=
+
+(mi ± Fi)(2i + 1)
+2x2
+mi(2i + 1)
+2x2
+
+± Ediv
+(cid:18) Fi(2i + 1)
+2x2
+
+±
+
++
+
+(cid:19)
+
+ψ
+2
+
+Hence,
+
+= mi+1 ±
+
+(cid:18) Fi(2i + 1)
+2x2
+
++
+
+(cid:19)
+
+.
+
+ψ
+2
+
+Fi+1 =
+
+Fi(2i + 1)
+2x2
+
++
+
+ψ
+2
+
+.
+
+In erfc, i < Lerfc = (cid:98)(xmin
+
+erfc )2 + 1/2(cid:99) therefore
+
+Fi(2i + 1)
+2x2
+
++
+
+ψ
+2
+
+≤ Fi +
+
+ψ
+2
+
+.
+
+Then we have that Fi ≤ i ψ
+2
+
+. The total error is
+
+Eround
+
+erfc =
+
+=
+
+=
+
+e−x2
+√
+π
+x
+
+e−x2
+√
+π
+x
+
+e−x2
+√
+π
+x
+
+Lerfc−1
+(cid:88)
+
+i=0
+
+Lerfc−1
+(cid:88)
+
+i=0
+
+Fi
+
+i
+
+ψ
+2
+
+(Lerfc − 1)Lerfc
+2
+
+ψ
+2
+
+.
+
+Plugging Equation (41) to the above we have
+
+Eround
+
+erfc ≤
+
+≤
+
+≤
+
+≤
+
+(0.5 ln(1/B) + 1.288)2
+
+4ex2 x
+
+√
+
+π
+
+ψ
+
+0.25 ln2(1/B) + 1.288 ln(1/B) + 1.659
+erfc )2 √
+0.25 ln2(1/B) + 1.288 ln(1/B) + 1.659
+
+4e(xmin
+
+π
+
+4eln(1/B)/2+0.788
+
+√
+
+π
+
+0.25 ln2(1/B) + 1.288 ln(1/B) + 1.659
+
+8(cid:112)1/B
+
+√
+
+π
+
+ψ
+
+ψ
+
+ψ.
+
+(44)
+
+Now we determine what value of ψ is needed. Equations (43) and (44) ﬁx our requirements
+
+to
+
+Eround
+erf
+
+≤
+
+50.8 ln(1/B) + 48.3
+πB0.85
+
+ψ ≤
+
+B
+2
+
+and to
+
+Eround
+
+erfc ≤
+
+0.25 ln2(1/B) + 1.288 ln(1/B) + 1.659
+
+8(cid:112)1/B
+
+√
+
+π
+
+ψ ≤
+
+B
+2
+
+.
+
+Eround
+erf
+
+imposes the biggest constraint to ψ, as it requires that
+
+ψ ≤
+
+πB1.85
+101.6 ln(1/B) + 96.6
+
+= O
+
+(cid:18) B1.85
+ln(1/B)
+
+(cid:19)
+
+.
+
+Typically, one would like the total error (due to approximation and rounding) to be negligible
+with respect to the standard deviation ση, so one could choose B = ση/106|U H |.
+
+An Accurate, Scalable and Veriﬁable Protocol for Federated DP Averaging
+
+51
+
+Computation Cost. We now evaluate the computational cost of the proof. When we say a
+task has “cost c”, it means that requires at most c cryptographic computations for generating
+the proof, c for another party to verify it, and the exchange of cW bits, where W is the size in
+bits of an element of G.
+
+The main statement of the ZKP is
+
+(cid:26)(cid:18)
+
+x ∈
+
+(cid:23)(cid:21)
+
+(cid:20)
+
+0,
+
+(cid:22) yerfc
+min
+ψ
+
+∧ y = erf(x)
+
+(cid:19)
+
+(cid:18)
+
+∨
+
+y ∈
+
+(cid:23)
+
+(cid:34)(cid:22) yerfc
+min
+ψ
+
++ 1,
+
+(cid:35)
+
+1
+ψ
+
+∧ 1 − y = erfc(x)
+
+(cid:19)(cid:27)
+
+(45)
+
+where yerfc
+
+min = erf (cid:0)xmin
+
+(cid:1) is a public constant. The main costs are in the proofs of erf and erfc.
+Proving computations of erf in Equation (36) requires 3 range proofs of cost of at most
+10 log2(1/ψ), 10 log2(l) and 10 log2(2l + 1). As l ≤ Lerf = 2.36 ln(1/B), the cost of evaluating
+a term is 10 log2(1/ψ) + 20 log2(ln(1/B)). We evaluate Lerf terms. The total cost is
+
+erfc
+
+Lerf (10 log2(1/ψ) + 20 log2(ln(1/B))) = 10Lerf log2(1/ψ)Lerf + 20 log2(ln(1/B)).
+
+The dominating term above is
+
+10 log2(1/ψ)Lerf = 23.6 log2(1/ψ) ln(1/B) < 34.1 ln(1/ψ) ln(1/B).
+
+The for erfc, we require Lerfc proofs of the computation in Equation (37), one for each term,
+and its cost is dominated by
+
+10 log2(q)Lerfc = 10 log2(q) (cid:98)0.5 ln(1/B) + 1.288(cid:99) .
+
+Neglecting lower order constants, the above is dominated by
+
+10 log2(q)0.5 ln(1/B) = 5 log2(e) ln(q) ln(1/B) < 7.22 ln(q) ln(1/B).
+
+The total cost is the sum of the costs of the erf and erfc ZKPs, which is dominated by
+
+ln(1/B) · (34.1 ln(1/ψ) + 7.22 ln(q)) .
+
+

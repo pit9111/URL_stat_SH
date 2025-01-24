@@ -1,0 +1,2306 @@
+Fair NLP Models with Differentially Private Text
+Encoders
+Gaurav Maheshwari, Pascal Denis, Mikaela Keller, Aurélien Bellet
+
+To cite this version:
+
+Gaurav Maheshwari, Pascal Denis, Mikaela Keller, Aurélien Bellet. Fair NLP Models with Differ-
+entially Private Text Encoders. Findings of the Association for Computational Linguistics: EMNLP
+2022, 2022, Abu Dhabi, United Arab Emirates. ￿hal-03905094￿
+
+HAL Id: hal-03905094
+
+https://inria.hal.science/hal-03905094
+
+Submitted on 17 Dec 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Fair NLP Models with Differentially Private Text Encoders
+
+Gaurav Maheshwari, Pascal Denis, Mikaela Keller, Aurélien Bellet
+Univ. Lille, Inria, CNRS, Centrale Lille, UMR 9189 - CRIStAL, F-59000 Lille, France
+first_name.last_name@inria.fr
+
+2
+2
+0
+2
+
+y
+a
+M
+2
+1
+
+]
+L
+C
+.
+s
+c
+[
+
+1
+v
+5
+3
+1
+6
+0
+.
+5
+0
+2
+2
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+Encoded text representations often capture sen-
+sitive attributes about individuals (e.g., race
+or gender), which raise privacy concerns and
+can make downstream models unfair to certain
+groups. In this work, we propose FEDERATE,
+an approach that combines ideas from differ-
+ential privacy and adversarial training to learn
+private text representations which also induces
+fairer models. We empirically evaluate the
+trade-off between the privacy of the represen-
+tations and the fairness and accuracy of the
+downstream model on four NLP datasets. Our
+results show that FEDERATE consistently im-
+proves upon previous methods, and thus sug-
+gest that privacy and fairness can positively re-
+inforce each other.
+
+1
+
+Introduction
+
+Algorithmically-driven decision-making systems
+raise fairness concerns (Raghavan et al., 2020;
+van den Broek et al., 2019) as they can be discrim-
+inatory against speciﬁc groups of people. These
+systems have also been shown to leak sensitive in-
+formation about the data of individuals used for
+training or inference, and thus pose privacy risks
+(Shokri et al., 2017). Societal pressure as well
+as recent regulations push for enforcing both pri-
+vacy and fairness in real-world deployments, which
+is challenging as these notions are multi-faceted
+concepts that need to be tailored to the context.
+Moreover, privacy and fairness can be at odds with
+one another: recent studies have shown that pre-
+venting a model from leaking information about
+its training data negatively impacts the fairness of
+the model and vice versa (Bagdasaryan et al., 2019;
+Pujol et al., 2020; Cummings et al., 2019; Chang
+and Shokri, 2020).
+
+This paper studies fairness and privacy and their
+interplay in the NLP context, where these two no-
+tions have often been considered independently
+from one another. Modern NLP heavily relies
+
+on learning or ﬁne-tuning encoded representations
+of text. Unfortunately, such representations often
+leak sensitive attributes (e.g., gender, race, or age)
+present explicitly or implicitly in the input text,
+even when such attributes are known to be irrele-
+vant to the task (Song and Raghunathan, 2020).
+Moreover, the presence of such information in
+the representations may lead to unfair downstream
+models, as has been shown on various NLP tasks
+such as occupation prediction from text bios (De-
+Arteaga et al., 2019), coreference resolution (Zhao
+et al., 2018), or sentiment analysis (Kiritchenko
+and Mohammad, 2018).
+
+Privatizing encoded representations is thus an im-
+portant, yet challenging problem for which existing
+approaches based on subspace projection (Boluk-
+basi et al., 2016; Wang et al., 2020; Karve et al.,
+2019; Ravfogel et al., 2020) or adversarial learning
+(Li et al., 2018; Coavoux et al., 2018; Han et al.,
+2021) do not provide a satisfactory solution. In
+particular, these methods lack any formal privacy
+guarantee, and it has been shown that an adversary
+can still recover sensitive attributes from the result-
+ing representations with high accuracy (Elazar and
+Goldberg, 2018; Gonen and Goldberg, 2019).
+
+Instead of relying on adversarial learning to pre-
+vent attribute leakage, Lyu et al. (2020); Plant et al.
+(2021) recently propose to add random noise to text
+representations so as to satisfy differential privacy
+(DP), a mathematical deﬁnition which comes with
+rigorous guarantees (Dwork et al., 2006). How-
+ever, we uncover a critical error in their privacy
+analysis which drastically weakens their privacy
+claims. Moreover, their approach harms accuracy
+and fairness compared to adversarial learning.
+
+In this work, we propose a novel approach
+(called FEDERATE) to learn private text represen-
+tations and fair models by combining ideas from
+DP with an adversarial training mechanism. More
+speciﬁcally, we propose a ﬂexible end-to-end archi-
+tecture in which (i) the output of an arbitrary text
+
+ 
+ 
+ 
+ 
+ 
+ 
+encoder is normalized and perturbed using random
+noise to make the resulting encoder differentially
+private, and (ii) on top of the encoder, we com-
+bine a classiﬁer branch with an adversarial branch
+to actively induce fairness, improve accuracy and
+further hide speciﬁc sensitive attributes.
+
+We empirically evaluate the privacy-fairness-
+accuracy trade-offs achieved by FEDERATE over
+four datasets and ﬁnd that it simultaneously leads
+to more private representations and fairer models
+than state-of-the-art methods while maintaining
+comparable accuracy. Beyond the superiority of
+our approach, our results bring valuable insights on
+the complementarity of DP and adversarial learn-
+ing and the compatibility of privacy and fairness.
+On the one hand, DP drastically reduces undesired
+leakage from adversarially trained representations,
+and has a stabilizing effect on the training dynamics
+of adversarial learning. On the other hand, adver-
+sarial learning improves the accuracy and fairness
+of models trained over DP text representations.
+
+Our main contributions are as follows:
+
+• We propose a new approach, FEDERATE,
+which combines a DP encoder with adversar-
+ial learning to learn fair and accurate models
+from private representations.
+
+• We identify and ﬁx (with a formal proof) a crit-
+ical mistake in the privacy analysis of previous
+work on learning DP text representations.
+
+• We empirically show that FEDERATE leads to
+more private representations and fairer models
+than state-of-the-art methods while maintain-
+ing comparable accuracy.
+
+• Unlike previous studies, our empirical results
+suggest that privacy and fairness are compati-
+ble in our setting, and even mutually reinforce
+each other.
+
+The paper is organized as follows. Section 2 pro-
+vides background on differential privacy. Section 3
+presents our approach. Section 4 reviews related
+work. Experimental results and conclusions are
+given in Sections 5 and 6.
+
+2 Background: Differential Privacy
+
+Differential Privacy (DP) (Dwork et al., 2006) pro-
+vides a rigorous mathematical deﬁnition of the pri-
+vacy leakage associated with an algorithm. It does
+not depend on assumptions about the attacker’s ca-
+pabilities and comes with a powerful algorithmic
+
+framework. For these reasons, it has become a
+de-facto standard in privacy currently used by the
+US Census Bureau (Abowd, 2018) and several big
+tech companies (Erlingsson et al., 2014; Fanti et al.,
+2016; Ding et al., 2017). This section gives a brief
+overview of DP, focusing on the aspects needed
+to understand our approach (see Dwork and Roth
+(2014) for an in-depth review of DP).
+
+Over the last few years, two main models for
+DP have emerged: (i) Central DP (CDP) (Dwork
+et al., 2006), where raw user data is collected and
+processed by a trusted curator, which then releases
+the result of the computation to a third party or the
+public, and (ii) Local DP (LDP) (Kasiviswanathan
+et al., 2011) which removes the need for a trusted
+curator by having each user locally perturb their
+data before sharing it. Our work aims to create
+an encoder that leads to a private embedding of
+an input text, which can then be shared with an
+untrusted curator for learning or inference. We
+thus consider LDP, deﬁned as follows.
+
+Deﬁnition 1 (Local Differential Privacy). A ran-
+domized algorithm M : X → O is (cid:15)-differentially
+private if for all pairs of inputs x, x(cid:48) ∈ X and all
+possible outputs o ∈ O:
+
+Pr[M (x) = o] ≤ e(cid:15) Pr[M (x(cid:48)) = o].
+
+(1)
+
+LDP ensures that the probability of observing a par-
+ticular output o of M should not depend too much
+on whether the input is x or x(cid:48). The strength of pri-
+vacy is controlled by (cid:15), which bounds the log-ratio
+of these probabilities for any x, x(cid:48). Setting (cid:15) = 0
+corresponds to perfect privacy, while (cid:15) → ∞ does
+not provide any privacy guarantees (as one may
+be able to uniquely associate an observed output
+to a particular input). In our approach described
+in Section 3, x will be an input text and M will
+be an encoding function which transforms x into
+a private vector representation that can be safely
+shared with untrusted parties.
+
+Laplace mechanism. As clearly seen from Def-
+inition 1, an algorithm needs to be randomized to
+satisfy DP. A classical approach to achieve (cid:15)-DP for
+vector data is the Laplace mechanism (Dwork et al.,
+2006). Given the desired privacy guarantee (cid:15) and
+an input vector x ∈ RD, this mechanism adds cen-
+tered Laplace noise Lap( ∆
+(cid:15) ) independently to each
+dimension of x. The noise scale ∆
+(cid:15) is calibrated to
+(cid:15) and the L1-sensitivity ∆ of inputs:
+
+∆ = max
+x,x(cid:48)∈X
+
+(cid:107)x − x(cid:48)(cid:107)1.
+
+(2)
+
+In our work, we propose an architecture in which
+the Laplace mechanism is applied on top of a train-
+able encoder to get private representations of in-
+put texts, and is further combined with adversarial
+training to learn fair models.
+
+3 Approach
+
+We consider a scenario similar to Coavoux et al.
+(2018), where a user locally encodes its input
+data (text) x into an intermediate representation
+Epriv(x) which is then shared with an untrusted cu-
+rator to predict the label y associated with x using a
+classiﬁer C. Additionally, an attacker (which may
+be the untrusted curator or an eavesdropper) may
+observe the intermediate representation Epriv(x)
+and try to infer some sensitive (discrete) attribute
+z about x (e.g., gender, race etc.). Our goal is to
+learn an encoder Epriv and classiﬁer C such that
+(i) the attacker performs poorly at inferring z from
+Epriv(x), (ii) the classiﬁer C(Epriv(x)) is fair with
+respect to z according to some fairness metric, and
+(iii) C accurately predicts the label y.
+
+To achieve the above goals we introduce
+FEDERATE (for Fair modEls with DiffERentiAlly
+private Text Encoders), which combines two com-
+ponents: a differentially private encoder and an
+adversarial branch. Figure 1 shows an overview of
+our proposed architecture.
+
+3.1 Differentially Private Encoder
+
+We propose a generic private encoder construction
+Epriv = priv ◦ E composed of two main compo-
+nents. The ﬁrst component E can be any encoder
+which maps the text input to some vector space
+of dimension D. It can be a pre-trained language
+model along with a few trainable layers, or it can
+be trained from scratch. The second component
+priv is a randomized mapping which transforms
+the encoded input to a differentially private rep-
+resentation. Given the desired privacy guarantee
+(cid:15) > 0, this mapping is obtained by applying the
+Laplace mechanism (see Section 2) to a normalized
+version of the encoded representation E(x):
+
+priv(E(x)) = E(x)/(cid:107)E(x)(cid:107)1 + (cid:96),
+(3)
+where each entry of (cid:96) ∈ RD is sampled indepen-
+dently from Lap( 2
+(cid:15) ). We will prove that Epriv =
+priv ◦ E satisﬁes (cid:15)-DP in Section 3.4.
+
+3.2 Adversarial Component
+
+To improve the fairness of the downstream classi-
+ﬁer C, we model the adversary by another classi-
+
+Figure 1: Overview of our FEDERATE approach. The
+text input x is transformed to E(x) ∈ RD by the text
+encoder E. The encoded input is then made private by
+the privacy layer priv, which involves normalization and
+addition of Laplace noise. The resulting private represen-
+tation Epriv(x) ∈ RD is then used by the main task clas-
+siﬁer C. It also serves as input to the adversarial layer
+A which is connected to the main branch via a radient
+reversal layer gλ. The light red boxes represent the Dif-
+ferentially Private Encoder (Sec. 3.1), and the light blue
+boxes represent the Adversarial component (Sec. 3.2).
+
+ﬁer A which aims to predict z from the privately
+encoded input Epriv(x). The encoder Epriv is op-
+timized to fool A while maximizing the accuracy
+of the downstream classiﬁer C. Speciﬁcally, given
+λ > 0, we train Epriv, C and A (parameterized
+by θE, θC, and θA respectively) to optimize the
+following objective:
+
+min
+θE ,θC
+
+max
+θA
+
+Lclass(θE, θC) − λLadv(θE, θA), (4)
+
+where Lclass(θE, θC) is the cross-entropy loss for
+the C ◦ Epriv branch and Ladv(θE, θA) is the cross-
+entropy loss for the A ◦ Epriv branch.
+
+3.3 Training
+
+We train the private encoder Epriv and the clas-
+siﬁer C from a set of public tuples (x, y, z) by
+optimizing (4) with backpropagation using a gradi-
+ent reversal layer gλ (Ganin and Lempitsky, 2015).
+The latter acts like an identity function in the for-
+ward pass but scales the gradients passed through
+it by −λ in the backward pass. This results in
+Epriv receiving opposite gradients to A. We give
+pseudo-code in Appendix A.
+
+3.4 Privacy Analysis
+
+We show the following privacy guarantee.
+
+Theorem 1. Our encoder Epriv and the down-
+stream predictions C ◦ Epriv satisfy (cid:15)-DP.
+
+The proof is given in Appendix B. Theorem 1
+shows that the encoded representations produced
+by Epriv have provable privacy guarantees: in par-
+ticular, it bounds the risk that the sensitive attribute
+
+Encoder EUser InputprivClassiﬁer CAdversarial Ag𝝀z of a text x is leaked by Epriv(x).1 These pri-
+vacy guarantees naturally extend to the downstream
+prediction C(Epriv(x)) due to the post-processing
+properties of DP (see Appendix B for details).
+
+Error in previous work. We found a critical er-
+ror in the privacy analysis of previous work on
+differential private text encoders (Lyu et al., 2020;
+Plant et al., 2021). In a nutshell, they incorrectly
+state that normalizing each entry of the encoded
+representation in [0, 1] allows to bound the sensi-
+tivity of their representation by 1, while it can in
+fact be as large as D (the dimension of the repre-
+sentation). As a result, the privacy guarantees are
+dramatically weaker than what the authors claim:
+the (cid:15) values they report should be multiplied by
+D. In contrast, the L1 normalization we use in (3)
+ensures that the sensitivity of E is bounded by 2.
+We provide more details in Appendix C.
+
+Interestingly, Habernal (2021) recently identi-
+ﬁed an error in ADePT (Krishna et al., 2021), a
+differentially private auto-encoder for text rewrit-
+ing. However, the error in ADePT is different from
+the one in Lyu et al. (2020); Plant et al. (2021): the
+problem with ADePT is that it calibrates the noise
+to L2 sensitivity, while the Laplace mechanism re-
+quires L1 sensitivity. These errors call for greater
+scrutiny of differential privacy-based approaches
+in NLP—our work contributes to this goal.
+
+4 Related Work
+
+In order
+
+learning.
+
+Adversarial
+to improve
+model fairness or to prevent leaking sensitive at-
+tributes, several approaches employ adversarial-
+based training. For instance, Li et al. (2018) pro-
+pose to use a different adversary for each protected
+attribute, while Coavoux et al. (2018) consider ad-
+ditional loss components to improve the privacy-
+accuracy trade-off of the learned representation.
+Han et al. (2021) introduce multiple adversaries fo-
+cusing on different aspects of the representation by
+encouraging orthogonality between pairs of adver-
+saries. Recently, Chowdhury et al. (2021) propose
+an adversarial scrubbing mechanism. However,
+they purely focus on information leakage, and not
+on fairness. Moreover, unlike our approach, these
+methods do not offer formal privacy guarantees.
+In fact, it has been observed that one can recover
+the sensitive attributes from the representations by
+training a post-hoc non linear classiﬁer (Elazar and
+
+1More generally, the DP guarantee bounds the risk that
+
+any attribute of x is leaked through Epriv(x).
+
+Goldberg, 2018). This is conﬁrmed by our empiri-
+cal results in Section 5.
+
+Sub-space projection. A related line of work fo-
+cuses on debiasing text representations using pro-
+jection methods (Bolukbasi et al., 2016; Wang et al.,
+2020; Karve et al., 2019). The general approach
+involves identifying and removing a sub-space asso-
+ciated with sensitive attributes. However, they rely
+on a manual selection of words in the vocabulary
+which is difﬁcult to generalize to new attributes.
+Furthermore, Gonen and Goldberg (2019) showed
+that sensitive attributes still remain present even
+after applying these approaches.
+
+Recently, Ravfogel et al. (2020) propose Itera-
+tive Null space Projection (INLP). It involves itera-
+tively training a linear classiﬁer to predict sensitive
+attributes followed by projecting the representa-
+tion on the classiﬁer’s null space. However, the
+method can only remove linear information from
+the representation. By leveraging DP, our approach
+provides robust guarantees that do not depend on
+the expressiveness of the adversary, thereby provid-
+ing protection against a wider range of attacks.
+
+DP and fairness. Recent work has studied the in-
+terplay between DP and (group) fairness in the set-
+ting where one seeks to prevent a model from leak-
+ing information about individual training points.
+Empirically, this is evaluated through membership
+inference attacks, where an attacker uses the model
+to determine whether a given data point was in the
+training set (Shokri et al., 2017). While Kulynych
+et al. (2022) observed that DP reduces disparate
+vulnerability to such attacks, it has also been shown
+that DP can exacerbate unfairness (Bagdasaryan
+et al., 2019; Pujol et al., 2020). Conversely, Chang
+and Shokri (2020) showed that enforcing a fair
+model leads to more privacy leakage for the unpriv-
+ileged group. This tension between DP and fairness
+is further conﬁrmed by a formal incompatibility
+result between (cid:15)-DP and fairness proved by Cum-
+mings et al. (2019), albeit in a restrictive setting.
+Some recent work attempts to train models under
+both DP and fairness constraints (Cummings et al.,
+2019; Xu et al., 2020; Liu et al., 2020), but this
+typically comes at the cost of enforcing weaker pri-
+vacy guarantees for some groups. Finally, Jagielski
+et al. (2019) train a fair model under DP constraints
+only for the sensitive attribute.
+
+A fundamental difference between this line of
+work and our approach lies in the kind of privacy
+
+we provide. While the above approaches study
+(central) DP as a way to design algorithms which
+protect training points from membership inference
+attacks on the model, we construct a private en-
+coder such that the encoded representation does not
+leak sensitive attributes of the input. Thus, unlike
+previous work, we provide privacy guarantees with
+respect to the model’s intermediate representation
+for data unseen at training time, and empirically
+observe that in this case privacy and fairness are
+compatible and even mutually reinforce each other.
+
+DP representations for NLP.
+In a setting simi-
+lar to ours, Lyu et al. (2020) propose to use DP to
+privatize model’s intermediate representation. Un-
+like their method, we actively promote fairness by
+using an adversarial training mechanism, which
+leads to more private representations and fairer
+models in practice. Importantly, we also uncover a
+critical error in their privacy analysis (see Sec. 3.1).
+Concurrent to and independently from our work,
+Plant et al. (2021) propose an adversarial-driven
+DP training mechanism. However, they do not
+consider fairness, whereas we focus on enforcing
+both fairness and privacy. Moreover, their method
+has the same incorrect analysis as Lyu et al. (2020).
+
+5 Experiments
+
+Recall that we are interested in approaches that
+are not only accurate but also fair and private at
+the same time. However, these three dimensions
+are not independent and are not straightforwardly
+amenable to a single evaluation metric. Thus, we
+present experiments aiming at (i) showcasing the
+privacy-fairness-accuracy tradeoffs of different ap-
+proaches and then (ii) analyzing privacy-accuracy
+and fairness-accuracy tradeoffs separately. We be-
+gin by describing the datasets and the metrics.
+
+Datasets. We consider 4 different datasets: (i)
+Twitter Sentiment (Blodgett et al., 2016) consists
+of 200k tweets annotated with a binary sentiment
+label and a binary “race” attribute corresponding to
+African American English (AAE) vs. Standard
+American English (SAE) speakers; (ii) Bias in
+Bios (De-Arteaga et al., 2019) consists of 393,423
+textual biographies annotated with an occupation
+label (28 classes) and a binary gender attribute;
+(iii) CelebA (Liu et al., 2015) is a binary classi-
+ﬁcation dataset with a binary sensitive attribute
+(gender); (iv) Adult Income (Kohavi, 1996) con-
+sists of 48,842 instances with binary sensitive at-
+
+tribute (gender). Our setup for the ﬁrst two dataset
+is similar to Ravfogel et al. (2020) and Han et al.
+(2021). Appendix D.2 provides detailed description
+of these datasets, including sizes, pre-processing,
+and the challenges they pose to privacy and fairness
+tasks. Due to lack of space, results and analyses
+for Adult Income and CelebA dataset are given in
+Appendix D.5, but note that they exhibit similar
+trends. The preprocessed versions of the datasets
+can be downloaded from this anonymized URL.2
+
+Fairness metrics. For Twitter Sentiment we re-
+port the True Positive Rate Gap (TPR-gap), which
+measures the true positive rate difference between
+the two sensitive groups (gender/race) and is
+closely related to the notion of equal opportunity.
+Formally, denoting by y ∈ {0, 1} the ground truth
+binary label, ˆy the predicted label and z ∈ {g, ¬g}
+the sensitive attribute, TPR-gap is deﬁned as:
+
+TPR-gap = Pg(ˆy = 1|y = 1)−P¬g(ˆy = 1|y = 1).
+
+For Bias in Bios, which has 28 classes, we fol-
+low Romanov et al. (2019) and report the root mean
+square of TPR-gaps (GRMS) over all occupations
+y ∈ O to obtain a single number:
+
+GRMS =
+
+(cid:113)
+
+(1/|O|) (cid:80)
+
+y∈O(TPR-gapy)2.
+
+(5)
+
+Privacy metrics. We report two metrics for pri-
+vacy: (i) Leakage: the accuracy of a two-layer
+classiﬁer which predicts the sensitive attribute from
+the encoded representation, and (ii) Minimum De-
+scription Length (MDL) (Voita and Titov, 2020),
+which quantiﬁes the amount of “effort” required
+by such a classiﬁer to achieve a certain accuracy.
+A higher MDL means that it is more difﬁcult to
+retrieve the sensitive attribute from the represen-
+tation. The metric depends on the dataset and the
+representation dimension, and thus cannot be com-
+pared across different datasets. We provide more
+details about these metrics in Sec. D.1.
+
+Methods and model architectures. We com-
+pare FEDERATE to the following methods: (i)
+Adversarial implements standard adversar-
+ial learning (Li et al., 2018), which is equiv-
+alent to our approach without the priv layer,
+(ii) Adversarial + Multiple (Han et al.,
+2021)
+(iii)
+implements multiple adversaries,
+INLP (Ravfogel et al., 2020) is a subspace pro-
+jection approach, and (iv) Noise learns DP text
+
+2https://drive.google.com/uc?id=
+
+1ZmUE-g6FmzPPbZyw3EOki7z4bpzbKGWk
+
+Figure 2: Validation accuracy, fairness and privacy of various approaches for different relaxation threshold (RT)
+(see Section 5.1) on Twitter Sentiment. When RT is increased, we select models with potentially lower accuracy
+on the validation set but are more fair (lower TPR-gap). Our approach FEDERATE consistently achieves better
+accuracy-fairness-privacy trade-offs than its competitors across all RTs.
+
+representations as proposed by Lyu et al. (2020) but
+with corrected privacy analysis: this corresponds
+to our approach without the adversarial compo-
+nent. These methods have been described in de-
+tails in Section 4 and their hyperparametrs in Ap-
+pendix D.4. We also report the performance of two
+simple baselines: Random simply predicts a ran-
+dom label, and Unconstrained optimizes the
+classiﬁcation performance without special consid-
+eration for privacy or fairness.
+
+To provide a fair comparison, all methods use the
+same architecture for the encoder, the classiﬁer and
+(when applicable) the adversarial branches. In or-
+der to evaluate across varying model complexities,
+we employ different architectures for the different
+datasets. For Twitter Sentiment, we follow the ar-
+chitecture employed by Han et al. (2021), while
+for Bias in Bios we use a deeper architecture. The
+exact architecture, hyperparameters, and their tun-
+ing details are provided in Appendix D.3-D.4. We
+implement FEDERATE in PyTorch (Paszke et al.,
+2019). Our implementation, training, and evalua-
+tion scripts are available here.3
+
+5.1 Accuracy-Fairness-Privacy Trade-off
+
+In this ﬁrst set of experiments, we explore the
+tridimensional trade-off between accuracy, fairness,
+and privacy and the inherent tension between them.
+These metrics are potentially all equally important
+and represent different information on different
+scales. Thus, they cannot be trivially combined
+into a single metric. Moreover, this trade-off is
+inﬂuenced by the choice of method but also some
+of its hyperparameters (e.g., the value of (cid:15) and
+λ in our approach). Previous studies (Han et al.,
+2021; Lyu et al., 2020) essentially selected hyper-
+parameter values that maximize validation accu-
+
+3The work-in-progress version of the codebase is cur-
+rently available at https://github.com/saist1993/
+DPNLP.
+
+racy, which may lead to undesirable or suboptimal
+trade-offs. For instance, we found that this strat-
+egy does not always induce a fairer model than the
+Unconstrained baseline, and that it is often
+possible to obtain signiﬁcantly more fair models at
+a negligible cost in accuracy. Based on these obser-
+vations, we propose to use a Relaxation Threshold
+(RT): instead of selecting the hyperparameters with
+highest validation accuracy α∗, we consider all
+models with accuracy in the range [α∗ − RT, α∗].
+We then select the hyperparameters with best fair-
+ness score within that range.4
+
+Figure 2 presents the (validation) accuracy, fair-
+ness and privacy scores related to different RT for
+each method on Twitter Sentiment. The ﬁrst thing
+to note is that FEDERATE achieves the best fair-
+ness and privacy results with accuracy higher or
+comparable to competing approaches. We also
+observe that setting RT= 0.0 (i.e., choosing the
+model with highest validation accuracy) leads to a
+signiﬁcantly more unfair model in all approaches,
+while fairness generally improves with increasing
+RT. This improvement comes at a negligible or
+small cost in accuracy. In terms of privacy, we ﬁnd
+no signiﬁcant differences across RTs.
+
+We now showcase detailed results with RT
+ﬁxed to 1.0 which is found to provide good
+trade-offs for all approaches in Figure 2, see Ta-
+ble 1a for Twitter Sentiment and Table 1b for
+Bias in Bios (and Appendix D.6 for additional re-
+sults). For both datasets, we observe that all ad-
+versarial approaches induce a fairer model than
+Unconstrained or Noise, with FEDERATE
+performing best. In terms of accuracy, all adver-
+sarial approaches perform similarly on Twitter Sen-
+Interestingly, they achieve higher accu-
+timent.
+
+4We can also incorporate privacy into our hyperparam-
+eter selection strategy but, for the datasets and methods in
+our study, we found no signiﬁcant change in Leakage across
+different hyperparameters.
+
+0.01.03.010.0RT505560657075Validation valueMeasure = Accuracy 0.01.03.010.0RT0510152025Measure = TPR-gap 0.01.03.010.0RT5060708090Measure = Leakage MethodUnconstrainedNoiseAdversarialAdversarial + DifferentiatedFEDERATEMethod
+
+Random
+Unconstrained
+
+Accuracy ↑
+
+TPR-gap ↓
+
+Leakage ↓
+
+MDL ↑
+
+50.00 ± 0.00
+72.09 ± 0.73
+
+0.00 ± 0.00
+26.26 ± 0.87
+
+-
+86.56 ± 0.83
+
+31.3 ± 0.10
+15.21 ± 0.88
+
+INLP
+67.62 ± 0.57
+Noise
+71.52 ± 0.51
+Adversarial
+75.16 ± 0.65
+Adversarial + Multiple 75.32 ± 0.60
+
+9.19 ± 1.08
+21.23 ± 2.50
+5.03 ± 2.94
+2.09 ± 1.18
+
+80.27 ± 2.50
+66.29 ± 3.55
+88.06 ± 0.20
+88.03 ± 0.47
+
+24.82 ± 3.28
+21.10 ± 1.81
+16.16 ± 1.05
+15.85 ± 1.46
+
+FEDERATE
+
+75.15 ± 0.59
+
+1.75 ± 1.41
+
+61.74 ± 5.05
+
+22.94 ± 1.25
+
+(a) Results on Twitter Sentiment dataset.
+
+Method
+
+Random
+Unconstrained
+
+Accuracy ↑
+
+GRMS ↓
+
+Leakage ↓
+
+MDL ↑
+
+3.53 ± 0.01
+79.29 ± 0.32
+
+0.00 ± 0.00
+15.88 ± 0.80
+
+–
+75.92 ± 2.73
+
+265.44 ± 0.13
+173.99 ± 7.08
+
+INLP
+75.96 ± 0.47
+Noise
+77.88 ± 0.32
+Adversarial
+79.02 ± 0.20
+Adversarial + Multiple 79.30 ± 0.20
+
+12.81 ± 0.09
+13.89 ± 0.31
+13.06 ± 0.39
+13.38 ± 0.63
+
+59.91 ± 0.08
+62.23 ± 0.99
+69.47 ± 1.64
+68.24 ± 1.12
+
+253.36 ± 1.05
+241.22 ± 2.97
+206.78 ± 13.02
+222.35 ± 10.04
+
+FEDERATE
+
+77.79 ± 0.11
+
+11.02 ± 0.55
+
+56.92 ± 0.98
+
+257.94 ± 1.93
+
+(b) Results on Bias in Bios dataset.
+
+Table 1: Test results on (a) Twitter Sentiment, and (b) Bias in Bios with ﬁxed Relaxation Threshold of 1.0. Fairness
+is measured with TPR-Gap or GRMS (lower is better), while privacy is measured by Leakage (lower is better) and
+MDL (higher is better). The MDL achieved by Random gives an upper bound for that particular dataset. Results
+have been averaged over 5 different seeds. Our proposed FEDERATE approach is the only method which achieves
+high levels of both fairness and privacy while maintaining competitive accuracy.
+
+racy than Unconstrained. We attribute this to
+a signiﬁcant mismatch in the train and test distri-
+bution due to class imbalance. On Bias in Bios,
+we observe a small drop in accuracy of our pro-
+posed approach in comparison to Adversarial,
+albeit with a corresponding gain in fairness. We
+hypothesize that this is due to the choice of possi-
+ble hyperparameters for FEDERATE (we did not
+consider very large values of (cid:15) which would re-
+cover Adversarial), meaning that FEDERATE
+pushes for more fairness (and privacy) at a poten-
+tial cost of some accuracy. We explore the pairwise
+trade-offs (fairness-accuracy and privacy-accuracy)
+in more details in Section 5.2.
+
+In terms of both privacy metrics, FEDERATE
+signiﬁcantly outperforms all adversarial methods
+on both datasets.
+In fact, in line with previous
+studies (Han et al., 2021), the leakage and MDL
+of purely adversarial methods are similar to that
+of Unconstrained. On both datasets, Noise
+achieves slightly weaker privacy than FEDERATE
+with much worse accuracy and fairness.
+
+FEDERATE also consistently outperforms
+
+INLP in all dimensions.
+
+In summary, the results show that FEDERATE
+stands out as the only approach that can simulta-
+neously induce a fairer model and make its repre-
+sentation private while maintaining high accuracy.
+Furthermore, these results empirically demonstrate
+that our measures of privacy and fairness are in-
+deed compatible with one another and can even
+reinforce each other.
+
+5.2 Pairwise Trade-offs
+
+In the previous experiments, we explored the tridi-
+mensional trade-off and found FEDERATE to at-
+tain better trade-offs than all other methods. Here,
+we take a closer look at the pairwise fairness-
+accuracy and privacy-accuracy trade-offs sepa-
+rately. We ﬁnd that FEDERATE outperforms the
+Adversarial and Noise approach in their cor-
+responding dimension, suggesting that FEDERATE
+is a better choice even for bidimensional trade-offs.
+This experiment also validates the superiority of
+
+Figure 3: Fairness-accuracy trade-off on Twitter Senti-
+ment (top) and Bias in Bios (bottom). A missing point
+means that the accuracy interval was not found within
+our hyperparameter search. FEDERATE provides bet-
+ter fairness across most accuracy intervals in compari-
+son to Adversarial over both datasets.
+
+combining adversarial learning and DP over using
+either approach alone.
+
+Fairness-accuracy trade-off. We plot best vali-
+dation fairness scores over different accuracy inter-
+vals for the two datasets in Figure 3. The interval is
+denoted by its mean accuracy (i.e., [71.5, 72.5] is
+represented by 72). We then ﬁnd the corresponding
+best fairness score for the interval. We observe:
+
+• Better
+
+fairness-accuracy
+
+trade-off:
+FEDERATE provides better fairness than
+the Adversarial approach for almost all
+accuracy intervals. In the case of Bias in Bios,
+Adversarial is able to achieve higher
+accuracy (albeit with a loss in fairness). We
+note that this high accuracy regime can be
+matched by FEDERATE with a larger (cid:15).
+
+• Smoother fairness-accuracy trade-off: Inter-
+estingly, FEDERATE enables a smoother ex-
+ploration of the accuracy-fairness trade-off
+space than Adversarial. As adversarial
+models are notoriously difﬁcult to train, this
+suggests that the introduction of DP noise has
+a stabilizing effect on the training dynamics
+of the adversarial component.
+
+Privacy-accuracy trade-off. We plot privacy
+and accuracy with respect to (cid:15), the parameter con-
+trolling the theoretical privacy level in Figure 4.
+In general, the value of (cid:15) correlates well with the
+empirical leakage. On Bias in Bios, FEDERATE
+and Noise are comparable in both accuracy and
+
+Figure 4: Privacy-accuracy trade-off on Twitter Senti-
+ment (top) and Bias in Bios (bottom), with associated
+values of (cid:15). FEDERATE gives lower leakage and better
+or comparable accuracy to Noise over both datasets.
+
+privacy. However, for Twitter Sentiment, our ap-
+proach outperforms Noise in both accuracy and
+privacy for every (cid:15). We hypothesize this differ-
+ence in the accuracy to be a case of mismatch be-
+tween train-test split, suggesting FEDERATE to be
+more robust to these distributional shifts. These
+observations suggest that FEDERATE either im-
+proves upon Noise in privacy-accuracy tradeoff
+or remains comparable. For completeness, we also
+present the same results as a table in Appendix D.6.
+
+6 Conclusion and Perspectives
+
+We proposed a DP-driven adversarial learning ap-
+proach for NLP. Through our experiments, we
+showed that our method simultaneously induces
+private representations and fair models, with a mu-
+tually reinforcing effect between privacy and fair-
+ness. We also ﬁnd that our approach improves upon
+competitors on each dimension separately. While
+we focused on privatizing sensitive attributes like
+race or gender, our approach can be used to remove
+other types of unwanted information from text rep-
+resentations, such as tenses or POS tag information,
+which might not be relevant for certain NLP tasks.
+A possible limitation of this work is that it not tai-
+lored to a speciﬁc deﬁnition of fairness like equal
+odds. Instead, it enforces fairness by removing
+certain protected information, which can correlate
+with speciﬁc fairness notions. Similarly, we do
+not provide any formal fairness guarantees for our
+method, as we do for privacy. In the future, we aim
+to investigate fairness methods that explicitly opti-
+mize for a speciﬁc fairness deﬁnition and explore
+other privacy threats (e.g., reconstruction attacks).
+
+66687072740510TPR-gapFEDERATEAdversarial4550556065707580Mean Accuracy051015GRMSFEDERATEAdversarial556065Leakage=65.067.570.072.575.077.5Accuracy556065Leakage=MethodNoiseFEDERATE(cid:101)8.010.012.014.016.07 Acknowledgement
+
+The authors would like to thank the Agence Na-
+tionale de la Recherche for funding this work under
+grant number ANR-19-CE23-0022, as well as the
+ARR reviewers for their feedback and suggestions.
+
+References
+
+John M Abowd. 2018. The us census bureau adopts dif-
+ferential privacy. In Proceedings of the 24th ACM
+SIGKDD International Conference on Knowledge
+Discovery & Data Mining, pages 2867–2867.
+
+Yossi Adi, Neil Zeghidour, Ronan Collobert, Nicolas
+Usunier, Vitaliy Liptchinsky, and Gabriel Synnaeve.
+2019. To reverse the gradient or not: an empirical
+comparison of adversarial and multi-task learning in
+In IEEE International Confer-
+speech recognition.
+ence on Acoustics, Speech and Signal Processing,
+ICASSP 2019, Brighton, United Kingdom, May 12-
+17, 2019, pages 3742–3746. IEEE.
+
+Eugene Bagdasaryan, Omid Poursaeed, and Vitaly
+Shmatikov. 2019. Differential privacy has disparate
+impact on model accuracy. In Advances in Neural
+Information Processing Systems 32: Annual Con-
+ference on Neural Information Processing Systems
+2019, NeurIPS 2019, December 8-14, 2019, Vancou-
+ver, BC, Canada, pages 15453–15462.
+
+Su Lin Blodgett, Lisa Green, and Brendan O’Connor.
+2016. Demographic dialectal variation in social
+media: A case study of African-American English.
+In Proceedings of the 2016 Conference on Empiri-
+cal Methods in Natural Language Processing, pages
+1119–1130, Austin, Texas. Association for Compu-
+tational Linguistics.
+
+Tolga Bolukbasi, Kai-Wei Chang, James Y. Zou,
+Venkatesh Saligrama, and Adam Tauman Kalai.
+2016. Man is to computer programmer as woman
+is to homemaker?
+debiasing word embeddings.
+In Advances in Neural Information Processing Sys-
+tems 29: Annual Conference on Neural Informa-
+tion Processing Systems 2016, December 5-10, 2016,
+Barcelona, Spain, pages 4349–4357.
+
+Hongyan Chang and Reza Shokri. 2020. On the
+CoRR,
+
+privacy risks of algorithmic fairness.
+abs/2011.03731.
+
+Somnath Basu Roy Chowdhury, Sayan Ghosh, Yiyuan
+Li, Junier Oliva, Shashank Srivastava, and Snigdha
+Chaturvedi. 2021. Adversarial scrubbing of demo-
+In Pro-
+graphic information for text classiﬁcation.
+ceedings of the 2021 Conference on Empirical Meth-
+ods in Natural Language Processing, EMNLP 2021,
+Virtual Event / Punta Cana, Dominican Republic, 7-
+11 November, 2021, pages 550–562. Association for
+Computational Linguistics.
+
+Maximin Coavoux, Shashi Narayan, and Shay B. Co-
+hen. 2018. Privacy-preserving neural representa-
+tions of text. In Proceedings of the 2018 Conference
+on Empirical Methods in Natural Language Process-
+ing, Brussels, Belgium, October 31 - November 4,
+2018, pages 1–10. Association for Computational
+Linguistics.
+
+Rachel Cummings, Varun Gupta, Dhamma Kimpara,
+and Jamie Morgenstern. 2019. On the compatibility
+In Adjunct Publication of
+of privacy and fairness.
+the 27th Conference on User Modeling, Adaptation
+and Personalization, UMAP 2019, Larnaca, Cyprus,
+June 09-12, 2019, pages 309–315. ACM.
+
+Maria De-Arteaga, Alexey Romanov, Hanna M. Wal-
+lach, Jennifer T. Chayes, Christian Borgs, Alexan-
+dra Chouldechova, Sahin Cem Geyik, Krishnaram
+Kenthapadi, and Adam Tauman Kalai. 2019. Bias in
+bios: A case study of semantic representation bias in
+a high-stakes setting. In Proceedings of the Confer-
+ence on Fairness, Accountability, and Transparency,
+FAT* 2019, Atlanta, GA, USA, January 29-31, 2019,
+pages 120–128. ACM.
+
+Jacob Devlin, Ming-Wei Chang, Kenton Lee, and
+Kristina Toutanova. 2019. BERT: pre-training of
+deep bidirectional transformers for language under-
+In Proceedings of the 2019 Conference
+standing.
+of the North American Chapter of the Association
+for Computational Linguistics: Human Language
+Technologies, NAACL-HLT 2019, Minneapolis, MN,
+USA, June 2-7, 2019, Volume 1 (Long and Short Pa-
+pers), pages 4171–4186. Association for Computa-
+tional Linguistics.
+
+Bolin Ding, Janardhan Kulkarni, and Sergey Yekhanin.
+2017. Collecting telemetry data privately. In NIPS.
+
+Dheeru Dua and Casey Graff. 2017. UCI machine
+
+learning repository.
+
+Cynthia Dwork, Frank McSherry, Kobbi Nissim, and
+Adam D. Smith. 2006. Calibrating noise to sensi-
+In Theory of Cryp-
+tivity in private data analysis.
+tography, Third Theory of Cryptography Conference,
+TCC 2006, New York, NY, USA, March 4-7, 2006,
+Proceedings, volume 3876 of Lecture Notes in Com-
+puter Science, pages 265–284. Springer.
+
+Cynthia Dwork and Aaron Roth. 2014. The algo-
+rithmic foundations of differential privacy. Found.
+Trends Theor. Comput. Sci., 9(3-4):211–407.
+
+Yanai Elazar and Yoav Goldberg. 2018. Adversarial
+removal of demographic attributes from text data. In
+Proceedings of the 2018 Conference on Empirical
+Methods in Natural Language Processing, Brussels,
+Belgium, October 31 - November 4, 2018, pages 11–
+21. Association for Computational Linguistics.
+
+Úlfar Erlingsson, Vasyl Pihur, and Aleksandra Ko-
+rolova. 2014. Rappor: Randomized aggregatable
+privacy-preserving ordinal response. In CCS.
+
+Giulia Fanti, Vasyl Pihur, and Úlfar Erlingsson. 2016.
+Building a RAPPOR with the unknown: Privacy-
+preserving learning of associations and data dictio-
+naries. In PoPETs.
+
+Bjarke Felbo, Alan Mislove, Anders Søgaard, Iyad
+Rahwan, and Sune Lehmann. 2017. Using mil-
+lions of emoji occurrences to learn any-domain rep-
+resentations for detecting sentiment, emotion and
+sarcasm. In Proceedings of the 2017 Conference on
+Empirical Methods in Natural Language Processing,
+EMNLP 2017, Copenhagen, Denmark, September 9-
+11, 2017, pages 1615–1625. Association for Compu-
+tational Linguistics.
+
+Yaroslav Ganin and Victor Lempitsky. 2015. Unsu-
+pervised domain adaptation by backpropagation. In
+Proceedings of the 32nd International Conference
+on Machine Learning, volume 37 of Proceedings
+of Machine Learning Research, pages 1180–1189,
+Lille, France. PMLR.
+
+Hila Gonen and Yoav Goldberg. 2019. Lipstick on a
+pig: Debiasing methods cover up systematic gender
+biases in word embeddings but do not remove them.
+In Proceedings of the 2019 Workshop on Widening
+NLP, pages 60–63, Florence, Italy. Association for
+Computational Linguistics.
+
+Ivan Habernal. 2021. When differential privacy meets
+NLP: the devil is in the detail. In Proceedings of the
+2021 Conference on Empirical Methods in Natural
+Language Processing, EMNLP 2021, Virtual Event
+/ Punta Cana, Dominican Republic, 7-11 November,
+2021, pages 1522–1528. Association for Computa-
+tional Linguistics.
+
+Svetlana Kiritchenko and Saif Mohammad. 2018. Ex-
+amining gender and race bias in two hundred sen-
+In Proceedings of the
+timent analysis systems.
+Seventh Joint Conference on Lexical and Compu-
+tational Semantics, pages 43–53, New Orleans,
+Louisiana. Association for Computational Linguis-
+tics.
+
+Ron Kohavi. 1996. Scaling up the accuracy of naive-
+In Pro-
+bayes classiﬁers: A decision-tree hybrid.
+ceedings of the Second International Conference
+on Knowledge Discovery and Data Mining (KDD-
+96), Portland, Oregon, USA, pages 202–207. AAAI
+Press.
+
+Satyapriya Krishna, Rahul Gupta, and Christophe
+Dupuy. 2021. ADePT: Auto-encoder based differen-
+tially private text transformation. In Proceedings of
+the 16th Conference of the European Chapter of the
+Association for Computational Linguistics: Main
+Volume, pages 2435–2439, Online. Association for
+Computational Linguistics.
+
+Bogdan Kulynych, Mohammad Yaghini, Giovanni
+Cherubin, Michael Veale, and Carmela Troncoso.
+2022. Disparate vulnerability to membership infer-
+ence attacks. In PETS.
+
+Guillaume Lample, Neil Zeghidour, Nicolas
+Usunier, Antoine Bordes, Ludovic Denoyer,
+and Marc’Aurelio Ranzato. 2017. Fader networks:
+Manipulating images by sliding attributes.
+In
+Advances in Neural Information Processing Systems
+30: Annual Conference on Neural Information
+Processing Systems 2017, December 4-9, 2017,
+Long Beach, CA, USA, pages 5967–5976.
+
+Xudong Han, Timothy Baldwin, and Trevor Cohn.
+2021. Diverse adversaries for mitigating bias in
+training. In Proceedings of the 16th Conference of
+the European Chapter of the Association for Com-
+putational Linguistics: Main Volume, EACL 2021,
+Online, April 19 - 23, 2021, pages 2760–2765. Asso-
+ciation for Computational Linguistics.
+
+Yitong Li, Timothy Baldwin, and Trevor Cohn. 2018.
+Towards robust and privacy-preserving text represen-
+In Proceedings of the 56th Annual Meet-
+tations.
+ing of the Association for Computational Linguistics
+(Volume 2: Short Papers), pages 25–30, Melbourne,
+Australia. Association for Computational Linguis-
+tics.
+
+Matthew Jagielski, Michael J. Kearns, Jieming Mao,
+Alina Oprea, Aaron Roth, Saeed Shariﬁ-Malvajerdi,
+and Jonathan R. Ullman. 2019. Differentially pri-
+In Proceedings of the 36th In-
+vate fair learning.
+ternational Conference on Machine Learning, ICML
+2019, 9-15 June 2019, Long Beach, California, USA,
+volume 97 of Proceedings of Machine Learning Re-
+search, pages 3000–3008. PMLR.
+
+Saket Karve, Lyle Ungar, and João Sedoc. 2019. Con-
+ceptor debiasing of word representations evaluated
+In Proceedings of the First Workshop
+on WEAT.
+on Gender Bias in Natural Language Processing,
+pages 40–48, Florence, Italy. Association for Com-
+putational Linguistics.
+
+Shiva Prasad Kasiviswanathan, Homin K. Lee, Kobbi
+Nissim, Sofya Raskhodnikova, and Adam D. Smith.
+2011. What can we learn privately? SIAM J. Com-
+put., 40(3):793–826.
+
+Wenyan Liu, Xiangfeng Wang, Xingjian Lu, Junhong
+Cheng, Bo Jin, Xiaoling Wang, and Hongyuan Zha.
+2020. Fair differential privacy can mitigate the dis-
+parate impact on model accuracy.
+
+Ziwei Liu, Ping Luo, Xiaogang Wang, and Xiaoou
+Tang. 2015. Deep learning face attributes in the
+In 2015 IEEE International Conference on
+wild.
+Computer Vision, ICCV 2015, Santiago, Chile, De-
+cember 7-13, 2015, pages 3730–3738. IEEE Com-
+puter Society.
+
+Michael Lohaus, Michael Perrot, and Ulrike Von
+Luxburg. 2020. Too relaxed to be fair. In Proceed-
+ings of the 37th International Conference on Ma-
+chine Learning, volume 119 of Proceedings of Ma-
+chine Learning Research, pages 6360–6369. PMLR.
+
+Lingjuan Lyu, Xuanli He, and Yitong Li. 2020. Differ-
+entially private representation for NLP: formal guar-
+
+IEEE Symposium on Security and Privacy, SP 2017,
+San Jose, CA, USA, May 22-26, 2017, pages 3–18.
+IEEE Computer Society.
+
+Congzheng Song and Ananth Raghunathan. 2020. In-
+In CCS
+formation leakage in embedding models.
+’20: 2020 ACM SIGSAC Conference on Computer
+and Communications Security, Virtual Event, USA,
+November 9-13, 2020, pages 377–390. ACM.
+
+Elmira van den Broek, Anastasia Sergeeva, and Mar-
+leen Huysman. 2019. Hiring algorithms: An ethnog-
+raphy of fairness in practice. In Proceedings of the
+40th International Conference on Information Sys-
+tems, ICIS 2019, Munich, Germany, December 15-
+18, 2019. Association for Information Systems.
+
+Elena Voita and Ivan Titov. 2020.
+
+Information-
+theoretic probing with minimum description length.
+In Proceedings of the 2020 Conference on Empirical
+Methods in Natural Language Processing, EMNLP
+2020, Online, November 16-20, 2020, pages 183–
+196. Association for Computational Linguistics.
+
+Tianlu Wang, Xi Victoria Lin, Nazneen Fatema Ra-
+jani, Bryan McCann, Vicente Ordonez, and Caiming
+Xiong. 2020. Double-hard debias: Tailoring word
+embeddings for gender bias mitigation. In Proceed-
+ings of the 58th Annual Meeting of the Association
+for Computational Linguistics, ACL 2020, Online,
+July 5-10, 2020, pages 5443–5453. Association for
+Computational Linguistics.
+
+Yongkai Wu, Lu Zhang, and Xintao Wu. 2019. On con-
+vexity and bounds of fairness-aware classiﬁcation.
+In The World Wide Web Conference, WWW 2019,
+San Francisco, CA, USA, May 13-17, 2019, pages
+3356–3362. ACM.
+
+Depeng Xu, Wei Du, and Xintao Wu. 2020. Remov-
+ing disparate impact of differentially private stochas-
+tic gradient descent on model accuracy. CoRR,
+abs/2003.03699.
+
+Jieyu Zhao, Tianlu Wang, Mark Yatskar, Vicente Or-
+donez, and Kai-Wei Chang. 2018. Gender bias
+in coreference resolution: Evaluation and debias-
+In Proceedings of the 2018 Con-
+ing methods.
+ference of the North American Chapter of the As-
+sociation for Computational Linguistics: Human
+Language Technologies, NAACL-HLT, New Orleans,
+Louisiana, USA, June 1-6, 2018, Volume 2 (Short Pa-
+pers), pages 15–20. Association for Computational
+Linguistics.
+
+antee and an empirical study on privacy and fair-
+In Findings of the Association for Compu-
+ness.
+tational Linguistics: EMNLP 2020, Online Event,
+16-20 November 2020, volume EMNLP 2020 of
+Findings of ACL, pages 2355–2365. Association for
+Computational Linguistics.
+
+Adam Paszke, Sam Gross, Francisco Massa, Adam
+Lerer, James Bradbury, Gregory Chanan, Trevor
+Killeen, Zeming Lin, Natalia Gimelshein, Luca
+Antiga, Alban Desmaison, Andreas Kopf, Edward
+Yang, Zachary DeVito, Martin Raison, Alykhan Te-
+jani, Sasank Chilamkurthy, Benoit Steiner, Lu Fang,
+Junjie Bai, and Soumith Chintala. 2019.
+Py-
+torch: An imperative style, high-performance deep
+learning library.
+In H. Wallach, H. Larochelle,
+A. Beygelzimer, F. d'Alché-Buc, E. Fox, and R. Gar-
+nett, editors, Advances in Neural Information Pro-
+cessing Systems 32, pages 8024–8035. Curran Asso-
+ciates, Inc.
+
+Richard Plant, Dimitra Gkatzia, and Valerio Giuf-
+frida. 2021. Cape: Context-aware private embed-
+dings for private language learning. arXiv preprint
+arXiv:2108.12318.
+
+David Pujol, Ryan McKenna, Satya Kuppam, Michael
+Hay, Ashwin Machanavajjhala, and Gerome Miklau.
+2020. Fair decision making using privacy-protected
+In FAT* ’20: Conference on Fairness, Ac-
+data.
+countability, and Transparency, Barcelona, Spain,
+January 27-30, 2020, pages 189–199. ACM.
+
+Manish Raghavan, Solon Barocas, Jon M. Kleinberg,
+and Karen Levy. 2020. Mitigating bias in algo-
+rithmic hiring: evaluating claims and practices. In
+FAT* ’20: Conference on Fairness, Accountability,
+and Transparency, Barcelona, Spain, January 27-30,
+2020, pages 469–481. ACM.
+
+Shauli Ravfogel, Yanai Elazar, Hila Gonen, Michael
+Twiton, and Yoav Goldberg. 2020. Null it out:
+Guarding protected attributes by iterative nullspace
+projection. In Proceedings of the 58th Annual Meet-
+ing of the Association for Computational Linguistics,
+ACL 2020, Online, July 5-10, 2020, pages 7237–
+7256. Association for Computational Linguistics.
+
+Alexey Romanov, Maria De-Arteaga, Hanna Wal-
+lach, Jennifer Chayes, Christian Borgs, Alexan-
+dra Chouldechova, Sahin Geyik, Krishnaram Ken-
+thapadi, Anna Rumshisky, and Adam Kalai. 2019.
+What’s in a name? Reducing bias in bios without
+access to protected attributes. In Proceedings of the
+2019 Conference of the North American Chapter of
+the Association for Computational Linguistics: Hu-
+man Language Technologies, Volume 1 (Long and
+Short Papers), pages 4187–4195, Minneapolis, Min-
+nesota. Association for Computational Linguistics.
+
+Reza Shokri and Vitaly Shmatikov. 2015. Privacy-
+
+preserving deep learning. In CCS.
+
+Reza Shokri, Marco Stronati, Congzheng Song, and
+Vitaly Shmatikov. 2017. Membership inference at-
+In 2017
+tacks against machine learning models.
+
+APPENDIX
+
+A Training Algorithm
+
+We provide the pseudo-code of the training proce-
+dure of FEDERATE in Algorithm 1. Note that the
+combination of Steps 2-3-4 corresponds to Epriv
+in Sec. 3.
+
+B Proof of Theorem 1
+
+Proof. We start by proving that our noisy encoder
+Epriv : X → RD satisﬁes (cid:15)-DP. Recall that for any
+input text x ∈ X
+
+Epriv(x) = priv ◦ E(x) = E(x)/(cid:107)E(x)(cid:107)1 + (cid:96),
+
+where each entry of (cid:96) ∈ RD is sampled indepen-
+dently from Lap( 2
+(cid:15) ), the centered Laplace distribu-
+tion with scale 2/(cid:15). Let ˜E(x) = E(x)/(cid:107)E(x)(cid:107)1.
+The L1 sensitivity of ˜E is
+
+∆ ˜E = max
+x,x(cid:48)∈X
+
+(cid:107) ˜E(x) − ˜E(x)(cid:48)(cid:107)1.
+
+Since for any x ∈ X we have (cid:107) ˜E(x)(cid:107)1 = 1, the tri-
+angle inequality gives ∆ ˜E ≤ 2. The (cid:15)-DP guaran-
+tee then follows from the application of the Laplace
+mechanism (Dwork et al., 2006). Formally, let
+
+p(y) =
+
+e− |y|(cid:15)
+
+2
+
+(cid:15)
+4
+
+denote the p.d.f. of Lap(2/(cid:15)). Consider two arbi-
+trary input texts x, x(cid:48) ∈ X and let ˜x = ˜E(x) ∈ RD
+and ˜x(cid:48) = ˜E(x(cid:48)) ∈ RD be their normalized encoded
+representations. Then, for any possible encoded
+output e = (e1, . . . , eD) ∈ RD, we have:
+
+Pr[Epriv(x) = e]
+Pr[Epriv(x(cid:48)) = e]
+
+=
+
+=
+
+D
+(cid:89)
+
+d=1
+D
+(cid:89)
+
+p(ed − ˜xd)
+(cid:48))
+p(ed − ˜xd
+
+(6)
+
+2 |ed−˜xd|
+2 |ed−˜x(cid:48)
+d|
+
+e− (cid:15)
+e− (cid:15)
+(cid:80)D
+d=1 |ed−˜x(cid:48)
+
+d=1
+(cid:15)
+2
+
+= e
+
+d|−|ed−˜xd|
+
+(cid:15)
+2
+
+(cid:80)D
+
+d=1 |˜xd−˜x(cid:48)
+d|
+
+(cid:15)
+
+2 (cid:107)˜x−˜x(cid:48)(cid:107)1
+
+≤ e
+
+= e
+
+≤ e
+
+(cid:15)
+
+2 ∆ ˜E = e(cid:15),
+
+(7)
+
+(8)
+
+where (6) follows from the independence of the
+noise across dimensions, (7) uses the triangle in-
+equality, and (8) from the deﬁnition of ∆ ˜E and the
+fact that ∆ ˜E ≤ 2 as shown above.
+
+The above inequality shows that Epriv satisﬁes
+(cid:15)-DP as per Deﬁnition 1. The fact that C ◦ Epriv
+
+also satisﬁes (cid:15)-DP follows from the post-processing
+property of DP, which ensures that the composition
+of any function with an (cid:15)-DP algorithm also satis-
+ﬁes (cid:15)-DP (Dwork and Roth, 2014).
+
+C Error in Privacy Analysis of Previous
+
+Work
+
+As brieﬂy mentioned in Section 4, we found a criti-
+cal error in the differential privacy analysis made
+in previous work by Lyu et al. (2020). This error is
+then reproduced in subsequent work by Plant et al.
+(2021). In this section, we explain this error and its
+consequences for the formal privacy guarantees of
+these methods, and provide a correction.
+
+Recall from Section 2 that to achieve (cid:15)-DP with
+the Laplace mechanism, one must calibrate the
+scale of the Laplace noise needed to the L1 sen-
+sitivity of the encoded representation (see Eq. 2).
+This sensitivity bounds the worst-case change in
+L1 norm for any two arbitrary encoded user inputs
+x and x(cid:48) of dimension D.
+
+In order to bound the L1 sensitivity, Lyu et al.
+(2020) and Plant et al. (2021) propose to bound
+each entry of the encoded input x ∈ RD in the [0, 1]
+range. Speciﬁcally, they normalize as follows:
+
+x ← x − min(x)/(max(x) − min(x)),
+
+(9)
+
+where min(x) and max(x) are respectively the min-
+imum and maximum values in the vector x. Lyu
+et al. (2020) and Plant et al. (2021) incorrectly
+claim that this allows to bound the L1 sensitivity
+by 1 and thus add Laplace noise of scale 1
+(cid:15) . In fact,
+the sensitivity can be as large as D, as can be seen
+by considering the two inputs x = [0, 1, . . . , 1]D
+and x(cid:48) = [1, 0, . . . , 0] for which (cid:107)x − x(cid:48)(cid:107)1 = D.
+Therefore, to achieve (cid:15)-DP, the scale of the Laplace
+noise should be D
+(cid:15) (i.e., D times larger than what
+the authors use). As a consequence, the differen-
+tial privacy provided by their method are D times
+worse than claimed by Lyu et al. (2020) and Plant
+et al. (2021): the (cid:15) values they report should be
+multiplied by D, which leads to essentially void
+privacy guarantees.
+
+While Lyu et al. (2020) claim to follow the
+approach of Shokri and Shmatikov (2015), they
+missed the fact that Shokri and Shmatikov (2015)
+do account for multiple dimensions by scaling the
+noise to the number of entries (denoted by c in
+their paper) that are submitted to the server, see
+
+Algorithm 1: Training procedure of FEDERATE (one epoch).
+Input: Model architecture composed of encoder E (parameterized by θE), classiﬁer C
+
+(parameterized by θC), adversary A (parameterized by θA), loss function L
+
+Output: Trained model
+Data: Samples S={xi, yi, zi}m
+sensitive attribute.
+
+i=1 where xi is the input text, yi is the task label, and zi is the
+
+1 for i ← 0 to m do
+
+priv ← xi + (cid:96), where each entry of the vector (cid:96) ∈ RD is sampled independently
+
+This can be batch too.
+
+// For each sample in the dataset.
+Encode: xi ← E(xi)
+Normalize: xi ← xi
+(cid:107)xi(cid:107)1
+Privatize: xi
+from a centered Laplace distribution with scale 2
+(cid:15)
+Adversarial prediction: ˆzi ← A(xi
+Update θA by backpropagating the loss L(zi, ˆzi)
+Task classiﬁcation: ˆyi ← C(xi
+Update θE and θC by backpropagating the loss L(yi, ˆyi) − λ · L(zi, ˆzi)
+
+priv)
+
+priv)
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+pseudo-code in Figure 12 of Shokri and Shmatikov
+(2015).
+
+In contrast to Lyu et al. (2020) and Plant et al.
+(2021), our normalization in Eq. 3 guarantees by
+design that the L1 sensitivity is bounded by 2. We
+provide a complete and self-contained proof of our
+privacy guarantees in Section B.
+
+D Experiments
+
+This section gives more information on the experi-
+mental setup and also provides additional results.
+
+D.1 Privacy metric
+
+Leakage: We compute the leakage using a
+sklearn’s MLPClassiﬁer. We use the validation
+set of the original dataset as the train and the test
+set of the original dataset as the test.
+
+Minimum Description Length (MDL)
+is a
+information-theoretic probing measure which cap-
+tures the strength of regularity in the data. In this
+work, we employ the online coding approach (Voita
+and Titov, 2020) to calculate MDL. Online cod-
+ing captures the regularity by characterizing the
+effort required to achieve a certain level of accu-
+racy. Here, a portion of data is transmitted to the
+receiver at each step, which then uses all the data
+in the previous steps to understand the regularity
+in the current step. The regularity is obtained by
+training the model on the previously received data
+and then evaluating it on the current portion of the
+data.
+
+Borrowing, the terminology from Voita and
+Titov (2020), consider a dataset D consisting of
+{(x1, y1), · · · , (xn, yn)} pairs, where the xi’s are
+the data representation, and the yi’s are the task
+label. In our case, xi is the output of the encoder,
+and yi is the sensitive attribute associated with the
+underlying text. Following the standard informa-
+tion theory setting, consider a sender Alice who
+wants to transmit labels y1:n = {y1 · · · , yn} to a
+receiver Bob, and both of them have access to the
+data representation x1:n = {x1 · · · , xn}. In order
+to transmit labels y1:n efﬁciently (as few bits possi-
+ble), Alice encodes y1:n using a model p(y|x). Ac-
+cording to Shannon-Huffman code, the minimum
+bits required to transmit these labels losslessly is:
+
+Lp(y1:n|x1:n) = −
+
+n
+(cid:88)
+
+i=1
+
+log2 p(yi|xi).
+
+In the online coding setting of MDL, the la-
+bels are transmitted in blocks of n timesteps t0 <
+t1 < · · · tn. Alice starts by encoding y1:t1 with
+a uniform code, then both Alice and Bob learn
+a model pθ1(y|x) that predicts y from x using
+data {(xi, yi)}t1
+i=1. Alice then uses this model to
+communicate the next data block yt1:t2, and both
+learns a new model using larger chunk of data
+{(xi, yi)}t2
+i=1. This continues till the whole set of
+labels y1:n is transmitted. The total code length
+required for transmission using this setting is given
+
+as:
+
+Lonline(y1:n|x1:n) = t1 log2 C−
+
+n−1
+(cid:88)
+
+i=1
+
+log2 pθi(yti+1:ti|xti+1:ti).
+
+(10)
+
+where yi ∈ {1, 2, · · · , C}. In our case, the on-
+line code length Lonline(y1:n|x1:n) is shorter, if it
+is easier for probing model to perform well with
+fewer training instances. This implies that the sen-
+sitive information is more easily available in the
+encoder’s representation.
+
+We compute MDL using sklearn’s MLPClas-
+siﬁer at timesteps corresponding to 0.1%, 0.2%,
+0.4%, 0.8%, 1.6%, 3.2%, 6.25%, 12.5%, 25%,
+50% and 100% of each dataset as suggested
+by Voita and Titov (2020).
+
+D.2 Datasets
+
+Twitter Sentiment
+(Blodgett et al., 2016) con-
+sists of 200k tweets annotated with a binary senti-
+ment label and a binary “race” attribute correspond-
+ing to African American English (AAE) vs. Stan-
+dard American English (SAE) speakers. The initial
+representation of tweets are obtained from a Deep-
+moji encoder (Felbo et al., 2017). The dataset is
+evenly balanced with respect to the four sentiment-
+race subgroup combinations. To create bias in
+the training data, we follow Elazar and Goldberg
+(2018) and change the race proportion in each sen-
+timent class to have 40% AAE-happy, 10% AAE-
+sad, 10% SAE-happy, and 40% SAE-sad. Test
+data remains balanced. This setup is particularly
+challenging regarding privacy and fairness, as the
+model may exploit the correlation between the pro-
+tected attribute and the main class label, which is
+reinforced due to skewing. The mismatch between
+the train-test distribution is also relevant for our
+setup, where the system may be trained on pub-
+licly available datasets or collected via an opt-in
+policy and may therefore not closely resemble the
+test distribution. This dataset is made available for
+research purposes only.5
+
+Bias in Bios
+(De-Arteaga et al., 2019) consists
+of 393,423 textual biographies annotated with an
+occupation label (28 classes) and a binary gender
+attribute. Similar to Ravfogel et al. (2020), we
+encode each biography with BERT (Devlin et al.,
+
+5http://slanglab.cs.umass.edu/
+
+TwitterAAE/
+
+2019), using the last hidden state over the CLS
+token. We use the same train-valid-test split as De-
+Arteaga et al. (2019). As the dataset was collected
+by scrapping the web, it tends to reﬂect common
+gender stereotypes and contains explicit gender
+indicators (e.g., pronouns), making it more chal-
+lenging to prevent models from relying on these
+gendered words. It is also more complex than Twit-
+ter Sentiment in terms of the number of classes.
+Dataset is released under MIT License.6
+
+CelebA
+(Liu et al., 2015) consists of over
+200,000 images of the human face, alongside with
+40 binary attributes labels describing the content
+of the images. Following the standard setting as
+described in (Lohaus et al., 2020), we use 38 of
+these attributes as features, "Smiling" as the class
+label, and "Sex" as the sensitive attribute. We use
+60% of the data as train, 20% as validation, and the
+remaining as the test split. The CelebA dataset is
+available for non-commercial research purposes.7
+
+Adult Income
+(Kohavi, 1996) consists of a U.S.
+1994 Census database segment and has 48842 in-
+stances with 14 features each. We apply the pre-
+processing as proposed by (Wu et al., 2019) result-
+ing in a total of 9 features for each instance. The
+objective is to predict whether a given data point
+earns more than ﬁfty thousand U.S. dollars or less.
+We consider sex (binary) as the sensitive attribute.
+Like CelebA, We use 60% of the data as train, 20%
+as validation, and the remaining as the test split.
+The license of the dataset is unknown, however it
+is commonly used in several fairness papers and is
+avaialbe at (Dua and Graff, 2017).
+
+D.3 Model Architecture
+
+Twitter Sentiment. The encoder consists of two
+layers with ReLU activation and a ﬁxed dropout
+of 0.1. The classiﬁer is linear, and the adversar-
+ial branch consists of three layers. We use a ﬁxed
+dropout of 0.1 in all the layers with ReLU activa-
+tion, apart from the last layer.
+
+Bias in Bios. The encoder consists of three lay-
+ers and a ﬁxed dropout of 0.1. The classiﬁer also
+consists of three layers, and the adversarial branch
+consists of two layers. We use a ﬁxed dropout of
+0.1 in all the layers with ReLU activation, apart
+from the last layer.
+
+6https://github.com/Microsoft/biosbias
+7https://mmlab.ie.cuhk.edu.hk/
+
+projects/CelebA.html
+
+the authors (Ravfogel et al., 2020). We also
+observe that this choice empirically led to the
+best results. We vary the number of iterations
+as a part of hyperparameter tuning. For Bias in
+Bios we vary the iterations between 15 and 45,
+while for Twitter Sentiment we vary between
+2 to 7. We found that in case of Bias in Bios,
+performing less than 15 iterations resulted
+in the same behaviour as Unconstrained
+model over validation set while more than 45
+iterations resulted in a random classiﬁer. We
+observed the same in the Twitter Sentiment
+before 2 and after 7 iterations, respectively.
+
+D.5 Extended Evaluation
+
+Tables 2–3 present detailed results on CelebA
+and Adult Income dataset respectively. In terms
+of fairness over both the datasets, we observe
+that adversarial-based approaches induce a more
+fair model than Unconstrained or Noise, with
+FEDERATE outperforming all other methods. In-
+terestingly, unlike Twitter Sentiment and Bias in
+Bios, all approaches have comparable accuracy,
+including Noise and INLP. We believe this to
+be the case due to these datasets being relatively
+more challenging than CelebA and Adult Income.
+As observed previously, purely adversarial-based
+approaches leak signiﬁcantly more information
+than the DP-based approaches in terms of pri-
+vacy. We observe that Noise and INLP performs
+marginally better in privacy than FEDERATE; how-
+ever, they suffer signiﬁcantly in the fairness metric.
+In fact, they induce fairness levels which are similar
+to Unconstrained.
+
+Overall, the results show FEDERATE as the only
+viable choice to induce a fairer model and make its
+representation private while maintaining compara-
+ble accuracy. These observations are in line with
+previous experiments described in Sec. 5.1
+
+D.6 Additional Results
+
+Tables 4–6 present detailed results on Twitter Sen-
+timent with different relaxation thresholds, which
+were summarized in Figure 2.
+
+Table 7 provides the detailed privacy-fairness
+
+results which were summarized in Figure 4.
+
+In case of Adult Income and CelebA dataset we
+
+use the same model as for Twitter Sentiment.
+
+D.4 Hyperparameters
+
+For all our experiments, we use Adam optimizer
+with a learning rate of 0.001 and batch size of 2000.
+We give additional tuning details of the different
+methods below. A single experiment takes about
+30 minutes to run on Intel Xenon CPU. We will
+also provide the PyTorch model description in the
+README of the source code for easier reproduc-
+tion.
+
+• Adversarial: We perform a grid search
+over λ varying it between 0.1 to 3.0 with an
+interval of 0.2. Moreover, following previous
+work (Lample et al., 2017; Adi et al., 2019),
+instead of a constant λ, we increase it over the
+epochs using the update scheme λi = 2/(1 +
+e−pi) − 1, where pi is the scaled version of
+the epoch number. We also experimented with
+increasing the λ linearly, as well as keeping it
+constant, but found the above update scheme
+to perform the best in various settings. We
+also use this scheme in all other adversarial
+approaches.
+
+• Adversarial + Multiple: Similar to
+Adversarial, we vary λ between 0.1 to
+3.0 with an interval of 0.2. Apart from λ,
+Adversarial + Multiple has an ad-
+ditional hyperparameter λort which corrre-
+sponds to the weight given to the orthogo-
+nality loss component. We vary λort between
+0.1 and 1.0. Here, we do a simultaneous grid
+search over λ and λort resulting in 150 runs
+for each seed. We ﬁx the number of the adver-
+sary to three which is the same as the original
+implementation by (Han et al., 2021).
+
+to
+runs
+
+order
+of
+
+In
+number
+
+• FEDERATE:
+comparable
+Adversarial + Multiple,
+experiments with
+8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
+20.0. Similar to above approach, we do
+a simultaneous grid search over λ and (cid:15)
+resulting in 150 runs for each seed.
+
+have
+to
+we
+values:
+
+following
+
+(cid:15)
+
+• INLP: In the case of INLP, we always debias
+the representation after the penultimate clas-
+siﬁer layer and before the ﬁnal layer, which
+is consistent with the setting considered by
+
+Method
+
+Random
+Unconstrained
+
+Accuracy ↑
+
+TPR-gap ↓
+
+Leakage ↓
+
+MDL ↑
+
+50.00 ± 0.00
+85.70 ± 0.21
+
+0.00 ± 0.00
+12.25 ± 2.07
+
+–
+81.3 ± 0.89
+
+104.64 ± 0.11
+67.82 ± 1.46
+
+INLP
+84.81 ± 0.47
+Noise
+85.12 ± 0.47
+Adversarial
+85.34 ± 0.22
+Adversarial + Multiple 84.92 ± 0.12
+
+12.69 ± 4.66
+12.49 ± 0.58
+7.83 ± 0.97
+5.79 ± 1.44
+
+66.00 ± 1.32
+59.01 ± 0.65
+87.00 ± 2.22
+84.38 ± 2.07
+
+100.17 ± 1.65
+103.93 ± 0.24
+46.61 ± 5.52
+51.11 ± 4.06
+
+FEDERATE
+
+84.81 ± 0.34
+
+2.68 ± 0.60
+
+65.49 ± 3.48
+
+98.53 ± 4.51
+
+Table 2: Test results on CelebA dataset with ﬁxed Relaxation Threshold of 1.0. Fairness is measured by TPR-Gap
+(lower is better), while privacy is measured by Leakage (lower is better) and MDL (higher is better). The MDL
+achieved by Random gives an upper bound for that particular dataset. The results have been averaged over 5
+different seeds.
+
+Method
+
+Random
+Unconstrained
+
+Accuracy ↑
+
+TPR-gap ↓
+
+Leakage ↓
+
+MDL ↑
+
+50.00 ± 0.00
+83.41 ± 0.32
+
+0.00 ± 0.00
+12.73 ± 7.17
+
+-
+78.19 ± 1.0
+
+20.15 ± 0.083
+16.38 ± 0.46
+
+INLP
+83.11 ± 0.51
+Noise
+82.87 ± 0.37
+Adversarial
+83.14 ± 0.53
+Adversarial + Multiple 83.14 ± 0.25
+
+3.91 ± 2.43
+8.01 ± 1.18
+7.02 ± 3.31
+3.55 ± 2.16
+
+74.54 ± 0.67
+68.12 ± 0.94
+78.2 ± 0.18
+81.37 ± 0.98
+
+19.93 ± 0.35
+19.38 ± 0.33
+16.1 ± 0.36
+13.5 ± 1.09
+
+FEDERATE
+
+82.29 ± 0.9
+
+2.73 ± 2.18
+
+70.25 ± 4.81
+
+18.1 ± 2.79
+
+Table 3: Test results on Adult Income dataset with ﬁxed Relaxation Threshold of 1.0. Fairness is measured by
+TPR-Gap (lower is better), while privacy is measured by Leakage (lower is better) and MDL (higher is better). The
+MDL achieved by Random gives an upper bound for that particular dataset. The results have been averaged over
+5 different seeds.
+
+Method
+
+Accuracy ↑
+
+TPR-gap ↓
+
+Leakage ↓
+
+Unconstrained
+
+72.54 ± 0.57
+
+27.17 ± 1.76
+
+87.18 ± 0.32
+
+Noise
+Adversarial
+Adversarial + Multiple
+
+71.87 ± 0.56
+75.49 ± 0.71
+75.6 ± 0.53
+
+25.14 ± 3.47
+8.47 ± 3.5
+7.74 ± 4.17
+
+71.75 ± 2.99
+88.03 ± 0.24
+88.01 ± 0.28
+
+FEDERATE
+
+75.34 ± 0.56
+
+5.46 ± 3.59
+
+62.31 ± 5.69
+
+Table 4: Test set results on Twitter Sentiment dataset (scores averaged over 5 different seeds, RT=0.0).
+
+Method
+
+Accuracy ↑
+
+TPR-gap ↓
+
+Leakage ↓
+
+Unconstrained
+
+70.57 ± 0.98
+
+20.68 ± 0.99
+
+82.91 ± 1.65
+
+Noise
+70.47 ± 0.43
+Adversarial
+74.09 ± 1.56
+Adversarial + Multiple 74.44 ± 0.62
+
+19.84 ± 0.91
+3.03 ± 2.65
+1.07 ± 0.74
+
+66.83 ± 3.32
+88.14 ± 0.18
+87.98 ± 0.36
+
+FEDERATE
+
+74.24 ± 1.25
+
+0.89 ± 0.46
+
+61.92 ± 5.04
+
+Table 5: Test set results on Twitter Sentiment dataset (scores averaged over 5 different seeds, RT=3.0).
+
+Method
+
+Accuracy ↑
+
+TPR-gap ↓
+
+Leakage ↓
+
+Unconstrained
+
+70.57 ± 0.98
+
+20.68 ± 0.99
+
+82.91 ± 1.65
+
+Noise
+70.47 ± 0.43
+Adversarial
+70.8 ± 2.77
+Adversarial + Multiple 67.39 ± 1.16
+
+19.84 ± 0.91
+1.72 ± 1.5
+1.0 ± 0.8
+
+66.83 ± 3.32
+88.2 ± 0.24
+88.01 ± 0.12
+
+FEDERATE
+
+73.97 ± 1.6
+
+1.4 ± 1.22
+
+60.38 ± 5.46
+
+Table 6: Test set results on Twitter Sentiment dataset (scores averaged over 5 different seeds, RT=10.0).
+
+Method
+
+(cid:15)
+
+Twitter Sentiment
+
+Bias in Bios
+
+Accuracy ↑ Leakage ↓ Accuracy ↑ Leakage ↓
+
+Noise
+FEDERATE
+
+8.0
+8.0
+
+Noise 10.0
+FEDERATE 10.0
+
+Noise 12.0
+FEDERATE 12.0
+
+Noise 14.0
+FEDERATE 14.0
+
+Noise 16.0
+FEDERATE 16.0
+
+71.3
+74.89
+
+71.63
+75.25
+
+71.76
+75.31
+
+71.7
+75.3
+
+71.7
+75.56
+
+60.59
+56.91
+
+65.57
+60.55
+
+66.04
+53.31
+
+67.98
+57.29
+
+67.69
+61.98
+
+64.75
+64.78
+
+70.86
+70.97
+
+75.01
+75.01
+
+76.74
+76.83
+
+77.77
+77.89
+
+56
+54.4
+
+57.7
+56.5
+
+58.4
+57
+
+59
+56.3
+
+60.3
+57.9
+
+Table 7: Accuracy-privacy trade-off for different noise level (as captured by (cid:15)).
+
+

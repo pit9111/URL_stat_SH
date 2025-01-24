@@ -1,0 +1,2481 @@
+Threshold queries in theory and in the Wild
+Angela Bonifati, Stefania Dumbrava, George Fletcher, Jan Hidders, Matthias
+
+Hofer, Wim Martens, Filip Murlak, Joshua Shinavier, Slawomir Staworko,
+
+Dominik Tomaszuk
+
+To cite this version:
+
+Angela Bonifati, Stefania Dumbrava, George Fletcher, Jan Hidders, Matthias Hofer, et al.. Threshold
+queries in theory and in the Wild. Proceedings of the VLDB Endowment (PVLDB), 2022, 15 (5),
+pp.1105-1118. ￿10.14778/3510397.3510407￿. ￿hal-03516360￿
+
+HAL Id: hal-03516360
+
+https://inria.hal.science/hal-03516360
+
+Submitted on 6 Feb 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Threshold Queries in Theory and in the Wild
+
+Angela Bonifati
+Lyon 1 Univ., Liris CNRS
+angela.bonifati@univ-
+lyon1.fr
+
+Stefania Dumbrava
+ENSIIE & Inst.
+Polytechnique de Paris
+stefania.dumbrava@ensiie.fr
+
+George Fletcher
+Eindhoven Univ. of
+Technology
+g.h.l.fletcher@tue.nl
+
+Jan Hidders
+Univ. of London, Birkbeck
+jan@dcs.bbk.ac.uk
+
+Matthias Hofer
+University of Bayreuth
+matthias.hofer@uni-
+bayreuth.de
+
+Wim Martens
+University of Bayreuth
+wim.martens@uni-
+bayreuth.de
+
+Filip Murlak
+Univ. of Warsaw
+fmurlak@mimuw.edu.pl
+
+Joshua Shinavier
+LinkedIn
+jshinavier@linkedin.com
+
+Sławek Staworko
+Univ. Lille, INRIA, CNRS,
+UMR 9189 - CRIStAL
+slawomir.staworko@inria.fr
+
+Dominik Tomaszuk
+Univ. of Bialystok
+d.tomaszuk@uwb.edu.pl
+
+ABSTRACT
+Threshold queries are an important class of queries that only re-
+quire computing or counting answers up to a specified threshold
+value. To the best of our knowledge, threshold queries have been
+largely disregarded in the research literature, which is surprising
+considering how common they are in practice. In this paper, we
+present a deep theoretical analysis of threshold query evaluation
+and show that thresholds can be used to significantly improve the
+asymptotic bounds of state-of-the-art query evaluation algorithms.
+We also empirically show that threshold queries are significant in
+practice. In surprising contrast to conventional wisdom, we found
+important scenarios in real-world data sets in which users are inter-
+ested in computing the results of queries up to a certain threshold,
+independent of a ranking function that orders the query results.
+
+PVLDB Reference Format:
+Angela Bonifati, Stefania Dumbrava, George Fletcher, Jan Hidders,
+Matthias Hofer, Wim Martens, Filip Murlak, Joshua Shinavier, Sławek
+Staworko, and Dominik Tomaszuk. Threshold Queries in Theory and in
+the Wild. PVLDB, 15(5): 1105–1118, 2022.
+doi:10.14778/3510397.3510407
+
+1 INTRODUCTION
+Queries encountered in a wide range of data management applica-
+tions, such as data interaction, data visualization, data exploration,
+data curation and data monitoring [8, 41, 45], often require com-
+puting or counting answers only up to a given threshold value. We
+call such queries threshold queries.
+Threshold queries for data exploration. Querying voluminous rich
+data sources, such as Wikidata [67], may return more results than
+are needed during exploratory analytics. Thus, users may specify
+a threshold on the number of answers they want to see. Consider
+the following LIMIT query which lists up to a threshold businesses,
+total assets, and headquarter locations in the Wikidata dataset.
+
+SELECT ? business ? assets ? city ? country
+{ ? business < total_assets > ? assets .
+
+? business < headquarters_location > ? city .
+? city < country > ? country . }
+
+LIMIT 10;
+
+This work is licensed under the Creative Commons BY-NC-ND 4.0 International
+License. Visit https://creativecommons.org/licenses/by-nc-nd/4.0/ to view a copy of
+this license. For any use beyond those covered by this license, obtain permission by
+emailing info@vldb.org. Copyright is held by the owner/author(s). Publication rights
+licensed to the VLDB Endowment.
+Proceedings of the VLDB Endowment, Vol. 15, No. 5 ISSN 2150-8097.
+doi:10.14778/3510397.3510407
+
+Without LIMIT, this query would return 2,684,138 objects, amount-
+ing to about 413MB in size, which is too large for human consump-
+tion. Note that here the user is interested in unranked output (i.e.,
+there is no ORDER BY clause), which is typical for data exploration
+[8]. As we will see later in a deep-dive into real query logs (Sec-
+tion 5), such queries on Wikidata are very common in practice.
+
+Threshold queries for data curation. Threshold queries are also use-
+ful in detecting violations of database constraints and identifying
+data items requiring curation actions. As an example, consider the
+following threshold query using grouping and aggregation in the
+Nobel Prize database, requiring that every Nobel prize has at most
+three laureates [4].
+
+SELECT P. ID FROM NobelPrize P , Laureate L
+WHERE P. ID = L. Prize_ID
+GROUP BY P. ID HAVING COUNT (*) > 3;
+Differences with other query answering paradigms. Although
+threshold queries might look similar in spirit to top-𝑘 queries [35,
+43, 59, 60], they are inherently different because they do not assume
+that the results are ranked. They are also different from counting
+queries [32, 63], since these aim at computing an exact value, rather
+than only desiring exact values up to a given threshold. Therefore,
+prior problems are either more specific or have different objectives.
+We examine these differences in depth in Section 6.
+
+Our contributions. We are motivated by the following question:
+Can we exploit the fact that we only need to count or compute the
+answers of a query up to a threshold? In this paper, we answer this
+question positively. The starting point for our work is the obser-
+vation that evaluating some queries with a threshold 𝑘 requires
+storing not more than 𝑘 + 1 intermediate results [18, 51]. We show
+that this idea can be fully integrated with state-of-the-art complex
+join algorithms, leading to significant savings in the size of the
+intermediate results as typically computed in query processing,
+leading for some queries to improvements from ˜𝑂 (𝑛𝑓 ) to ˜𝑂 (𝑛 · 𝑘),
+where 𝑓 is the free-connex treewidth of the query and 𝑘 is the value
+of the threshold. Here, the free-connex treewith of a query mea-
+sures its treewidth in connection with its output variables. It can
+be large even if the query is acyclic.
+
+In detail, the key contributions of our paper are as follows:
+
+(1) New results explaining the interplay between different struc-
+tural properties of conjunctive queries (i.e., select-project-
+join queries) used in sophisticated evaluation algorithms
+(Lemma 4.5), and the consequences for threshold query pro-
+cessing (Theorem 4.7).
+
+(2) New evaluation algorithms for threshold queries (for com-
+puting answers, counting answers, and sampling answers)
+with improved asymptotic guarantees (Theorem 4.10).
+(3) A comprehensive empirical study of threshold queries found
+in the wild, which highlights their characteristics and shows
+that they are quite common in important practical scenarios.
+(4) An experimental evaluation of a proof-of-concept SQL im-
+plementation of our algorithm against the current query
+optimizer in PostgreSQL, showing speedups of several or-
+ders of magnitude.
+
+Our work provides the first in-depth theoretical treatment of thresh-
+old queries. In addition, it also shows that these queries are impor-
+tant in practical settings by means of an in-depth empirical study.
+The paper is organized as follows. Section 2 contains basic defi-
+nitions. In Section 3, we identify the problems of interest, explain
+the complexity-theoretic limits, and explain some of our main ideas
+in an example. Section 4 presents the algorithms for the problems
+of interest. In Section 5, we present experiments and findings on
+threshold queries that can be found in practice. In Section 6, we dis-
+cuss related work. Finally, in Section 7 we summarize our findings
+and outline further research directions. Because of space limitation,
+detailed proofs as well as additional material are omitted and can
+be found in an extended technical report [13].
+
+2 PRELIMINARIES
+Our results apply in both a relational database setting and a graph
+database setting. We first focus on the relational database setting,
+for which we loosely follow the preliminaries as presented in [1].
+We assume that we have countably infinite and disjoint sets Rel of
+relation names and Const of values. Furthermore, when (𝑎1, . . . , 𝑎𝑘 )
+is a Cartesian tuple, we may abbreviate it as ¯𝑎. A 𝑘-ary database
+tuple (henceforth abbreviated as tuple) is an element of Const𝑘
+for some 𝑘 ∈ N. A relation is a finite set 𝑆 of tuples of the same
+arity. We denote the set of all such relations by R. A database is
+a partial function 𝐷 : Rel → R such that Dom(𝐷) is finite. If 𝐷 is
+a database and 𝑅 ∈ Rel, we write 𝑅(𝑎1, . . . , 𝑎𝑘 ) ∈ 𝐷 to denote that
+(𝑎1, . . . , 𝑎𝑘 ) ∈ 𝐷 (𝑅). By Adom(𝐷) we denote the set of constants
+appearing in tuples of 𝐷, also known as the active domain of 𝐷.
+
+For defining conjunctive queries, we assume a countably infinite
+set Var of variables, disjoint from Rel and Const. An atom is an
+expression of the form 𝑅(𝑢1, . . . , 𝑢𝑘 ), where 𝑢𝑖 ∈ Var ∪ Const for
+each 𝑖 ∈ {1, . . . , 𝑘 }. A conjunctive query (CQ) is an expression 𝑞 of
+the form
+
+∃ ¯𝑦 𝐴1 ( ¯𝑢1) ∧ . . . ∧ 𝐴𝑛 ( ¯𝑢𝑛) ,
+where ¯𝑦 = (𝑦1, . . . , 𝑦𝑚) consists of existentially quantified variables
+and each 𝐴𝑖 ( ¯𝑢𝑖 ), with 𝑖 ∈ {1, . . . , 𝑛} is an atom. Each variable that
+appears in ¯𝑦 should also appear in ¯𝑢1, . . . , ¯𝑢𝑛. On the other hand,
+¯𝑢1, . . . , ¯𝑢𝑛 can contain variables not present in ¯𝑦. For a tuple ¯𝑥, we
+write 𝑞( ¯𝑥) to emphasize that 𝑞 is a CQ such that all variables in
+¯𝑢1, . . . , ¯𝑢𝑛 appear in either ¯𝑥 or ¯𝑦. Unless we say otherwise, we
+assume that the variables in ¯𝑢1, . . . , ¯𝑢𝑛 are precisely the variables
+in ¯𝑥 and ¯𝑦. The arity of 𝑞( ¯𝑥) is defined as the arity of the tuple
+¯𝑥. We denote by Var(𝑞) the set of all variables appearing in 𝑞 and
+by FVar(𝑞) the set of so-called free variables of 𝑞, which are the
+variables in Var(𝑞) that are not existentially quantified. A full CQ
+is a CQ without existentially quantified variables.
+
+Query Answers and Relational Algebra. We consider queries un-
+der set semantics, i.e., each answer occurs at most once in the re-
+sult. A binding of 𝑋 ⊆ Var is a function 𝜂 : 𝑋 → Const. We
+say that bindings 𝜂 and 𝜂 ′ are compatible if 𝜂 (𝑥) = 𝜂 ′(𝑥) for all
+𝑥 ∈ Dom(𝜂) ∩ Dom(𝜂 ′). For compatible bindings 𝜂1 and 𝜂2, the
+join of 𝜂1 and 𝜂2, is the binding 𝜂1 ⊲⊳ 𝜂2 such that Dom(𝜂1 ⊲⊳ 𝜂2) =
+Dom(𝜂1) ∪Dom(𝜂2) and (cid:0)𝜂1 ⊲⊳ 𝜂2(cid:1) (𝑥) = 𝜂𝑖 (𝑥) for all 𝑥 ∈ Dom(𝜂𝑖 )
+and 𝑖 ∈ {1, 2}. If 𝑃1 and 𝑃2 are sets of bindings, then the join of 𝑃1 and
+𝑃2 is 𝑃1 ⊲⊳ 𝑃2 = (cid:8)𝜂1 ⊲⊳ 𝜂2 (cid:12)
+(cid:12) 𝜂1 ∈ 𝑃1 and 𝜂2 ∈ 𝑃2 are compatible(cid:9).
+For 𝑋 ⊆ Dom(𝜂), the projection of 𝜂 on 𝑋 , written as 𝜋𝑋 (𝜂), is the
+binding 𝜂 ′ with Dom(𝜂 ′) = 𝑋 ∩ Dom(𝜂) and 𝜂 ′(𝑥) = 𝜂 (𝑥), for
+every 𝑥 ∈ Dom(𝜂 ′). For a set 𝑃 of bindings, the projection of 𝑃 on
+𝑋 is 𝜋𝑋 (𝑃) = (cid:8)𝜋𝑋 (𝜂) (cid:12)
+
+(cid:12) 𝜂 ∈ 𝑃 (cid:9).
+
+A match for 𝑞 in 𝐷 is a binding of Var(𝑞) such that 𝐴𝑖 (𝜂 ( ¯𝑢𝑖 )) ∈ 𝐷
+for every 𝑖 ∈ {1, . . . , 𝑛}.1 The set of answers to 𝑞 on 𝐷 is 𝑞(𝐷) =
+(cid:8)𝜋FVar(𝑞) (𝜂) (cid:12)
+(cid:12) 𝜂 is a match for 𝑞 in 𝐷(cid:9). We define answers as func-
+tions instead of database tuples, as this simplifies the presentation
+and as reasoning about their underlying domains is useful in further
+sections, when dealing with query decompositions.
+
+Threshold Queries. A threshold query (TQ) is an expression 𝑡 of
+
+the form
+
+𝑞( ¯𝑥) ∧ ∃𝑎,𝑏 ¯𝑦 𝑝 ( ¯𝑥, ¯𝑦)
+where, from left to right, 𝑞( ¯𝑥) is a CQ, 𝑎 ∈ N, 𝑏 ∈ N ∪ {∞}, and
+𝑝 ( ¯𝑥, ¯𝑦) is a CQ in which we do not require that every variable in
+¯𝑥 appears in one of its atoms. Notice that a TQ only has a sin-
+gle counting quantifier ∃𝑎,𝑏 , although further ordinary existential
+quantifiers may occur inside 𝑞 and 𝑝. We use ∃ ≥𝑎 and ∃ ≤𝑏 as
+shorthands for ∃𝑎,∞ and ∃0,𝑏 , respectively, and the corresponding
+threshold queries will be called at-least and at-most queries. Similar
+to CQs, we usually denote the entire query as 𝑡 ( ¯𝑥) or even as 𝑡 when
+¯𝑥 is clear from the context. When representing 𝑡 ( ¯𝑥) for decision
+problems, we assume that the numbers 𝑎 and 𝑏 are given in binary.
+As an example, recall the Nobel Prize threshold query in Sec-
+tion 1, and suppose that the schema is NobelPrize(id, year, category)
+and Laureate(nid, name, country) with the foreign key constraint
+Laureate[nid] ⊆ NobelPrize[id]. This threshold query can be for-
+malized as follows.
+𝑡 (𝑥) = ∃𝑥1, 𝑥2. NobelPrize(𝑥, 𝑥1, 𝑥2) ∧ ∃ ≥4𝑦. ∃𝑧. 𝐿𝑎𝑢𝑟𝑒𝑎𝑡𝑒 (𝑥, 𝑦, 𝑧).
+The set of answers of 𝑡 on 𝐷, written 𝑡 (𝐷), is the set of answers
+𝜂 of 𝑞( ¯𝑥) on 𝐷 that have between 𝑎 and 𝑏 compatible answers of
+𝑝 ( ¯𝑥, ¯𝑦). Formally, 𝜂 ∈ 𝑡 (𝐷) iff 𝜂 ∈ 𝑞(𝐷) and 𝑎 ≤ |𝑝 (𝐷, 𝜂)| ≤ 𝑏,
+where 𝑝 (𝐷, 𝜂) = (cid:8)𝜂 ′ ∈ 𝑝 (𝐷) (cid:12)
+
+(cid:12) 𝜂 ′ is compatible with 𝜂(cid:9).
+
+If 𝑡 is a threshold query of the form above, we call ¯𝑥 the free
+variables (or answer variables) of the query 𝑡 and we write FVar(𝑡)
+for the set of these variables. We call ¯𝑦 the tally variables of the query
+𝑡 and we write TVar(𝑡) for the set of these variables. For the ease of
+presentation we shall assume that the sets of existentially quantified
+variables in 𝑞 and 𝑝 are disjoint; we shall write QVar(𝑡) for the
+union of these sets. Thus, Var(𝑡) is the union of three disjoints sets:
+FVar(𝑡), TVar(𝑡), and QVar(𝑡).
+
+A threshold query 𝑡 can be intuitively expressed as a SQL query
+defining 𝑞( ¯𝑥) such that in the WHERE clause we additionally check
+
+1Notice that here we also denote by 𝜂 the extension of 𝜂 that is the identity on Const,
+and its extension thereof to tuples of variables and constants.
+
+if the number of tuples returned by a correlated SELECT-FROM-
+WHERE subquery defining 𝑝 ( ¯𝑥, ¯𝑦) is at least 𝑎 and at most 𝑏.
+
+Graph Databases. For the purposes of this paper, graph databases
+can be abstracted as relational databases with unary and binary
+relations. That is, a graph database can be seen as a database 𝐺
+with a unary relation Node and binary relations 𝐴, 𝐵, . . . where
+
+• Node(𝑎) ∈ 𝐺 if 𝑎 is a node of the graph database and
+• 𝐴(𝑎1, 𝑎2) ∈ 𝐺 if (𝑎1, 𝑎2) is an edge with label 𝐴 in the graph
+
+database.
+
+An important feature that distinguishes graph database queries
+from relational database queries are regular path queries (RPQs)
+[14]. In a nutshell, a regular path query is an expression of the form
+𝑟 (𝑥, 𝑦), where 𝑟 is a regular expression over the set of edge labels
+in the graph database. When evaluated over a graph database 𝐺,
+the query returns all node pairs (𝑢, 𝑣) such that there exists a path
+from 𝑢 to 𝑣 that is labeled with some word in the language of 𝑟 .
+
+All results in the paper extend naturally to RPQs and therefore
+to so-called conjunctive regular path queries (CRPQs) [14]. This
+means that we can generalize CQs to CRPQs, which are defined
+exactly the same as CQs, but we additionally allow RPQs at the level
+of atoms. Generalizing threshold queries is analogous. If we want to
+evaluate a threshold query with RPQs, we can pre-evaluate all RPQs
+in the query and treat their result as a materialized view. We can
+then treat the query as an ordinary threshold query in which each
+RPQ becomes an atom, which is evaluated over the corresponding
+materialized view.
+
+3 EXPLOITING THRESHOLDS AT A GLANCE
+Query evaluation is arguably the most fundamental problem in
+databases and comes in many variants, such as:
+
+(E1) Boolean evaluation, i.e., testing existence of an answer;
+(E2) returning a given number of answers;
+(E3) counting the total number of answers;
+(E4) sampling answers with uniform probability; and
+(E5) enumerating the answers with small delay.
+
+An important reason why all these variants are considered is that
+the set of answers to a query can be very large and one is not always
+interested in the set of all answers.
+
+The computational cost of these variants tends to increase as we
+go down in the list, but already for CQs even the simplest problem
+(E1) is intractable [1, Chapter 15]. Triggered by Yannakakis’ seminal
+result on efficient evaluation of acyclic CQs [71], the literature
+developed a deep understanding that teaches us that, essentially,
+low tree-width is not only helpful but even necessary for polynomial-
+time Boolean evaluation of CQs [39]. Intuitively, the tree-width of a
+CQ measures the likeness of its graph structure to a tree. In essence,
+this graph structure is obtained by taking the queries’ variables
+as nodes and connecting variables with an edge iff they appear
+in a common atom. Queries with low tree-width are tree-like and
+queries with high tree-width are highly cyclic.
+
+Example 3.1. Consider the following variant of the first query
+
+from the introduction:
+
+𝑞(𝑥, 𝑦, 𝑧) ← Assets(𝑥, 𝑦), Subsidiary(𝑤, 𝑥), Shareholder (𝑤, 𝑧) .
+
+For the purpose of Boolean evaluation we can rewrite 𝑞 as
+
+𝑞′() ← Assets(𝑥, 𝑦), 𝑈 (𝑥) ;
+𝑈 (𝑥) ← Subsidiary(𝑤, 𝑥), 𝑉 (𝑤) ;
+𝑉 (𝑤) ← Shareholder (𝑤, 𝑧)
+
+using views 𝑈 and 𝑉 . It is clear that one can materialize the views
+and answer 𝑞′ in time 𝑂 (cid:0)𝑛 · log 𝑛(cid:1) over databases of size 𝑛. The
+tree-width of 𝑞 manifests itself as the number of variables used in
+the definitions of the views. For CQs of tree-width 𝑑, views in the
+optimal rewriting will use up to 𝑑 variables and the data complexity
+will be 𝑂 (cid:0)𝑛𝑑 · log 𝑛(cid:1).
+◁
+
+For threshold queries, however, low tree-width is not sufficient.
+The reason is that it is already hard to decide if the number of results
+of an acyclic CQ is above a threshold (represented in binary).
+
+Proposition 3.2. Given an acyclic conjunctive query 𝑞, a threshold
+𝑘 in binary representation, and a database 𝐷, testing if 𝑞 returns at
+least 𝑘 tuples on 𝐷 is coNP-hard.
+
+So, we cannot have a polynomial-time algorithm even for eval-
+uating Boolean acyclic threshold queries of the form ∃𝑎,𝑏 ¯𝑦 𝑝 ( ¯𝑦),
+unless P = NP. This is why one focus in the paper is on
+
+pseudopolynomial-time algorithms
+for threshold queries of low tree-width.
+We call an algorithm pseudopolynomial, if it is a polynomial-time
+algorithm assuming that the numerical values 𝑎 and 𝑏 in “∃𝑎,𝑏 ¯𝑦”
+are represented in unary (instead of binary). For instance, a pseu-
+dopolynomial algorithm can evaluate threshold queries of the form
+∃𝑎,𝑏 ¯𝑦 𝑝 ( ¯𝑦) by keeping 𝑏 + 1 intermediate results in memory, which
+is not possible in a polynomial-time algorithm.
+
+Let us revisit Example 3.1 and rewrite the query in a suitable way
+to produce its output. The next rewriting is inspired by research
+on constant-delay enumeration and answer counting for CQs.
+
+Example 3.3. The rewriting in Example 3.1 is not suitable for non-
+Boolean evaluation because it projects out answer variables. The
+only way to rewrite 𝑞 while keeping track of all answer variables is
+
+𝑞′′(𝑥, 𝑦, 𝑧) ←Assets(𝑥, 𝑦), 𝑈 (𝑥, 𝑧) ;
+
+𝑈 (𝑥, 𝑧) ←Subsidiary(𝑤, 𝑥), Shareholder (𝑤, 𝑧) .
+The standard approach for constant-delay enumeration algorithms
+[5] first has a preprocessing phase, in which it materializes 𝑈 and
+groups Assets and 𝑈 by 𝑥. In the enumeration phase it iterates over
+possible values of 𝑥 and, for each value of 𝑥, over the contents of
+the corresponding groups of Assets and 𝑈 . The complexity of the
+preprocessing phase is then affected by the cost of materializing 𝑈 ,
+which can be quadratic in the worst case. Overall, the complexity
+is 𝑂 (𝑛2 · log 𝑛) over databases of size 𝑛.
+◁
+
+Evaluating a threshold query is closely related to constant-delay
+enumeration and counting answers to CQs. Indeed, a threshold
+query of the form ∃𝑎,𝑏 ¯𝑦 𝑝 ( ¯𝑦) can be evaluated by enumerating
+answers to 𝑝 up to threshold 𝑏 + 1 or by counting all answers to 𝑝.
+For both these tasks, however, tractability relies on more restrictive
+parameters of the query. For enumeration, tree-width needs to
+be replaced with its free-connex variant [5], which treats answer
+variables in a special way. For counting, the additional parameter
+is the star-size [32]. Intuitively, it measures how many answer
+
+variables are maximally connected to a non-answer variable. The
+query 𝑞 has star-size 2 because the existentially quantified variable
+𝑤 is connected to two answer variables, 𝑥 and 𝑧.
+
+Thus, in the general approaches to constant-delay enumeration
+and counting, complexity is very sensitive to the interaction be-
+tween answer and non-answer variables. Our key insight is that
+in the presence of a threshold this is no longer the case and low
+tree-width is sufficient.
+
+Example 3.4. Consider again query 𝑞 from Example 3.1 and sup-
+pose that we should return up to 𝑐 answers. We can rely on the
+rewriting in Example 3.1, but we need to store additional informa-
+tion when materializing the views. For each 𝑤 in 𝑉 we store up to 𝑐
+witnessing values of 𝑧 such that Shareholder (𝑤, 𝑧) holds. Similarly,
+for each 𝑥 in 𝑈 we store up to 𝑐 values of 𝑧 that were stored as wit-
+nesses for some 𝑤 in 𝑉 with Subsidiary(𝑤, 𝑥). Now, we can obtain
+up to 𝑐 answers to 𝑞 by taking the join of Assets(𝑥, 𝑦) with 𝑈 (𝑥)
+and iterating through the witnessing values of 𝑧 for each 𝑥. Both
+extended materialization steps, as well as the final computation of
+answers, can be realized in time 𝑂 (cid:0)𝑐 ·𝑛 · log(𝑐 ·𝑛)(cid:1). If we are to count
+answers up to threshold 𝑐, we can just count the ones returned by
+◁
+the algorithm above.
+
+This idea allows evaluating low tree-width TQs of the form
+∃𝑎,𝑏 ¯𝑦 𝑝 ( ¯𝑦) in pseudopolynomial-time. It is also crucial in our treat-
+ment of general TQs of the form 𝑞( ¯𝑥) ∧ ∃𝑎,𝑏 ¯𝑦 𝑝 ( ¯𝑥, ¯𝑦) but, as the
+following proposition shows, we cannot expect pseudopolynomial
+evaluation algorithms even for acyclic threshold queries. Our proof
+uses a reduction from MINSAT [52].
+
+Proposition 3.5. Boolean evaluation of acyclic at-least and at-most
+threshold queries is NP-hard, even if thresholds are given in unary.
+
+The reason is that acyclic queries can have arbitrarily high free-
+connex tree-width, which is the actual source of hardness. For TQs of
+bounded free-connex tree-width our approach will yield pseudopoly-
+nomial evaluation algorithms for all variants (E1)–(E5). That is, our
+results are tight in terms of combined complexity.
+
+In the remainder of the paper, we will analyze algorithms using
+˜𝑂-notation. We will use this notation to reflect the data complexity
+of the algorithms and to hide logarithmic factors. Essentially, using
+˜𝑂 allows us to freely use sorting and indexes such as B-trees. For
+instance, if we say that something can be done in time ˜𝑂 (𝑛2) we
+mean that its data complexity is in time 𝑂 (𝑛2 log 𝑛).
+
+4 THRESHOLD QUERIES IN THEORY
+In this section we define the notions of widths and decompositions
+informally discussed in Section 3, explore in depth the approach to
+threshold queries via exact counting, develop the idea illustrated
+in Example 3.4 to cover arbitrary CQs in a slightly more general
+setting involving grouping, and employ the obtained algorithm
+to construct a single data structure that supports constant-delay
+enumeration, counting, and sampling answers to TQs.
+
+4.1 Tree Decompositions and How to Find
+
+Them
+
+The rewritings discussed in Section 3 are guided by tree decompo-
+sitions of queries. A tree decomposition of a conjunctive query 𝑞 is a
+
+𝑇1
+
+{𝑥, 𝑦 }
+
+𝑇3
+
+{𝑥 }
+
+𝑇4
+
+{𝑥 }
+
+{𝑤, 𝑥 }
+
+{𝑤, 𝑧 }
+
+{𝑥, 𝑦 }
+
+{𝑥, 𝑧 }
+
+{𝑥, 𝑦 }
+
+{𝑥, 𝑧 }
+
+{𝑦 }
+
+{𝑧 }
+
+{𝑦 }
+
+{𝑧 }
+
+𝑇2
+
+{𝑥, 𝑦, 𝑧 }
+
+{𝑦, 𝑢 }
+
+{𝑧, 𝑣 }
+
+{𝑦, 𝑦′ }
+
+{𝑧, 𝑧′ }
+
+{𝑤, 𝑥, 𝑧 }
+
+{𝑦, 𝑦′, 𝑢 }
+
+{𝑧, 𝑧′, 𝑣 }
+
+{𝑦′, 𝑢 }
+
+{𝑧′, 𝑣 }
+
+Figure 1: Tree decompositions.
+
+finite tree 𝑇 with a set 𝑋𝑣 ⊆ Var(𝑞), called a bag, assigned to each
+node 𝑣 of 𝑇 , satisfying the following conditions:
+
+(1) for each atom 𝐴 of 𝑞 there exists a node 𝑣 of 𝑇 such that
+
+Var(𝐴) ⊆ 𝑋𝑣 (we say that 𝑣 covers 𝐴);
+
+(2) for each variable 𝑥 ∈ Var(𝑞), the set of nodes 𝑣 of 𝑇 such
+
+that 𝑥 ∈ 𝑋𝑣 forms a connected subgraph of 𝑇 .
+
+By the width of 𝑇 we shall understand max𝑣 ∈𝑇 |𝑋𝑣 |.2 The tree-width
+of query 𝑞, written as tw(𝑞), is the minimal width of a tree decom-
+position of 𝑞. For example, 𝑇1 in Figure 1 is a tree decomposition
+of width 2 for the query 𝑞 in Example 3.1. Since 𝑞 contains atoms
+involving two variables, it does not admit a tree decomposition of
+width 1. Hence, tw(𝑞) = 2.
+
+A tree decomposition 𝑇 of a query 𝑞 is 𝑋 -connex for a set 𝑋 ⊆
+Var(𝑞), if there exists a connected subset 𝑈 of nodes of 𝑇 , containing
+the root of 𝑇 , such that the union of bags associated to nodes in 𝑈 is
+precisely 𝑋 . Note that there is exactly one such 𝑈 that is maximal:
+it is the one that includes all nodes 𝑢 with 𝑋𝑢 ⊆ 𝑋 . We shall refer
+to it as the maximal 𝑋 -connex set in 𝑇 . The 𝑋 -connex tree-width of
+𝑞 is the minimal width of an 𝑋 -connex tree decomposition of 𝑞.
+If 𝑋 = FVar(𝑞), we speak of free-connex decompositions and free-
+connex tree-width; we write fc-tw(𝑞) for the free-connex tree-width
+of 𝑞. For instance, 𝑇2 in Figure 1 is a free-connex tree decomposition
+of width 3 for the query 𝑞 of Example 3.1. It is not hard to see that
+𝑞 has no free-connex decomposition of width 2. That is, tw(𝑞) = 2
+but fc-tw(𝑞) = 3. This difference can be arbitrarily large, e.g., for
+the CQs we used in the proof of Proposition 3.2.
+
+A tree decomposition 𝑇 of 𝑞 is 𝑋 -rooted, for 𝑋 ⊆ Var(𝑞), if the
+root bag of𝑇 is exactly 𝑋 . The 𝑋 -rooted tree-width of 𝑞 is the minimal
+tree-width of an 𝑋 -rooted tree decomposition. By analogy to free-
+connex, if 𝑋 = FVar(𝑞), we speak of free-rooted decompositions and
+free-rooted tree-width.
+
+It is convenient to work with tree decompositions 𝑇 of a special
+shape. A node 𝑢 of 𝑇 is: a project node if it has exactly one child
+𝑣 and 𝑋𝑢 ⊊ 𝑋𝑣; a join node if it has exactly two children, 𝑣1 and
+𝑣2, and 𝑋𝑢 = 𝑋𝑣1 ∪ 𝑋𝑣2 . We say that 𝑢 is safe if each variable in 𝑋𝑢
+occurs in an atom of 𝑞 that is covered either by 𝑢 or by a descendant
+of 𝑢. We say that 𝑇 is nice if each node of 𝑇 is either a leaf or a
+project node or a join node, and all nodes of 𝑇 are safe.
+
+Lemma 4.1. Each tree decomposition 𝑇 of a conjunctive query 𝑞
+can be transformed in polynomial time into a nice tree decomposition
+𝑇 ′ of the same width and linear size. Moreover, if 𝑇 is 𝑋 -rooted or
+𝑋 -connex, so is 𝑇 ′.
+
+2It is customary to define the width of decomposition 𝑇 as max𝑣∈𝑇 |𝑋𝑣 | − 1, to ensure
+that tree-shaped queries have tree-width 1. For the purpose of this paper we prefer
+not to do it, thus avoiding adjustments by 1 in multiple formulas.
+
+We now introduce some notions that will be useful later. With
+each node 𝑢 in a tree decomposition𝑇 of 𝑞 we associate the subquery
+𝑞𝑢 obtained by taking all atoms of 𝑞 over the variables appearing
+in the subtree of 𝑇 rooted at 𝑢, and quantifying existentially all
+used variables except those in 𝑋𝑢 ∪ FVar(𝑞). Let ˇ𝑞𝑢 be the full
+CQ obtained by taking all atoms of 𝑞𝑢 that do not occur in 𝑞𝑣1 ∧
+𝑞𝑣2 ∧ · · · ∧ 𝑞𝑣𝑘 , where 𝑣1, 𝑣2, . . . , 𝑣𝑘 are the children of 𝑢; we then
+have Var( ˇ𝑞𝑢 ) = FVar( ˇ𝑞𝑢 ) ⊆ 𝑋𝑢 . For instance, for the query 𝑞
+discussed in Section 3 and its tree decomposition 𝑇1 shown in
+Figure 1 with nodes numbered 0, 1, 2 starting from the root, we have
+𝑞0 = 𝑞 = ∃𝑤 Assets(𝑥, 𝑦) ∧ Subsidiary(𝑤, 𝑥) ∧ Shareholder (𝑤, 𝑧),
+ˇ𝑞0 = Assets(𝑥, 𝑦), 𝑞1 = ∃𝑥 Subsidiary(𝑤, 𝑥) ∧ Shareholder (𝑤, 𝑧),
+ˇ𝑞1 = Subsidiary(𝑤, 𝑥), and 𝑞2 = ˇ𝑞2 = Shareholder (𝑤, 𝑧). In general,
+if 𝑢 is a leaf then 𝑞𝑢 = ˇ𝑞𝑢 and if 𝑢 is the root then 𝑞𝑢 = 𝑞. One
+can evaluate 𝑞 on a database 𝐷 by computing 𝑞𝑢 (𝐷) bottom up, as
+follows. Assuming that 𝑇 is nice, if 𝑢 is a leaf then
+
+𝑞𝑢 (𝐷) = ˇ𝑞𝑢 (𝐷) ,
+
+if 𝑢 is a project node with child 𝑣 then
+
+𝑞𝑢 (𝐷) = 𝜋FVar(𝑞𝑢 )
+
+(cid:0)𝑞𝑣 (𝐷)(cid:1) ,
+
+and if 𝑢 is a join node with children 𝑣1 and 𝑣2 then
+
+𝑞𝑢 (𝐷) = ˇ𝑞𝑢 (𝐷) ⊲⊳ 𝑞𝑣1 (𝐷) ⊲⊳ 𝑞𝑣2 (𝐷) .
+
+If 𝑇 is free-rooted then FVar(𝑞𝑢 ) ⊆ 𝑋𝑢 for each 𝑢 and the above
+computation can be performed in time ˜𝑂 (|𝐷 |𝑑 ), where 𝑑 is the
+width of 𝑇 . The following simple fact will also be useful.
+
+Lemma 4.2. Let 𝑇 be a nice tree decomposition of a CQ 𝑞.
+(1) For each node 𝑢 in 𝑇 it holds that 𝑋𝑢 ⊆ FVar(𝑞𝑢 ).
+(2) If 𝑇 is 𝑋 -connex and 𝑈 is the maximal 𝑋 -connex set in 𝑇 , then
+each node in 𝑈 either has all its children in 𝑈 or it is a 𝑈 -leaf,
+that is, it has no children in 𝑈 .
+
+Tree decompositions are not easy to find. Indeed, determining if
+an arbitrary graph admits a tree decomposition of width at most 𝑑 is
+NP-hard [3]. However, the problem has been studied in great depth
+and there is an ongoing effort of making these approaches practical
+at large scale. For instance, computing tree decompositions of large
+graphs was the topic of the PACE Challenge [29, 30] twice.
+
+However, in the present context, we only want to compute tree
+decompositions of queries, which are very small in practice. There are
+libraries available [31, 36] that can find optimal tree decompositions
+of queries very efficiently. Indeed, DetkDecomp [31] was used to
+compute the tree-width of more than 800 million real-world queries
+[15–17] and worked very efficiently. Importantly for us, the analysis
+in [15–17] showed that real-life queries have very low tree-width.
+Each algorithm for computing tree decompositions can be used
+also to compute 𝑋 -rooted and 𝑋 -connex tree decompositions, with
+quadratic overhead [5]. In our complexity estimations we rely on
+Bodlaender’s algorithm [11], which allows computing optimal tree
+decompositions in linear time (assuming bounded tree-width).
+
+4.2 Threshold Queries via Exact Counting
+Processing a threshold query
+
+𝑡 ( ¯𝑥) = 𝑞( ¯𝑥) ∧ ∃𝑎,𝑏 ¯𝑦 𝑝 ( ¯𝑥, ¯𝑦)
+
+involves counting, for each answer 𝜂 in 𝑞(𝐷), how many answers
+in 𝑝 (𝐷) are compatible to 𝜂. Formally, this means that we need to
+determine the size of 𝑝 (𝐷, 𝜂) for each 𝜂 ∈ 𝑞(𝐷), where 𝑝 (𝐷, 𝜂) is
+the set of answers in 𝑝 (𝐷) that are compatible to 𝜂. So we need to
+solve the following computational problem for 𝑝.
+
+Counting answers to 𝑝 grouped by 𝑋 ⊆ FVar(𝑝) over
+database 𝐷 consists in computing all pairs (𝜂, 𝑘) such
+that 𝜂 : 𝑋 → Adom(𝐷) and 𝑘 = |𝑝 (𝐷, 𝜂)|.
+
+Counting answers can leverage low star-size [32]. While the
+original notion is designed to fit hypertree decompositions, we
+shall work with a slightly faster growing variant that fits tree de-
+compositions better and is much easier to define; the two variants
+coincide for queries using at most binary atoms. The star-size of a
+conjunctive query 𝑞, written ss(𝑞), is the least positive integer 𝑓
+such that by grouping atoms and pushing quantifiers down, we can
+rewrite 𝑞 as 𝑞1 ∧ 𝑞2 ∧ · · · ∧ 𝑞ℓ with |FVar(𝑞𝑖 )| ≤ 𝑓 or QVar(𝑞𝑖 ) = ∅
+for all 𝑖. The following is a routine generalization of the result on
+counting answers [32].
+
+Proposition 4.3. Counting answers grouped by 𝑋 for conjunctive
+queries of 𝑋 -rooted tree-width 𝑑 and star-size 𝑓 over databases of size
+𝑛 can be done in time ˜𝑂 (cid:0)𝑛𝑑 ·𝑓 (cid:1).
+
+When we consider (constant-delay) enumeration algorithms, we
+see that the state-of-the-art approaches, e.g., [5, 42], use a different
+parameter of the query. Instead of bounded star-size, these rely
+on bounded free-connex tree-width. At first sight, this difference
+is not surprising, because in the absence of a threshold, counting
+and enumeration cannot be reduced to each other. But a closer
+look reveals that both parameters play a similar role: limiting them
+allows to reduce the problem to the much simpler case of full CQs by
+rewriting the input query as a join of views of bounded arity. This is
+readily visible for the star-size method, where the views correspond
+to the queries 𝑞𝑖 in the definition of star-size of 𝑞, but it is also true
+for the free-connex method: there, the views correspond to subtrees
+of the decomposition rooted at the shallowest nodes holding an
+existentially quantified variable. Hence, the methods can be used
+interchangeably and we can replace star-size with free-connex tree-
+width in Proposition 4.3. Below, the 𝑋 -rooted free-connex tree-width
+of a query is the minimal width of a tree decomposition of the query
+that is both 𝑋 -rooted and free-connex.
+
+Proposition 4.4. Counting answers grouped by 𝑋 for conjunctive
+queries of 𝑋 -rooted free-connex tree-width 𝑑 over databases of size 𝑛
+can be done in time ˜𝑂 (cid:0)𝑛𝑑 (cid:1).
+
+In particular, all answers to 𝑝 can be counted in ˜𝑂 (cid:0)𝑛tw(𝑝) ·ss(𝑝) (cid:1)
+by Proposition 4.3 or in ˜𝑂 (cid:0)𝑛fc-tw(𝑝) (cid:1) by Proposition 4.4. The fol-
+lowing lemma shows that the latter bound is tighter, so we shall
+rely on Proposition 4.4.
+
+Lemma 4.5. For each conjunctive query 𝑝,
+
+ss(𝑝) ≤ fc-tw(𝑝) ≤ tw(𝑝) · max (cid:0)1, ss(𝑝)(cid:1) .
+
+The same holds for the 𝑋 -rooted variant and the 𝑋 -connex variant,
+for every 𝑋 ⊆ FVar(𝑝). Moreover, there exist CQs 𝑝 with arbitrarily
+large fc-tw(𝑝) that satisfy fc-tw(𝑝) ≤ (cid:112)tw(𝑝) · ss(𝑝) + 1.
+
+𝐵
+
+Algorithm 1 Answers to 𝑝 grouped by 𝑋 up to threshold 𝑐
+
+𝐵
+
+𝑒1
+
+𝑏1
+
+𝐸
+
+𝐷
+
+𝐷
+
+𝑑1
+
+𝐵
+
+𝐷
+
+𝑏2
+
+𝑎1
+𝐶
+
+𝑐1
+
+𝐶
+
+𝐷
+
+𝑐2
+
+𝐷
+
+𝐷
+
+𝑑2
+
+𝑏3
+
+𝑒2
+
+𝑒3
+
+𝐸
+
+𝐸
+
+Figure 2: Database from Example 4.6.
+
+Let us now come back to the threshold query 𝑡. By a tree de-
+composition of 𝑡 we shall mean a tree decomposition of the as-
+sociated CQ 𝑞 ∧ 𝑝. Based on this, we define all variants of tree-
+width for threshold queries just like for CQs. Importantly, free-
+connex refers to FVar(𝑡)-connex, not FVar(𝑞 ∧𝑝)-connex. Applying
+Proposition 4.4 requires an FVar(𝑝)-connex decomposition; that is,
+FTVar(𝑡)-connex in terms of 𝑡, where FTVar(𝑡) = FVar(𝑡) ∪TVar(𝑡).
+Moreover, to avoid manipulating full answers, we need to factorize
+the evaluation of 𝑞 and counting answers to 𝑝 grouped by FVar(𝑡)
+in a compatible way. This can be done if our decomposition is
+also FVar(𝑡)-connex. Putting it together, we arrive at free-connex
+FTVar(𝑡)-connex decompositions of 𝑡.
+
+Example 4.6. Consider an at-least query
+
+𝑡 (𝑥, 𝑦, 𝑧) = 𝐵(𝑥, 𝑦) ∧ 𝐶 (𝑥, 𝑧) ∧ ∃ ≥3 (𝑢, 𝑣) 𝑟 (𝑦, 𝑢) ∧ 𝑠 (𝑧, 𝑣)
+for 𝑟 (𝑦, 𝑢) = ∃𝑦 ′ 𝐷 (𝑦, 𝑦 ′) ∧ 𝐸 (𝑦 ′, 𝑢), 𝑠 (𝑧, 𝑣) = ∃𝑧 ′ 𝐷 (𝑧, 𝑧 ′) ∧ 𝐸 (𝑧 ′, 𝑣).
+Figure 1 shows a free-connex FTVar(𝑡)-connex tree decomposition
+𝑇3 of 𝑡 of minimal width, which is 3. The subqueries 𝑟 (𝑦, 𝑢) and
+𝑠 (𝑧, 𝑣) correspond to bags {𝑦} and {𝑧}, respectively, and the subtrees
+rooted at these bags are {𝑦}-rooted (resp. {𝑧}-rooted) free-connex
+tree decompositions for these subqueries. Consider the input data-
+base in Figure 2. Let us count the answers to 𝑟 (𝑦, 𝑢) grouped by
+𝑦 and the answers to 𝑠 (𝑧, 𝑣) grouped by 𝑧 (using Proposition 4.4)
+and store the resulting pairs in sets 𝑅 {𝑦 } and 𝑅 {𝑧 }, respectively. We
+get 𝑅 {𝑦 } = 𝑅 {𝑧 } = (cid:8)(𝑏1, 1), (𝑏2, 1), (𝑏3, 2), (𝑐1, 3), (𝑐2, 2)(cid:9), where
+a pair (𝑏, 𝑘) in 𝑅 {𝑦 } means that for 𝑦 = 𝑏 there are 𝑘 witness-
+ing values of 𝑢, and similarly for 𝑅 {𝑧 }. This is the initial informa-
+tion that we shall now propagate up the tree. In the set 𝑅 {𝑥,𝑦 }
+we put triples (𝑎, 𝑏, 𝑘) such that 𝐵(𝑎, 𝑏) and for 𝑦 = 𝑏 there are 𝑘
+witnessing values of 𝑢; analogously for 𝑅 {𝑥,𝑧 }. We get 𝑅 {𝑥,𝑦 } =
+(cid:8)(𝑎1, 𝑏1, 1), (𝑎1, 𝑏2, 1), (𝑎1, 𝑏3, 2)(cid:9), 𝑅 {𝑥,𝑧 } = (cid:8)(𝑎1, 𝑐1, 3), (𝑎1, 𝑐2, 2)(cid:9).
+These sets can be computed based on 𝑅 {𝑦 } and 𝑅 {𝑧 }, respectively.
+The set 𝑅 {𝑥 } stores pairs (𝑎, 𝑘) such that 𝑘 is the maximal number of
+witnessing pairs of values for 𝑢 and 𝑣 that any combination of 𝑦 = 𝑏
+and 𝑧 = 𝑐 with 𝐵(𝑎, 𝑏) and 𝐶 (𝑎, 𝑐) can provide. In our case, 𝑅 {𝑥 } =
+(cid:8)(𝑎1, 6)(cid:9). Because 𝑏 and 𝑐 can be chosen independently from each
+other, we have 𝑘 = 𝑚 · 𝑛, where 𝑚 = max𝑎 (cid:8)ℓ (cid:12)
+(cid:9)
+(cid:12) (𝑎, 𝑏, ℓ) ∈ 𝑅 {𝑥,𝑦 }
+(cid:9). That is, the only information
+and 𝑛 = max𝑏
+(cid:12) (𝑎, 𝑐, ℓ) ∈ 𝑅 {𝑥,𝑧 }
+that needs to be passed from {𝑥, 𝑦} to {𝑥 } is the set 𝑅′
+of pairs
+(𝑎, 𝑚) with 𝑚 defined as above, and similarly for {𝑥, 𝑧}. In our case,
+{𝑥,𝑧 } = (cid:8)(𝑎, 3)(cid:9). We return YES iff 𝑅 {𝑥 }
+{𝑥,𝑦 } = (cid:8)(𝑎, 2)(cid:9) and 𝑅′
+𝑅′
+◁
+contains a pair (𝑎, 𝑘) with 𝑘 ≥ 3. In our case, it is so.
+
+{𝑥,𝑦 }
+
+(cid:8)ℓ (cid:12)
+
+Theorem 4.7. Boolean evaluation of an at-most or at-least query 𝑡
+of free-connex FTVar(𝑡)-connex tree-width 𝑑 over databases of size 𝑛
+can be done in time ˜𝑂 (𝑛𝑑 ). The combined complexity of the algorithm
+is polynomial, assuming 𝑑 is constant.
+
+In terms of combined complexity, Theorem 4.7 is optimal as both
+conditions imposed on tree decompositions are needed. Indeed, the
+
+1: 𝑇 ← a nice 𝑋 -rooted tree decomposition of 𝑝
+2: loop through nodes 𝑢 of 𝑇 bottom-up
+3:
+
+if 𝑢 is a leaf then 𝐴𝑢 ← 𝑝𝑢 (𝐷)
+if 𝑢 is a project node with child 𝑣 then
+
+𝐴𝑢 ← prune 𝑐
+𝑋𝑢
+
+(cid:0)𝜋FVar(𝑝𝑢 ) (𝐴𝑣)(cid:1)
+
+if 𝑢 is a join node with children 𝑣1, 𝑣2 then
+
+𝐴𝑢 ← prune 𝑐
+𝑋𝑢
+
+(cid:0)𝐴𝑣1 ⊲⊳ 𝐴𝑣2 ⊲⊳ ˇ𝑝𝑢 (𝐷)(cid:1)
+
+4:
+
+5:
+
+6:
+
+7:
+
+hard TQs used in Proposition 3.5 have FTVar(𝑡)-connex tree-width
+2; and the hard Boolean TQs stemming from Proposition 3.2 have
+free-connex tree-width 2.
+
+4.3 Threshold Problems for CQs
+In terms of data complexity, however, we can improve Theorem 4.7.
+Here we exploit the presence of thresholds to handle queries with
+unbounded FTVar(𝑡)-connex tree-width. We will cover not only
+at-least and at-most queries, but arbitrary TQs, and we will solve
+not only Boolean evaluation, but also constant-delay enumeration,
+counting answers, and sampling, all based on a single data structure.
+The small price we have to pay is pseudopolynomial combined
+complexity. Our starting point is again the problem of counting
+grouped answers, but this time up to a threshold.
+
+Counting answers to 𝑝 grouped by 𝑋 ⊆ FVar(𝑝) up to a threshold
+𝑐 over database 𝐷 consists in computing the set of pairs (𝜂, 𝑘)
+such that 𝜂 : 𝑋 → Adom(𝐷) and 𝑘 = min(𝑐, |𝑝 (𝐷, 𝜂)|).
+
+In the presence of a threshold, it is not impractical to solve counting
+by enumerating answers. This is what we shall do.
+
+Computing answers to query 𝑝 grouped by 𝑋 ⊆ FVar(𝑝) up to a
+threshold 𝑐 over database 𝐷 consists in computing a subset 𝐴 of
+𝑝 (𝐷) that is complete for 𝑋 and 𝑐; i.e., for each 𝜂 : 𝑋 → Adom(𝐷)
+either 𝑝 (𝐷, 𝜂) ⊆ 𝐴 and |𝑝 (𝐷, 𝜂)| ≤ 𝑐, or |𝑝 (𝐷, 𝜂) ∩ 𝐴| = 𝑐.
+Consider a CQ 𝑝, a set 𝑋 ⊆ FVar(𝑝) of grouping variables, and
+a database 𝐷. We will use the term group to refer to the set of
+answers to 𝑝 that agree on the grouping variables 𝑋 ; that is, a
+subset of 𝑝 (𝐷) of the form 𝑝 (𝐷, 𝜂) for some 𝜂 : 𝑋 → Adom(𝐷). If
+the 𝑋 -rooted tree-width of 𝑝 is 𝑑, then |𝑋 | ≤ 𝑑 and the number of
+groups is 𝑂 (|𝐷 |𝑑 ). Consequently, if we can compute answers to 𝑝
+grouped by 𝑋 up to threshold 𝑐 in time ˜𝑂 (𝑐 · |𝐷 |𝑑 ), then we can
+also count them within the same time, because we will get at most
+𝑐 answers per group. Additionally, for each 𝜂 : 𝑋 → Adom(𝐷)
+with 𝑝 (𝐷, 𝜂) = ∅, we need to include (𝜂, 0) into the result; this does
+not affect the complexity bound. Hence, it suffices to show how to
+compute answers grouped by 𝑋 up to threshold 𝑐. Having seen an
+illustrating example in Section 3, we are ready for the full solution.
+
+Theorem 4.8. Computing answers grouped by 𝑋 up to a threshold
+𝑐 for conjunctive queries of 𝑋 -rooted tree-width 𝑑 over databases of
+size 𝑛 can be done in time ˜𝑂 (𝑐 · 𝑛𝑑 ).
+
+Proof sketch. Consider Algorithm 1. We begin by computing
+a nice 𝑋 -rooted tree decomposition 𝑇 of minimal width 𝑑, as de-
+scribed in Section 4.1. That is, each bag of 𝑇 has size at most 𝑑 and
+the root bag is 𝑋 . Consider the queries 𝑝𝑢 associated to nodes 𝑢
+
+of 𝑇 . By Lemma 4.2, 𝑋𝑢 ⊆ FVar(𝑝𝑢 ). By analogy to the evaluation
+algorithm described in Section 4.1, for each 𝑢 we solve the problem
+of computing answers to 𝑝𝑢 grouped by 𝑋𝑢 up to threshold 𝑐 over
+𝐷; that is, we compute a subset 𝐴𝑢 ⊆ 𝑝𝑢 (𝐷) that is complete for
+𝑋𝑢 and 𝑐. The final answer is then the set obtained in the root.
+
+If 𝑢 is a leaf, then 𝑋𝑢 = FVar(𝑝𝑢 ) = Var(𝑝𝑢 ) and 𝑝𝑢 (𝐷) it-
+self is the only subset of 𝑝𝑢 (𝐷) complete for 𝑋𝑢 and 𝑐. Because
+|Var(𝑝𝑢 )| ≤ 𝑑, one can compute 𝑝𝑢 (𝐷) in time ˜𝑂 (cid:0)|𝐷 |𝑑 (cid:1).
+
+Consider a project node 𝑢 and its unique child 𝑣. Then 𝑋𝑢 ⊊ 𝑋𝑣.
+To compute 𝐴𝑢 the algorithm projects 𝐴𝑣 on FVar(𝑝𝑢 ) and then,
+using the operation prune 𝑐
+, it groups the resulting set of bindings
+𝑋𝑢
+by 𝑋𝑢 and keeps only 𝑐 bindings from each group. It is clear that
+this can be done in time ˜𝑂 (𝑐 · |𝐷 |𝑑 ).
+
+Finally, consider a join node 𝑢 with children 𝑣1, 𝑣2. As explained
+in Section 4.1, the set 𝑝𝑢 (𝐷) is then the join of 𝑝𝑣1 (𝐷), 𝑝𝑣2 (𝐷), and
+ˇ𝑝𝑢 (𝐷). We compute 𝐴𝑢 in exactly the same way, except that for
+each binding 𝜂 of variables in 𝑋𝑢 we only keep the first 𝑐 bindings
+extending 𝜂 and discard the remaining ones. Naive implementation
+takes time ˜𝑂 (cid:0)𝑐2 · |𝐷 |𝑑 (cid:1), but it is easy to modify the standard merge-
+join algorithm to achieve this in time ˜𝑂 (cid:0)𝑐 · |𝐷 |𝑑 (cid:1).
+
+It is routine to check that each 𝐴𝑢 is complete for 𝑋𝑢 and 𝑐. □
+
+Recall that 𝑑 is very small in practice and most queries can be
+expected to be acyclic [16]. If we are just interested in returning
+answers up to a threshold 𝑐 (no grouping), then the algorithm under-
+lying the present theorem improves the state-of-the-art algorithm
+from ˜𝑂 (𝑛𝑓 ) to ˜𝑂 (𝑐 ·𝑛) for acyclic queries, where 𝑓 is the free-connex
+treewidth of the query, which can be large even for acyclic queries.
+
+4.4 Processing Threshold Queries
+We now turn to processing general threshold queries. We give a
+unified approach to constant-delay enumeration, counting, and
+sampling, based on a single data structure that can be computed
+using the methods presented in Section 4.3.
+
+Example 4.9. Consider again the database from Figure 2 and the
+query 𝑡 from Example 4.6. This time we shall work with the free-
+connex tree decomposition 𝑇4 of 𝑡 shown in Figure 1; it has smaller
+width than 𝑇3. Like before, the subqueries 𝑟 (𝑦, 𝑢) and 𝑠 (𝑧, 𝑣) corre-
+spond to bags {𝑦} and {𝑧}, respectively, and the subtrees rooted at
+these bags are {𝑦}-rooted (resp. {𝑧}-rooted) tree decompositions
+for these subqueries, but they are not free-connex. We count the
+answers to 𝑟 grouped by 𝑦 and the answers to 𝑠 grouped by 𝑧, up
+to threshold 3, as described in Section 4.3, and store the results in
+sets 𝑅 {𝑦 } and 𝑅 {𝑧 }, respectively. Because the counts obtained in
+Example 4.6 were all below 3, 𝑅 {𝑦 } and 𝑅 {𝑧 } are just like before.
+Sets 𝑅 {𝑥,𝑦 } and 𝑅 {𝑥,𝑧 } are also computed like before. For Boolean
+evaluation we would now put into 𝑅′
+all pairs (𝑎, 𝑚) such that
+𝑚 is the maximal number of witnessing values 𝑢 that any 𝑦 = 𝑏
+with 𝐵(𝑎, 𝑏) can provide. To support constant-delay enumeration
+we need to pass more information up the tree: we include all pairs
+(𝑎, 𝑘) such that some 𝑦 = 𝑏 with 𝐵(𝑎, 𝑏) can provide 𝑘 witnesses
+(up to threshold 3); that is, we forget the values 𝑏, but we keep
+all values 𝑘 (up to 3), not only the greatest of them. In our case,
+{𝑥,𝑦 } = (cid:8)(𝑎1, 2), (𝑎1, 3)(cid:9). In the root
+{𝑥,𝑦 } = (cid:8)(𝑎1, 1), (𝑎1, 2)(cid:9) and 𝑅′
+𝑅′
+we store the set 𝑅 {𝑥 } of values 𝑎 such that some combination of
+
+{𝑥,𝑦 }
+
+Algorithm 2 Record sets 𝑅𝑢 for nodes 𝑢 ∈ 𝑈 of decomposition 𝑇
+
+1: loop through nodes 𝑢 ∈ 𝑈 of 𝑇 bottom-up
+2:
+
+if 𝑢 is a 𝑈 -leaf of 𝑇 then
+
+𝑅𝑢 ← (cid:0)𝑞𝑢 (𝐷) × {1}(cid:1) ⊲⊳ 𝑝𝑢 (𝐷, FVar(𝑝𝑢 ) ∩ FVar(𝑡), 𝑐)
+
+3:
+
+4:
+
+5:
+
+6:
+
+7:
+
+8:
+
+9:
+
+if 𝑢 is a project node of 𝑇 with child 𝑣 ∈ 𝑈 then
+
+𝑅𝑢 ← 𝛾witnessCount, 𝑋𝑢 ; sum(multiplicity)
+
+(cid:0)𝑅𝑣 (cid:1)
+
+if 𝑢 is a join node of 𝑇 with children 𝑣1, 𝑣2 ∈ 𝑈 then
+𝑐
+⊲⊳ 𝑅𝑣2 ⋉ ˇ𝑞𝑢 (𝐷)
+𝑅𝑣1,𝑣2,𝑢 ← 𝑅𝑣1
+𝑣1,𝑣2,𝑢 ← 𝑅𝑣1,𝑣2,𝑢 ⋉ ˇ𝑝𝑢 (𝐷) ⊎ 𝑅𝑣1,𝑣2,𝑢 ⊲ ˇ𝑝𝑢 (𝐷)
+𝑅′
+𝑅𝑢 ← 𝛾witnessCount, 𝑋𝑢 ; sum(multiplicity)
+𝑣1,𝑣2,𝑢
+
+(cid:0)𝑅′
+
+(cid:1)
+
+10:
+
+if 𝑢 is the root of 𝑇 then 𝑅𝑢 ← 𝜎𝑎 ≤witnessCount ≤𝑏 (cid:0)𝑅𝑢 (cid:1)
+
+{𝑥,𝑧 }
+
+{𝑥,𝑦 }
+
+{𝑥,𝑦 }
+
+{𝑥,𝑦 }
+
+{𝑥,𝑦 }
+
+{𝑥,𝑦 }
+
+{𝑥,𝑦 }
+
+𝑦 = 𝑏 and 𝑧 = 𝑐 with 𝐵(𝑎, 𝑏) and 𝐶 (𝑎, 𝑐) can provide at least 3 wit-
+nessing pairs of values for 𝑢 and 𝑣. The set 𝑅 {𝑥 } can be obtained by
+taking all 𝑎 such that there exist (𝑎, 𝑚) ∈ 𝑅′
+{𝑥,𝑧 }
+with 𝑚 · 𝑛 ≥ 3. In our case, 𝑅 {𝑥 } = {𝑎1}.
+
+and (𝑎, 𝑛) ∈ 𝑅′
+
+and 𝑅′
+
+and (𝑎, 𝑛) ∈ 𝑅′
+
+from 𝑅 {𝑥,𝑦 } and 𝑅 {𝑥,𝑧 }
+
+In the enumeration phase, we iterate over all combinations
+of (𝑎, 𝑚) ∈ 𝑅′
+with 𝑎 ∈ 𝑅 {𝑥 }. For each
+such combination we iterate over corresponding (𝑎, 𝑏, 𝑚) ∈ 𝑅 {𝑥,𝑦 }
+and (𝑎, 𝑐, 𝑛) ∈ 𝑅 {𝑥,𝑧 } and return (𝑎, 𝑏, 𝑐). In our case this gives
+(𝑎1, 𝑏1, 𝑐1), (𝑎1, 𝑏2, 𝑐1), (𝑎1, 𝑏3, 𝑐1), and (𝑎1, 𝑏3, 𝑐2). To access rele-
+vant (𝑎, 𝑏, 𝑚) and (𝑎, 𝑐, 𝑛) directly, we use an index that can be built
+while constructing 𝑅′
+
+{𝑥,𝑧 }
+To support counting and sampling, we add multiplicities to the
+pairs stored in the nodes of the decomposition. Specifically, for
+each (𝑎, 𝑚) ∈ 𝑅′
+we also store the number of values 𝑏 with
+𝐵(𝑎, 𝑏) that provide 𝑛 witnesses (up to 3). In our case, the mul-
+tiplicity of (𝑎1, 1) in 𝑅′
+is 2, and all other multiplicities in
+and 𝑅′
+𝑅′
+are 1. Similarly, for each 𝑎 ∈ 𝑅 {𝑥 } we store
+the number of combinations of 𝑏 and 𝑐 with 𝐵(𝑎, 𝑏) and 𝐶 (𝑎, 𝑐)
+that provide at least 3 pairs of witnesses. In our case, the multi-
+plicity of 𝑎1 in 𝑅 {𝑥 } is 4: the witnessing combinations are (𝑏1, 𝑐1),
+(𝑏2, 𝑐1), (𝑏3, 𝑐1), and (𝑏3, 𝑐2). The number of answers to 𝑡 is the the
+sum of all multiplicities in the root. In our case it is 4. To sample
+an answer, we first sample 𝑎 ∈ 𝑅 {𝑥 } with weights given by the
+multiplicities. In our case we choose 𝑎1 with probability 1. Then
+we sample (cid:0)(𝑎, 𝑚), (𝑎, 𝑛)(cid:1) ∈ 𝑅 {𝑥,𝑦 } × 𝑅 {𝑥,𝑧 } such that 𝑚 · 𝑛 ≥ 3
+with weights given by the product of the multiplicities of (𝑎, 𝑚) in
+. In our case, (cid:0)(𝑎1, 1), (𝑎1, 3)(cid:1) is chosen
+𝑅′
+with probability 1
+2 , and both (cid:0)(𝑎1, 2), (𝑎1, 3)(cid:1) and (cid:0)(𝑎1, 2), (𝑎1, 2)(cid:1)
+with probability 1
+4 . Finally, we sample (𝑎, 𝑏, 𝑚) and (𝑎, 𝑐, 𝑛) uni-
+formly among relevant triples in 𝑅 {𝑥,𝑦 } and 𝑅 {𝑥,𝑧 }, respectively,
+and we return (𝑎, 𝑏, 𝑐). In our case, for (cid:0)(𝑎1, 1), (𝑎1, 3)(cid:1) we choose
+either (cid:0)(𝑎1, 𝑏1, 1), (𝑎1, 𝑐1, 3)(cid:1) or (cid:0)(𝑎1, 𝑏2, 1), (𝑎1, 𝑐1, 3)(cid:1) with proba-
+bility 1
+2 , and for (cid:0)(𝑎1, 2), (𝑎1, 3)(cid:1) and (cid:0)(𝑎1, 2), (𝑎1, 2)(cid:1) there is only
+one choice; overall, each answer is returned with probability 1
+4 . ◁
+
+and (𝑎, 𝑛) in 𝑅′
+
+{𝑥,𝑦 }
+
+{𝑥,𝑧 }
+
+{𝑥,𝑧 }
+
+Theorem 4.10. For TQs of free-connex tree-width 𝑑, over databases
+of size 𝑛, one can: count answers in time ˜𝑂 (𝑛𝑑 ); enumerate answers
+with constant delay after ˜𝑂 (𝑛𝑑 ) preprocessing; and sample answers
+uniformly at random in constant time after ˜𝑂 (𝑛𝑑 ) preprocessing.
+Assuming 𝑑 is constant, the combined complexity of each of these
+algorithms is pseudopolynomial.
+
+Compared to [5, 32], this theorem provides the same complexity
+guarantees as for counting answers and enumerating answers for
+conjunctive queries, but we are able to generalize these to thresh-
+old queries (and add sampling). This generalization comes at the
+small cost of dependence on the value of the threshold. The results
+in [5, 32] can be strengthened to more refined measures such as
+hypertreewidth, but we believe that this is also true here.
+
+Proof sketch. Consider a database 𝐷 and a threshold query
+
+𝑡 ( ¯𝑥) = 𝑞( ¯𝑥) ∧ ∃𝑎,𝑏 ¯𝑦 𝑝 ( ¯𝑥, ¯𝑦) .
+
+We write 𝑐 for the threshold up to which we will be counting
+witnesses: if 𝑏 < ∞, we let 𝑐 = 𝑏 + 1; if 𝑏 = ∞, we let 𝑐 = 𝑎. Let 𝑇
+be a nice free-connex tree decomposition of 𝑡, of width 𝑑, and let 𝑈
+be the maximal free-connex set in 𝑇 .
+
+Being a tree decomposition of 𝑟 ( ¯𝑥, ¯𝑦) = 𝑞( ¯𝑥) ∧ 𝑝 ( ¯𝑥, ¯𝑦), up to
+dropping unused variables, 𝑇 is a tree decomposition of both 𝑝 ( ¯𝑥)
+and 𝑞( ¯𝑥, ¯𝑦). Let 𝑞𝑢 and 𝑝𝑢 be the corresponding subqueries asso-
+ciated to node 𝑢. With each node 𝑢 ∈ 𝑈 we associate the set 𝑅𝑢
+of records that will provide information necessary to enumerate,
+count, and sample answers to 𝑡. A record for 𝑢 ∈ 𝑈 is a triple (𝜂, 𝑛, 𝑘)
+consisting of a binding 𝜂 : 𝑋𝑢 → Adom(𝐷), a multiplicity 𝑛 > 0,
+and a witness count 𝑘 ∈ {0, 1, . . . , 𝑐} such that there are exactly 𝑛
+extensions 𝜂 ′ of 𝜂 to FVar(𝑞𝑢 ) ∪ (cid:0)FVar(𝑝𝑢 ) ∩ FVar(𝑡)(cid:1) such that
+𝜋FVar(𝑞𝑢 ) (𝜂 ′) ∈ 𝑞𝑢 (𝐷) and 𝑘 = min (cid:0)𝑐, |𝑝𝑢 (𝐷, 𝜂 ′)|(cid:1). We can inter-
+pret a record (𝜂, 𝑛, 𝑘) as a binding extending 𝜂 to two fresh variables,
+multiplicity and witnessCount, with values 𝑛 and 𝑘.
+
+By Lemma 4.2, each node in 𝑢 either is a 𝑈 -leaf or has all its
+children in 𝑈 . Consequently, we can compute 𝑅𝑢 for 𝑢 ∈ 𝑈 bottom-
+up, as in Algorithm 2. In 𝑈 -leaves, we use Theorem 4.8 to get a
+solution 𝑝𝑢 (cid:0)𝐷, FVar(𝑝𝑢 ) ∩ FVar(𝑡), 𝑐(cid:1) to the problem of counting
+answers to 𝑝𝑢 grouped by FVar(𝑝𝑢 ) ∩ FVar(𝑡) up to threshold 𝑐
+over 𝐷; the set 𝑞𝑢 (𝐷) of all answers to 𝑞𝑢 over 𝐷 is computed
+as explained in Section 4.1. Higher up the tree, we compute 𝑅𝑢
+based on the values obtained for the children of 𝑢, by means of
+standard relational operators with multiset semantics, including
+𝑐
+grouping (𝛾) and antijoin (⊲), as well as the 𝑐-join 𝑅𝑣1
+⊲⊳ 𝑅𝑣2 defined
+as the multiset of records (cid:0)𝜂1 ⊲⊳ 𝜂2, 𝑛1 · 𝑛2, min(𝑐, 𝑘1 · 𝑘2)(cid:1) such that
+(𝜂1, 𝑛1, 𝑘1) ∈ 𝑅𝑣1 , (𝜂2, 𝑛2, 𝑘2) ∈ 𝑅𝑣2 , and 𝜂1 is compatible with 𝜂2.
+Each 𝑅𝑢 is computed in ˜𝑂 (𝑐 · |𝐷 |𝑑 ). With all 𝑅𝑢 at hand, we can
+enumerate, count, and sample answers to 𝑡 as in Example 4.9. □
+
+5 THRESHOLD QUERIES IN THE WILD
+In this section we give evidence that threshold queries are indeed
+common and useful in practice. Furthermore, we present an experi-
+mental evaluation of our algorithm.
+
+5.1 Quantitative Study on Query Logs
+We first present some analytical results on large-scale real-world
+query logs from Wikidata’s SPARQL query service [69]. Our study
+considers a corpus of more than 560M queries. (Previous work has
+considered a subset in the order of 200M queries [15].) These logs
+contain a massive amount of real-life queries, which are classified
+into (1) robotic (high-volume, single-source bursts) and organic
+(human-in-the-loop) [58]. Furthermore, the logs distinguish be-
+tween successful (“OK”) and timeout (“TO”) requests.
+
+20.2%
+
+41.4%
+
+24.8%
+
+organic
+
+6.3%
+
+7.4%
+
+≥ 10000
+1000 – 9999
+
+100 – 999
+
+10 – 99
+
+1 – 9
+
+63.4%
+
+15.3%
+
+12.0% 9.2%
+
+Threshold value
+
+robotic
+
+Figure 3: Threshold value occurrence ratio in organic and
+robotic CRPQ logs.
+
+Occurrences of Threshold Queries. We first report on the usage of
+the keywords LIMIT and ORDER BY in the Wikidata logs, which
+contain ∼563M well-formed queries, among which ∼74M are unique
+(Table 1). Since our algorithms apply to CRPQs, we focus on those.
+As can be seen in the table, these still constitute 45.2% of the queries
+and 56.4% of the unique ones. In the remainder of this part, when-
+ever we write a percentage as X% (Y%), then X refers to all and Y to
+the unique queries i.e., the set of queries after removing duplicates.
+If we simply investigate how many CRPQs use LIMIT (columns
+All and Unique), these numbers are not so spectacular. Indeed,
+around 6% (4.5%) of the CRPQs use the LIMIT operator. What is
+remarkable though, is that almost all these queries that use LIMIT,
+do not use an ORDER BY operation (bottom line of Table 1).
+
+By looking at the data more closely, we discovered that many of
+these queries are rather trivial in the sense that they only use one
+atom (or, equivalently, just one RDF triple pattern), which means
+that they do not even perform a join. For this reason, we decided
+to zoom in on the queries with at least two atoms, see the columns
+All (≥ 2) and Unique (≥ 2). It turns out that the numbers change
+significantly: around 14.9% (45.3%) of the CRPQs with at least two
+triples use LIMIT, which is a significant amount. Again, we see that
+almost all the queries that use LIMIT, do not use ORDER BY.
+
+This is remarkable, because a commonly held belief is that LIMIT
+is most often used in combination with ORDER BY, i.e., as a means
+to express top-𝑘 queries. But, in this major real-world query log,
+this is not the case. Indeed, almost all non-trivial queries using
+LIMIT are threshold queries, seeking to return just an arbitrary
+unranked sample of results. In fact, we have run the same analysis
+on a broader class of queries (CRPQ𝑓 , which extend CRPQ with
+unary filter conditions) and the percentages were very similar.
+
+LIMIT Values. We now investigate the values of the thresholds
+of queries in the logs. To this end, we considered the subset of
+CRPQs in the raw logs that use the keyword LIMIT (∼15.2M queries,
+including duplicates). To gain deeper insight, we break down the
+logs into robotic (∼15.2M) and organic (∼44k) queries. Fig. 3 shows
+the relative shares of threshold values with varying numbers of
+digits. The figure shows that threshold values between 1 and 9 are
+the most common. Still, in both organic and robotic queries, we
+see that large threshold values (≥ 10K) are not uncommon. Since
+robotic logs can have large bursts of similar queries, we see that
+the distribution is not as smooth as for organic logs. For instance,
+only 0.08% of queries in the robotic logs have three-digit limit
+values (depicted in blue), whereas there are much more (9.2%) with
+four-digit values (depicted in green). The largest value we found in
+
+Table 1: Statistics of Wikidata query logs. Percentages in the top half are relative to the total number of queries. Percentages
+in the bottom half are relative to the number of CRPQs.
+
+Query Class
+All Queries
+CRPQ
+
+CRPQ
+CRPQ
+
+All
+
+Unique
+
+All (≥ 2)
+
+Unique (≥ 2)
+
+563,066,025
+254,241,512
+
+100.0%
+45.2%
+
+74,060,492
+41,778,884
+
+100.0%
+56.4%
+
+254,802,446
+88,390,479
+
+100.0%
+34.7%
+
+30,502,206
+3,346,280
+
+100.0%
+11.0%
+
+15,225,933
+15,214,527
+
+6.0%
+6.0%
+
+1,896,811
+1,894,879
+
+4.5%
+4.5%
+
+13,205,975
+13,195,363
+
+14.9%
+14.9%
+
+1,514,221
+1,512,629
+
+45.3%
+45.2%
+
+With Limit
+With Limit, no Order
+
+robotic logs had 9 digits. In organic logs, however, we found three
+limit values containing 11, 14, and 17 digits, respectively.
+
+Conclusion of Quantitative Study. Threshold queries are indeed
+quite common, e.g., in querying knowledge bases such as Wikidata.
+Since the actual values of the thresholds are typically small, our
+empirical study confirms the utility in practice of our pseudopoly-
+nomial algorithm (Theorem 4.10) that, in order to evaluate queries
+with a threshold 𝑘, solely needs to maintain up to 𝑘 + 1 intermediate
+results per each candidate answer tuple. This is in contrast with
+traditional query plans where the number of intermediate results
+per candidate answer tuple is determined by the input data and
+therefore potentially orders of magnitude larger.
+
+5.2 Qualitative Study
+To demonstrate further the usefulness of threshold queries in prac-
+tice across diverse contemporary domains, we also performed a
+qualitative study on two real-world graph datasets.
+
+Covid-19 Dataset. The Covid-19 Knowledge Graph [26] is a con-
+tinuously evolving dataset, with more than 10M nodes and 25M
+edges, obtained by integrating various data sources, including
+gene expression repositories (e.g., the Genotype Tissue Expres-
+sion (GTEx) and the COVID-19 Disease Map genes), as well as
+article collections from different scientific domains (ArXiv, BioRxiv,
+MedRxiv, PubMed, and PubMed Central). The inferred schema of
+this graph exhibits more than 60 distinct node labels and more than
+70 distinct edge labels [54]. Such typing information is, however,
+not sufficient to express the domain-specific constraints that can
+be found in these real-life graph datasets. Non-trivial constraints
+expressible with threshold queries can be naturally crafted in order
+to complement the schema, as we showcase in our study.
+
+Wikidata Dataset. Wikidata is a collaborative knowledge base
+launched in 2012 and hosted by the Wikimedia Foundation [67]. By
+the efforts of thousands of volunteers, the project has produced a
+large, open knowledge base with numerous applications. Wikidata
+can be seen as a graph database with a SPARQL endpoint that lets
+users and APIs run queries on its massive knowledge graph. The
+query logs collected along the years on this endpoint [53] constitute
+a useful resource for the qualitative analysis of threshold queries.
+
+Working Method. We have manually inspected the Covid-19
+Knowledge Graph schema in search of constraints that can be
+validated with threshold queries. We have also found a number of
+threshold queries by sieving through a large sample of Wikidata
+query logs. We analyzed the structural properties of the collected
+threshold queries. Below we discuss our findings with the help of
+
+TQ1 ?name
+
+TQ3 c:Country
+
+?person
+∃ >1000
+
+e
+∃ < 3
+
+TQ2 p:Protein
+
+maps∗...
+
+t:GOTerm
+∃ > 43917
+
+a:AgeGroup
+
+TQ4
+
+𝑥1
+
+p
+
+r
+
+o
+
+t
+
+e
+
+i
+
+n
+
+I
+
+D
+
+LIMIT 1000
+
+𝑥2
+
+molecular function |
+|
+cell component
+biological process
+
+𝑥3
+
+s
+t
+a
+t
+e
+d
+
+i
+n
+
+d
+e
+r
+i
+v
+e
+d
+
+f
+r
+o
+m
+/
+
+molecular function |
+cell component |
+biological process
+
+𝑥4
+
+of
+
+instance
+
+𝑥7
+
+𝑥6
+
+PubMed ID
+
+published in
+
+𝑥8
+
+𝑥5
+
+Figure 4: Structural diagrams of selected threshold queries.
+
+five selected threshold queries from the two datasets. The queries
+are depicted in Figure 4. We focus on the structure of the underlying
+graph patters, omitting most of the labels. Constants are in quotes,
+variables are in rounded rectangles, and output variables have a
+double edge. Wavy edges represent path expressions in the original
+query. For readability, we sometimes change the labels of nodes.
+
+Selected Queries. The first example comes from the Wikidata logs
+
+and appears to be a data exploration query.
+TQ1 Return all given names with more than 1000 occurrences.
+
+SELECT ? name WHERE { ? person < given_name > ? name }
+GROUP BY ? name
+
+HAVING ( ( COUNT (*) > 1000 ) );
+
+A structurally similar query can help detect integrity violations
+in the Covid-19 Knowledge Graph. Namely, the latest release (June
+2021) of the Gene Ontology (GO) contains 43917 valid terms [24,
+25]. Therefore, in the Covid-19 Knowledge Graph one can check
+whether a protein is suspicious if it exhibits more than this number
+of GO terms associated to it.
+TQ2 Find each protein that has more than 43917 associated gene
+
+ontology terms.
+
+A formulation of this query in Cypher-like syntax follows.3
+
+MATCH (p: Protein ) -[: MAPS * . : HAS_ASSOCIATION .
+
+(: IS_A *| PART_OF *) ] - >( t: GOTerm )
+
+WITH p , COUNT ( DISTINCT t) AS count_go
+WHERE count_go > 43917 RETURN p;
+
+Notice the large threshold and the complex regular expression.
+
+As another example, reporting coverage in the Covid-19 Knowl-
+edge Graph demands that for each age group, in each country,
+there should be at least three reports for the current number of
+Covid cases (one for females, one for males, and one for the total).
+Deviations can be identified with the following threshold query.
+
+3Note that Cypher does not currently support concatenation (:A . :B).
+
+TQ3 Find each country that does not have three reports for some
+
+age group.
+
+This query can be expressed in Cypher-like syntax as follows.
+
+MATCH (c: Country ) -[e: CURRENT_FEMALE | CURRENT_MALE
+
+| CURRENT_TOTAL ] - >( a: AgeGroup )
+
+WITH c , a , COUNT ( type (e)) AS ecount
+WHERE ecount < 3 RETURN c , a;
+
+We point out that this query although acyclic is not free-connex.
+We also discovered that graph patterns in limit-𝑘 queries can be
+
+quite large, as in the following query from the Wikidata logs.
+
+TQ4 Return 1000 tuples containing names (x1) and UniProt IDs (x2)
+for genes with domains (x3) referenced in “Science”, “Nature,”
+or “Cell” articles, as well as their indirect domain label (x4)
+and class (x5), the article name (x6), and its PubMed ID (x7).
+
+Conclusion of Qualitative Study. Our qualitative study discovered
+several interesting and realistic uses of threshold queries that we
+illustrated here. Connecting these to our algorithms, it is interest-
+ing to note that all these queries are acyclic, but only TQ1-TQ2
+are free-connex (Fig. 4). For instance, TQ4 has star size 3 (due to
+𝑥3, which has 3 neighboring nodes that propagate to the output)
+and free-connex tree-width 4. Evaluation of such queries with ex-
+isting querying approaches may incur significant cost while our
+algorithms handle them very efficiently. For instance, TQ4 can be
+evaluated in linear time by Algorithm 1 (up to logarithmic factors),
+while the approach via enumeration [5] requires at least cubic time.
+
+5.3 Experimental Study
+As a proof-of-concept, we implemented the algorithm in Theo-
+rem 4.8 in SQL and compared it with the optimizer of a popular
+DBMS engine, namely the PostgreSQL 13.4 optimizer. Using SQL
+windowing functions, our implementation can mimic some impor-
+tant aspects of our query evaluation algorithm (like internal infor-
+mation passing up to a threshold), but we note that SQL does not
+allow to capture our algorithm precisely. As shown in the remain-
+der, the results of this comparison already show the superiority of
+our algorithm for threshold queries compared to naive evaluation.
+All the experiments were executed on an Intel Core i7-4770K
+CPU @ 3.50GHz, 16GB of RAM, and an SSD. We used PostgreSQL
+13.4 in Linux Mint 20.2 and built our own micro-benchmark [12]
+consisting of the following three types of query templates:
+
+(q1) 𝑘-path selects up to 10 pairs of nodes linked by a 𝑘-hop path;
+(q2) 𝑘-neigh selects all nodes with ≥ 10 𝑘-hop neighbors;
+(q3) 𝑘-conn selects all pairs of nodes linked by ≥ 10 𝑘-hop paths.
+Assuming that the database consists of a single binary relation 𝑅,
+then these queries for 𝑘 = 2 can be naturally formulated in SQL as:
+
+SELECT DISTINCT R1 .A , R2 .B FROM R AS R1 , R AS R2
+WHERE R1 .B = R2 .A LIMIT 10;
+
+SELECT R1 .A FROM R AS R1 , R AS R2 WHERE R1 .B = R2 .A
+GROUP BY R1 .A HAVING COUNT ( DISTINCT R2 .B) >= 10;
+
+SELECT X0 , X2 FROM
+
+( SELECT DISTINCT R1 .A AS X0 , R1 .B AS X1 , R2 .B AS X2
+FROM R AS R1 , R AS R2 WHERE R1 . B = R2 .A) AS SUB
+
+GROUP BY X0 , X2 HAVING COUNT (*) >= 10;
+
+In the following, we will refer to these formulations as the baseline
+formulations of the queries.
+
+We compared these queries with alternative formulations in SQL
+that mimic crucial aspects of our evaluation algorithm and that can
+be understood as follows. A simple decomposition for 𝑘-path is a
+tree with a single branch and one node per each joined copy of table
+R. For this decomposition and 𝑘 = 2 the algorithm in Theorem 4.8
+amounts to evaluating the following query:
+
+WITH J1 AS ( SELECT DISTINCT A AS X1 , B AS X2 FROM R ) ,
+
+W1 AS ( SELECT X1 , X2 , ROW_NUMBER () OVER
+
+( PARTITION BY X1 ) AS RK FROM J1 ) ,
+
+S1 AS ( SELECT X1 , X2 FROM W1 WHERE RK <= 10) ,
+J2 AS ( SELECT DISTINCT R .A AS X0 , X2
+
+FROM R , S1 WHERE R.B = S1 . X1 ) ,
+
+W2 AS ( SELECT X0 , X2 , ROW_NUMBER () OVER
+
+S2 AS ( SELECT X0 , X2 FROM W2 WHERE RK <= 10)
+
+( PARTITION BY X0 ) AS RK FROM J2 ) ,
+
+SELECT X0 , X2 FROM S2 LIMIT 10;
+
+For 𝑘-neigh we can use the same decomposition and the corre-
+sponding query is the same except for the last line which is
+
+SELECT X0 FROM S1 GROUP BY X0 HAVING count (*) >=10;
+
+For 𝑘-conn we can also use the same decomposition but the corre-
+sponding query is a bit different, as we need to collect the whole
+paths, not just their endpoints. We refer to these alternative im-
+plementations as the windowed versions of the queries. Natural
+query plans for the windowed versions have worst-case complexity
+˜𝑂 (𝑘 · 𝑛) for 𝑘-path and 𝑘-neigh, and ˜𝑂 (𝑘 · 𝑛2) for 𝑘-conn.
+
+Datasets. We considered two kinds of data sets:
+
+(1) The real-world IMDb data set used in Join Order Benchmark [55],
+which contains information about movies and related facts
+about actors, directors, production companies, etc. In our ex-
+periments, we focused on the movie_link relation, which has a
+graph-like structure, so that finding paths is meaningful.
+(2) Barabási-Albert graphs [7], which are synthetic data sets that
+model the structure of social networks, with varying parameters
+of 𝑛 (total number of nodes to add) and 𝑚0 (the number of edges
+to attach from newly added nodes to existing nodes).
+
+We repeated each experiment several times and report the median.
+
+First Experiment. We compared the running time of the base-
+line and windowed versions of (q1–q3) for varying values of 𝑘
+on both the IMDb and synthetic data sets, both on fully indexed
+and non-indexed databases. Table 2 shows the results for the non-
+indexed case. We see that our approach (windowed) outperforms
+the baseline with speedups up to three orders of magnitude, while
+the baseline times out (T/O) for higher values of 𝑘. The running
+times of the windowed versions reflect the good theoretical bounds,
+while the baseline clearly shows exponential dependence on 𝑘. For
+the indexed case, leveraging the DBMS’s default indexes, the base-
+line ran only marginally faster (∼5%), remaining three orders of
+magnitude slower than our algorithm.
+
+Second Experiment. In this second experiment, we wanted to
+assess the impact of the structure and size of the data on the run-
+times of our algorithm. To this purpose, we have employed the
+Barabási-Albert synthetic graphs with varying outdegree (𝑚0) and
+number of nodes (𝑛) and considered query q2 with 𝑘 = 3. Table 3
+shows the different speedups that the windowed approach offers,
+when compared to the baseline. We varied 𝑚0 from 5 to 25, us-
+ing increments of 5, and varied 𝑛 from 32 to 1M in a logarithmic
+
+Table 2: Experimental evaluation for the baseline (b) and windowed (w) versions of (q1–q3) on the IMDb database (left) and on
+Barabási-Albert graphs (right) with 𝑚0 = 10 and 𝑛 = 3000. Time is measured in ms. Better running time is depicted in bold.
+
+𝑘
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+q1/b
+39
+q1/w 39
+q2/b
+50
+q2/w 44
+q3/b
+94
+q3/w 146
+
+277
+58
+349
+63
+
+652
+690
+
+5,157
+69
+5,742
+74
+11,568
+2,695
+
+103,449
+88
+134,970
+93
+267,176
+5,266
+
+T/O
+97
+T/O
+104
+T/O
+10,679
+
+T/O
+115
+T/O
+119
+T/O
+18,400
+
+T/O
+132
+T/O
+137
+T/O
+31,020
+
+T/O
+148
+T/O
+150
+T/O
+48,942
+
+T/O
+162
+T/O
+167
+T/O
+74,795
+
+T/O
+176
+T/O
+180
+T/O
+103,054
+
+1
+
+74
+80
+
+138
+152
+
+273
+420
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+549
+196
+1,296
+282
+
+2,423
+4,201
+
+3,364
+298
+11,207
+399
+
+18,670
+23,903
+
+19,161
+404
+90,199
+506
+122,894
+57,555
+
+106,741
+537
+644,860
+579
+T/O
+109,764
+
+601,279
+665
+T/O
+653
+T/O
+189,893
+
+T/O
+1,260
+T/O
+1,235
+T/O
+301,510
+
+T/O
+1,478
+T/O
+1,390
+T/O
+390,968
+
+T/O
+1,547
+T/O
+1,540
+T/O
+510,171
+
+T/O
+1,675
+T/O
+1,667
+T/O
+576,009
+
+Table 3: Experimental evaluation of the speedup factor (the
+ratio of baseline to windowed) for q2 on Barabási-Albert
+graphs for varying 𝑛 and 𝑚0.
+
+𝑚0\𝑛
+
+5
+10
+15
+20
+25
+
+32
+
+0.6
+1.4
+2.1
+1.1
+0.6
+
+100
+
+1.8
+6.8
+16.3
+35.4
+55.2
+
+316
+
+3.0
+13.8
+46.6
+96.0
+184.7
+
+1k
+
+3.2k
+
+10k
+
+32k
+
+100k
+
+316k
+
+1M
+
+3.6
+22.8
+66.2
+149.1
+272.5
+
+4.6
+29.7
+90.5
+192.8
+351.7
+
+5.7
+6.7
+37.1
+40.0
+120.4
+T/O
+T/O
+404.3
+T/O T/O
+
+7.7
+73.5
+T/O
+T/O
+T/O
+
+8.7
+10.0
+T/O T/O
+T/O T/O
+T/O T/O
+T/O T/O
+
+√
+
+10 ≈ 3.16. In the table, we see that
+scale with increment factor of
+the speedup factor of the windowed approach increases by up to
+three orders of magnitude as the size of the data and out-degree
+𝑚0 increase. T/O means that the baseline approach timed out (>
+30 minutes). For all entries in Table 3, the windowed algorithm
+terminated under 15 minutes. These results show the robustness of
+our algorithm to variations of dataset size and outdegree as well as
+its superiority with respect to the baseline.
+
+6 RELATED WORK
+
+Top-𝑘 and Any-𝑘. The potential of predefined thresholds to speed
+up query processing was first noticed by Carey and Kossmann [18],
+who explored ways of propagating thresholds down query plans,
+dubbed LIMIT pushing. This early study only considered applying
+the thresholds directly to subplans, which made joins a formidable
+obstacle. In contrast, we first group the answers to subqueries by
+variables determined based on the structure of the whole query,
+and then apply thresholds within groups; this way we can push
+thresholds down through multi-way joins, guided by a tree decom-
+position of the query. Most follow-up work concerns the ranked
+scenario, where the goal is to compute top-𝑘 answers according to
+a specified preference order. The celebrated Threshold Algorithm
+[33] solves the top-𝑘 selection problem: it operates on a single
+vertically-partitioned table, with each partition being managed by a
+different external service that only knows the scores of base tuples
+in its own partition, and produces 𝑘 tuples with the highest score
+while minimizing the number of reads. There are also multiple
+approaches to the more general top-𝑘 join problem. J* [60] is based
+on the A* search algorithm: it maintains a priority queue of partial
+and complete join combinations ordered by the upper bounds of
+their scores. Rank-Join [43] maintains scores for complete join com-
+binations only, and stops when new combinations cannot improve
+the current top-𝑘. LARA-J* [59] offers improved handling of multi-
+way joins. FRPA [35] keeps the number of reads within a constant
+factor of the optimal. Overall, the focus and the main challenge in
+
+top-𝑘 processing is ordering the answers according to their ranking
+scores [44]. In the unranked case, when this challenge is absent,
+the rich body of work on top-𝑘 processing does not go beyond the
+initial observations made by Carey and Kossmann [18]. NeedleTail
+[50, 51] specifically focuses on providing any-𝑘 answers to queries
+without ORDER BY clauses, but it only handles key-foreign key joins,
+which dominate in the OLAP scenarios. In contrast, we support
+arbitrary CQs (i.e., select-project-join queries), allowing the com-
+plexity to grow with the tree-width (Theorem 4.8). Moreover, any-𝑘
+evaluation of CQs is just a building block of the processing of much
+more general threshold queries.
+
+Runtime optimization. A large body of research on query pro-
+cessing led to powerful optimization techniques, such as aggregate
+pushing [20, 21, 40, 70] and sideways information passing [10, 22, 46,
+57, 62]. These techniques aim to speed up the execution of a given
+join plan and rely on a cost model to heuristically approximate
+instance-optimal plans. Our focus is on reducing the search space
+of the heuristic methods by identifying plans with good worst-case
+guarantees. Such plans can be further improved towards instance-
+optimality, using classical techniques. For LIMIT queries the combi-
+nation of sideways information passing and LIMIT pushing might
+be beneficial. Indeed, if we can ensure that each tuple produced by
+the subplan extends to a full answer, then we can stop the execution
+of the subplan when the desired number of tuples is output. For
+general threshold queries, the potential for such optimization is less
+clear. There, instead of a global limit on the number of answers we
+have a per-group limit. Consequently, the execution of the subplan
+can be stopped only when each group has sufficiently many tuples.
+The level of savings depends on the order in which the subplan
+produces its results. Such optimization goes beyond the scope of
+our paper, but is a promising direction for future work.
+
+Quantified Graph Patterns. Fan et al. [34] introduced quantified
+graph patterns (QGP) that allow expressing nested counting proper-
+ties like having at least 5 friends, each with at least 2 pets. In contrast
+to threshold queries, QGPs are unable to count 𝑘-hop neighbours
+for 𝑘 ≥ 2, nor can they count tuples of variables. Moreover, QGPs
+adopt isomorphism matching, while threshold queries follow the
+standard semantics of database queries.
+
+Aggregate Queries. In the context of factorized databases, Bak-
+ibayev et al. [6] observed that pushing aggregation down through
+joins can speed up evaluating queries. These results can be reinter-
+preted in the context of tree decompositions [61], but they optimize
+different aggregates in isolation and do not investigate the interplay
+
+between counting and existential quantification. AJAR (aggrega-
+tions and joins over annotated relations) [47] and FAQs (functional
+aggregate queries) [49] are two very general sister formalisms cap-
+turing, among others, CQs enriched with multiple aggregate func-
+tions. Because different aggregate functions are never commutative,
+the evaluation algorithms for both these formalisms require decom-
+positions consistent with the order of aggregating operations. For
+example, when applied to counting answers to CQs, this amounts to
+free-connex decompositions, as in our Proposition 4.4. In contrast,
+we remove the free-connex assumption by showing that counting
+up to a threshold and existential quantification can be reordered at
+the cost of keeping additional information of limited size.
+
+Counting Answers. For projection-free CQs, the complexity of
+counting answers is tightly bound to tree-width [27, 37], just like
+in the case of Boolean evaluation [38, 39], but the presence of
+projection makes counting answers intractable even for acyclic
+CQs [63]. Efficient algorithms for counting answers require not
+only low tree-width but also low star-size [32]. However, when the
+problem is relaxed to randomized approximate counting, low tree-
+width is enough [2], just like for Boolean evaluation. Our results
+imply that for a different relaxation — counting exactly, but only up
+to a given threshold — CQs of low tree-width can also be processed
+efficiently. However, we go far beyond CQs and show how to count
+answers to threshold queries (which themselves generalize counting
+answers to CQs up to a threshold).
+
+Enumerating Answers. Also in the context of constant-delay
+enumeration low tree-width is not enough to guarantee efficient
+algorithms: the query needs to have low free-connex tree-width
+[5]. Importantly, even acyclic queries can have very large free-
+connex tree-width. Tree-width with can be replaced with fractional
+hypertree-width [28, 48, 61] or submodular width [9] but always in
+the restrictive free-connex variant. Tziavelis et al. [64, 65] partially
+lift these results to the setting of ranked enumeration, where query
+answers must be enumerated according to a predefined order; the
+lifted results allow enumeration with logarithmic delay and handle
+projection-free CQs of low submodular width as well as free-connex
+acyclic CQs (but not general CQs). In this work, we show that if the
+number of needed answers is known beforehand, general CQs of
+low tree-width can be processed efficiently even if they have large
+free-connex tree width. Moreover, this result is only the starting
+point for processing general threshold queries, for which we also
+provide constant-delay enumeration algorithms.
+
+Sampling Answers. Sampling query answers was identified as an
+important data management task by Chaudhuri at al. [19], who pro-
+posed a simple algorithm for sampling the join 𝑆 ⊲⊳ 𝑇 by sampling
+a tuple 𝑠 ∈ 𝑆 with weight |𝑇 ⋉ {𝑠}| and then uniformly sampling
+a tuple 𝑡 ∈ 𝑇 ⋉ {𝑠}. Using the alias method for weighted sampling
+[66, 68], this algorithm can be implemented in such a way that
+after a linear preprocessing phase, independent samples can be
+obtained in constant time. This approach was generalized to acyclic
+projection-free CQs [72]. We extend the latter result in three ways:
+we handle non-acyclic CQs, allowing the complexity to grow with
+the tree-width; we can allow projection, at the cost of replacing
+tree-width with its faster growing free-connex variant; and we han-
+dle threshold queries, rather than just CQs. A different approach
+
+to non-acyclic projection-free CQs [23] provides a uniform sam-
+pling algorithm with guarantees on the expected running time; this
+is incomparable to constant-time sampling after polynomial-time
+preprocessing, offered by our approach. Finally, Arenas et al. [2]
+show that efficient almost uniform sampling is possible for CQs
+of low tree-width. Here, almost uniform means that the algorithm
+approximates the uniform distribution up to a multiplicative error;
+this is a weaker notion than uniform sampling. Let us also reiterate
+that the all these papers only consider CQs, not threshold queries.
+
+7 CONCLUSIONS AND FUTURE WORK
+In this paper, we have embarked on a deep theoretical study of a
+newly identified class of threshold queries. Our extensive empirical
+study shows that threshold queries are highly relevant in practice as
+witnessed by their utility in real-world knowledge graphs and their
+presence in massive query logs. Our theoretical investigation shows
+that threshold queries occupy a distinctive spot in the landscape of
+database querying problems. Indeed, our complexity analysis proves
+that threshold queries allow for a more efficient evaluation than
+solutions for closely related problems of counting query answers,
+constant-delay query answer enumeration, and top-𝑘 querying.
+
+As one of the first future steps, we intend to gauge thoroughly
+the performance of the proposed algorithms. Designing adequate
+protocols for experimental evaluation requires a deep understand-
+ing of the relationships between evaluation of threshold queries
+and the related querying problems, which we have already accom-
+plished in the present paper. We intend to carry out a comprehen-
+sive implementation of threshold queries in an existing database
+system similarly to how algorithms of top-k queries have been im-
+plemented and evaluated [56]. More precisely, we will implement
+dedicated threshold-aware variants of relational operators and then
+we will introduce them in the query planning stage.
+
+Our work has led us to identify remarkable similarities in the
+query answering methods tackling counting and enumerating an-
+swers: they rely on various techniques for compiling out existen-
+tially quantified variables. We plan to pursue this discovery further
+and give full treatment to the emerging question: is there a unifying
+framework for assessing threshold queries and the related prob-
+lems? Further theoretical results about threshold queries can be
+envisioned, such as establishing a dichotomy of evaluation complex-
+ity and identifying a condition under which evaluation is strongly
+polynomial, rather than pseudopolynomial.
+
+ACKNOWLEDGMENTS
+This work stems from a larger effort on developing schemas for
+property graph databases, including cardinality constraints, led
+by the LDBC Property Graph Schema Working Group. We thank
+Andrea Calì, Leonid Libkin, Victor Lee, Juan Sequeda, Bryon Jacob,
+and Michael Schmidt for their useful comments and early feedback.
+This work was partially supported by DFG grants 369116833 and
+431183758 (Martens); NCN grant 2018/30/E/ST6/00042 (Murlak);
+ANR-21-CE48-0015 VeriGraph (Bonifati); EU Horizon 2020 research
+and innovation programme under grant agreement No 825041
+(Fletcher).
+
+REFERENCES
+[1] Marcelo Arenas, Pablo Barceló, Leonid Libkin, Wim Martens, and Andreas Pieris.
+2021. Principles of Databases. Open source at https://github.com/pdm-book/
+community (visited: 2022-01).
+
+[2] Marcelo Arenas, Luis Alberto Croquevielle, Rajesh Jayaram, and Cristian Riveros.
+2021. When is Approximate Counting for Conjunctive Queries Tractable?. In
+Proceedings of the 53rd Annual ACM SIGACT Symposium on Theory of Computing
+(Virtual, Italy) (STOC 2021). Association for Computing Machinery, New York,
+NY, USA, 1015–1027. https://doi.org/10.1145/3406325.3451014
+
+[3] Stefan Arnborg, Derek G. Corneil, and Andrzej Proskurowski. 1987. Complexity
+of finding embeddings in a k-tree. SIAM JOURNAL OF DISCRETE MATHEMATICS
+8, 2 (1987), 277–284. https://doi.org/10.1137/0608024
+
+[4] Raabia Asif and Mohammad Abdul Qadir. 2017. Enhancing the Nobel Prize
+schema. In 2017 International Conference on Communication, Computing and
+Digital Systems (C-CODE). IEEE, Islamabad,Pakistan, 193–198. https://doi.org/10.
+1109/C-CODE.2017.7918927
+
+[5] Guillaume Bagan, Arnaud Durand, and Etienne Grandjean. 2007. On Acyclic
+Conjunctive Queries and Constant Delay Enumeration. In Proc. CSL 2007 (LNCS),
+Vol. 4646. Springer, Berlin, Heidelberg, 208–222. https://doi.org/10.1007/978-3-
+540-74915-8_18
+
+[6] Nurzhan Bakibayev, Tomáš Kočiský, Dan Olteanu, and Jakub Závodný. 2013.
+Aggregation and Ordering in Factorised Databases. Proc. VLDB Endow. 6, 14 (Sept.
+2013), 1990–2001. https://doi.org/10.14778/2556549.2556579
+
+[7] Albert-László Barabási and Réka Albert. 1999. Emergence of scaling in random
+networks. Science 286, 5439 (1999), 509–512. https://doi.org/10.1126/science.286.
+5439.509
+
+[8] Leilani Battle and Carlos Scheidegger. 2021. A Structured Review of Data Manage-
+ment Technology for Interactive Visualization and Analysis. IEEE Trans. Vis. Com-
+put. Graph. 27, 2 (2021), 1128–1138. https://doi.org/10.1109/TVCG.2020.3028891
+[9] Christoph Berkholz and Nicole Schweikardt. 2019. Constant Delay Enumeration
+with FPT-Preprocessing for Conjunctive Queries of Bounded Submodular Width.
+In Proc. MFCS 2019 (LIPIcs), Vol. 138. Schloss Dagstuhl - Leibniz-Zentrum für
+Informatik, Dagstuhl, Germany, 58:1–58:15. https://doi.org/10.4230/LIPIcs.MFCS.
+2019.58
+
+[10] Philip A. Bernstein and Dah-Ming W. Chiu. 1981. Using Semi-Joins to Solve
+Relational Queries. J. ACM 28, 1 (1981), 25––40. https://doi.org/10.1145/322234.
+322238
+
+[11] Hans L. Bodlaender. 1996. A Linear-Time Algorithm for Finding Tree-
+
+Decompositions of Small Treewidth. SIAM J. Comput. 25, 6 (1996), 1305–1317.
+[12] Angela Bonifati, Stefania Dumbrava, George Fletcher, Jan Hidders, Matthias
+Hofer, Wim Martens, Filip Murlak, Joshua Shinavier, Sławek Staworko, and
+Dominik Tomaszuk. 2021. Threshold queries in Python. Zenodo. https://doi.org/
+10.5281/zenodo.5658389
+
+[13] Angela Bonifati, Stefania Dumbrava, George Fletcher, Jan Hidders, Matthias
+Hofer, Wim Martens, Filip Murlak, Joshua Shinavier, Sławek Staworko, and
+Dominik Tomaszuk. 2021. Threshold Queries in Theory and in the Wild.
+arXiv:2106.15703 [cs.DB]
+
+[14] Angela Bonifati, George Fletcher, Hannes Voigt, and Nikolay Yakovets. 2018.
+Querying Graphs. Morgan & Claypool Publishers, Williston. https://doi.org/10.
+2200/S00873ED1V01Y201808DTM051
+
+[15] Angela Bonifati, Wim Martens, and Thomas Timm. 2019. Navigating the maze
+of Wikidata query logs. In The World Wide Web Conference. Association for
+Computing Machinery, New York, NY, USA, 127–138. https://doi.org/10.1145/
+3308558.3313472
+
+[16] Angela Bonifati, Wim Martens, and Thomas Timm. 2020. An analytical study of
+large SPARQL query logs. VLDB J. 29, 2-3 (2020), 655–679. https://doi.org/10.
+1007/s00778-019-00558-9
+
+[17] Angela Bonifati, Wim Martens, and Thomas Timm. 2020. SHARQL: Shape Anal-
+ysis of Recursive SPARQL Queries. In International Conference on Management
+of Data (SIGMOD). Association for Computing Machinery, New York, NY, USA,
+2701–2704. https://doi.org/10.1145/3318464.3384684
+
+[18] Michael J. Carey and Donald Kossmann. 1997. On Saying “Enough Already!” in
+SQL. In Proceedings of the 1997 ACM SIGMOD international conference on Manage-
+ment of data (Tucson, Arizona, USA) (SIGMOD ’97). Association for Computing
+Machinery, New York, NY, USA, 219–230. https://doi.org/10.1145/253260.253302
+[19] Surajit Chaudhuri, Rajeev Motwani, and Vivek R. Narasayya. 1999. On Random
+Sampling over Joins. In SIGMOD 1999, Proceedings ACM SIGMOD International
+Conference on Management of Data, June 1-3, 1999, Philadelphia, Pennsylvania,
+USA, Alex Delis, Christos Faloutsos, and Shahram Ghandeharizadeh (Eds.), Vol. 28.
+Association for Computing Machinery, New York, NY, USA, 263–274. https:
+//doi.org/10.1145/304181.304206
+
+[20] Surajit Chaudhuri and Kyuseok Shim. 1994. Including Group-By in Query Opti-
+mization. In VLDB. Morgan Kaufmann, San Francisco, CA, USA, 354–366.
+[21] Surajit Chaudhuri and Kyuseok Shim. 1996. Optimizing Queries with Aggregate
+Views. In EDBT (Lecture Notes in Computer Science), Vol. 1057. Springer, 167––182.
+https://doi.org/10.1007/BFb0014151
+
+[22] Ming-Syan Chen, Hui-I Hsiao, and Philip S. Yu. 1997. On Applying Hash Filters
+to Improving the Execution of Multi-Join Queries. VLDB J. 6, 2 (1997), 121–131.
+https://doi.org/10.1007/s007780050036
+
+[23] Yu Chen and Ke Yi. 2020. Random Sampling and Size Estimation Over Cyclic Joins.
+In 23rd International Conference on Database Theory, ICDT 2020, March 30-April
+2, 2020 (LIPIcs), Carsten Lutz and Jean Christoph Jung (Eds.), Vol. 155. Schloss
+Dagstuhl - Leibniz-Zentrum für Informatik, Copenhagen, Denmark, 7:1–7:18.
+
+[24] The Gene Ontology Consortium. 2018. The Gene Ontology Resource: 20 years
+and still GOing strong. Nucleic Acids Research 47, D1 (11 2018), D330–D338.
+https://doi.org/10.1093/nar/gky1055
+
+[25] The Gene Ontology Consortium. 2021. Gene Ontology Resource. http://
+
+geneontology.org/stats.html (visited: 2021-06).
+
+[26] CovidGraph. 2021. COVID-19 Knowledge Graph. https://covidgraph.org/.
+[27] Víctor Dalmau and Peter Jonsson. 2004. The complexity of counting homomor-
+phisms seen from the other side. Theor. Comput. Sci. 329, 1-3 (2004), 315–323.
+
+[28] Shaleen Deep and Paraschos Koutris. 2018. Compressed Representations of
+Conjunctive Query Results. In Proc. PODS 2018, Jan Van den Bussche and Marcelo
+Arenas (Eds.). ACM, New York, NY, USA, 307–322. https://doi.org/10.1145/
+3196959.3196979
+
+[29] Holger Dell, Thore Husfeldt, Bart M. P. Jansen, Petteri Kaski, Christian Ko-
+musiewicz, and Frances A. Rosamond. 2016. The First Parameterized Algorithms
+and Computational Experiments Challenge. In Proc. IPEC 2016 (LIPIcs), Jiong Guo
+and Danny Hermelin (Eds.), Vol. 63. Schloss Dagstuhl - Leibniz-Zentrum für Infor-
+matik, Aarhus, Denmark, 30:1–30:9. https://doi.org/10.4230/LIPIcs.IPEC.2016.30
+[30] Holger Dell, Christian Komusiewicz, Nimrod Talmon, and Mathias Weller. 2017.
+The PACE 2017 Parameterized Algorithms and Computational Experiments Chal-
+lenge: The Second Iteration. In Proc. IPEC 2017 (LIPIcs), Daniel Lokshtanov and
+Naomi Nishimura (Eds.), Vol. 89. Schloss Dagstuhl - Leibniz-Zentrum für Infor-
+matik, Vienna, Austria, 30:1–30:12.
+
+[31] DetkDecomp. 2021. detkdecomp. https://github.com/daajoe/detkdecomp (visited:
+
+2021-06).
+
+[32] Arnaud Durand and Stefan Mengel. 2015. Structural Tractability of Counting of
+Solutions to Conjunctive Queries. Theory Comput. Syst. 57, 4 (2015), 1202–1249.
+https://doi.org/10.1007/s00224-014-9543-y
+
+[33] Ronald Fagin, Amnon Lotem, and Moni Naor. 2003. Optimal aggregation al-
+gorithms for middleware. J. Comput. System Sci. 66, 4 (2003), 614–656. https:
+//doi.org/10.1016/S0022-0000(03)00026-6 Special Issue on PODS 2001.
+
+[34] Wenfei Fan, Yinghui Wu, and Jingbo Xu. 2016. Adding Counting Quantifiers to
+Graph Patterns. In SIGMOD Conference. Association for Computing Machinery,
+New York, NY, USA, 1215–1230. https://doi.org/10.1145/2882903.2882937
+[35] Jonathan Finger and Neoklis Polyzotis. 2009. Robust and efficient algorithms
+for rank join evaluation. In Proceedings of the 2009 ACM SIGMOD International
+Conference on Management of data. Association for Computing Machinery, New
+York, NY, USA, 415–428. https://doi.org/10.1145/1559845.1559890
+
+[36] Wolfgang Fischl, Georg Gottlob, Davide Mario Longo, and Reinhard Pichler.
+2019. HyperBench: A Benchmark and Tool for Hypergraphs and Empirical
+Findings. In Symposium on Principles of Database Systems (PODS). Association for
+Computing Machinery, New York, NY, USA, 464–480. https://doi.org/10.1145/
+3294052.3319683
+
+[37] Jörg Flum and Martin Grohe. 2004. The Parameterized Complexity of Counting
+https://doi.org/10.1137/
+
+Problems. SIAM J. Comput. 33, 4 (2004), 892–922.
+S0097539703427203
+
+[38] Martin Grohe. 2007. The Complexity of Homomorphism and Constraint Sat-
+isfaction Problems Seen from the Other Side. J. ACM 54, 1 (2007), 1:1–1:24.
+https://doi.org/10.1145/1206035.1206036
+
+[39] Martin Grohe, Thomas Schwentick, and Luc Segoufin. 2001. When is the evalua-
+tion of conjunctive queries tractable?. In ACM Symposium on Theory of Computing
+(STOC). Association for Computing Machinery, New York, NY, USA, 657–666.
+https://doi.org/10.1145/380752.380867
+
+[40] Venky Harinarayan and Ashish Gupta. 1994. Generalized Projections: A Powerful
+Query-Optimization Technique. Technical Report. Stanford University, Stanford,
+CA, USA.
+
+[41] Stratos Idreos, Olga Papaemmanouil, and Surajit Chaudhuri. 2015. Overview of
+Data Exploration Techniques. In Proceedings of the 2015 ACM SIGMOD Interna-
+tional Conference on Management of Data, Melbourne, Victoria, Australia, May
+31 - June 4, 2015. Association for Computing Machinery, New York, NY, USA,
+277–281. https://doi.org/10.1145/2723372.2731084
+
+[42] Muhammad Idris, Martín Ugarte, and Stijn Vansummeren. 2017. The Dynamic
+Yannakakis Algorithm: Compact and Efficient Query Processing Under Updates.
+In International Conference on Management of Data (SIGMOD). Association for
+Computing Machinery, New York, NY, USA, 1259–1274. https://doi.org/10.1145/
+3035918.3064027
+
+[43] Ihab F Ilyas, Walid G Aref, and Ahmed K Elmagarmid. 2004. Supporting top-k
+join queries in relational databases. The VLDB journal 13, 3 (2004), 207–221.
+https://doi.org/10.1007/s00778-004-0128-2
+
+[44] Ihab F. Ilyas, George Beskales, and Mohamed A. Soliman. 2008. A survey of top-k
+query processing techniques in relational database systems. Comput. Surveys 40,
+4 (2008), 11:1–11:58.
+
+[45] Ihab F. Ilyas and Xu Chu. 2019. Data Cleaning. ACM, New York, NY, USA.
+
+https://doi.org/10.1145/3310205
+
+[46] Zachary G. Ives and Nicholas E. Taylor. 2008. Sideways Information Passing
+for Push-Style Query Processing. In ICDE. IEEE Computer Society, 774–783.
+https://doi.org/10.1109/ICDE.2008.4497486
+
+[47] Manas R Joglekar, Rohan Puttagunta, and Christopher Ré. 2016. Ajar: Aggrega-
+tions and joins over annotated relations. In Proceedings of the 35th ACM SIGMOD-
+SIGACT-SIGAI Symposium on Principles of Database Systems. Association for
+Computing Machinery, New York, NY, USA, 91–106. https://doi.org/10.1145/
+2902251.2902293
+
+[48] Ahmet Kara and Dan Olteanu. 2018. Covers of Query Results. In 21st International
+Conference on Database Theory (LIPIcs), Benny Kimelfeld and Yael Amsterdamer
+(Eds.), Vol. 98. Schloss Dagstuhl - Leibniz-Zentrum für Informatik, Vienna, Austria,
+16:1–16:22.
+
+[49] Mahmoud Abo Khamis, Hung Q. Ngo, and Atri Rudra. 2016. FAQ: Questions
+Asked Frequently. In Proc. PODS 2016. Association for Computing Machinery,
+New York, NY, USA, 13–28. https://doi.org/10.1145/2902251.2902280
+
+[50] Albert Kim, Liqi Xu, Tarique Siddiqui, Silu Huang, Samuel Madden, and Aditya
+Parameswaran. 2016. Optimally Leveraging Density and Locality for Exploratory
+Browsing and Sampling. Technical Report. Univeristy of Illinois. https://data-
+people.cs.illinois.edu/needletail.pdf (visited: 2021-06).
+
+[51] Albert Kim, Liqi Xu, Tarique Siddiqui, Silu Huang, Samuel Madden, and Aditya
+Parameswaran. 2018. Optimally Leveraging Density and Locality for Exploratory
+Browsing and Sampling. In Proceedings of the Workshop on Human-In-the-Loop
+Data Analytics (Houston, TX, USA) (HILDA’18). Association for Computing Ma-
+chinery, New York, NY, USA, 7. https://doi.org/10.1145/3209900.3209903
+[52] Rajeev Kohli, Ramesh Krishnamurti, and Prakash Mirchandani. 1994. The
+Minimum Satisfiability Problem. SIAM J. Discret. Math. 7, 2 (1994), 275–283.
+https://doi.org/10.1137/S0895480191220836
+
+[53] Markus Krötzsch. 2018. Practical Linked Data Access via SPARQL: The Case of
+Wikidata. In LDOW@ WWW. CEUR Workshop Proceedings, Lyon, France, 1–10.
+[54] Hanâ Lbath, Angela Bonifati, and Russ Harmer. 2021. Schema Inference for
+Property Graphs. In Proceedings of the 24th International Conference on Extending
+Database Technology, EDBT 2021. OpenProceedings.org, Nicosia, Cyprus, 499–504.
+https://doi.org/10.5441/002/edbt.2021.58
+
+[55] Viktor Leis, Bernhard Radke, Andrey Gubichev, Atanas Mirchev, Peter Boncz,
+Alfons Kemper, and Thomas Neumann. 2018. Query optimization through the
+looking glass, and what we found running the join order benchmark. The VLDB
+Journal 27, 5 (2018), 643–668. https://doi.org/10.1007/s00778-017-0480-7
+[56] Chengkai Li, Kevin Chen-Chuan Chang, Ihab F. Ilyas, and Sumin Song. 2005.
+RankSQL: Query Algebra and Optimization for Relational Top-k Queries. In
+Proceedings of the ACM SIGMOD International Conference on Management of Data,
+Baltimore, Maryland, USA, June 14-16, 2005. Association for Computing Machin-
+ery, New York, NY, USA, 131–142. https://doi.org/10.1145/1066157.1066173
+[57] Lothar F. Mackert and Guy M. Lohman. 1986. R* Optimizer Validation and
+Performance Evaluation for Distributed Queries. In VLDB. Morgan Kaufmann,
+New York, NY, USA, 149—-159. https://doi.org/10.1145/16894.16863
+
+[58] Stanislav Malyshev, Markus Krötzsch, Larry González, Julius Gonsior, and Adrian
+Bielefeldt. 2018. Getting the Most Out of Wikidata: Semantic Technology Usage in
+Wikipedia’s Knowledge Graph. In International Semantic Web Conference (ISWC).
+Springer, Cham, 376–394. https://doi.org/10.1007/978-3-030-00668-6_23
+[59] Nikos Mamoulis, Man Lung Yiu, Kit Hung Cheng, and David W Cheung. 2007.
+Efficient top-k aggregation of ranked inputs. ACM Transactions on Database
+Systems (TODS) 32, 3 (2007), 19–es.
+
+[60] Apostol Natsev, Yuan-Chi Chang, John R Smith, Chung-Sheng Li, and Jeffrey Scott
+Vitter. 2001. Supporting incremental join queries on ranked inputs. In VLDB,
+Vol. 1. Morgan Kaufmann Publishers Inc., San Francisco, CA, USA, 281–290.
+[61] Dan Olteanu and Jakub Závodný. 2015. Size Bounds for Factorised Represen-
+tations of Query Results. ACM Trans. Database Syst. 40, 1 (2015), 2:1–2:44.
+https://doi.org/10.1145/2656335
+
+[62] Laurel J. Orr, Srikanth Kandula, and Surajit Chaudhuri. 2019. Pushing Data-
+Induced Predicates Through Joins in Big-Data Clusters. Proc. VLDB Endow. 13, 3
+(2019), 252—-265. https://doi.org/10.14778/3368289.3368292
+
+[63] Reinhard Pichler and Sebastian Skritek. 2013. Tractable counting of the answers
+to conjunctive queries. J. Comput. System Sci. 79, 6 (Sep 2013), 984–1001. https:
+//doi.org/10.1016/j.jcss.2013.01.012
+
+[64] Nikolaos Tziavelis, Deepak Ajwani, Wolfgang Gatterbauer, Mirek Riedewald, and
+Xiaofeng Yang. 2020. Optimal Algorithms for Ranked Enumeration of Answers
+to Full Conjunctive Queries. Proc. VLDB Endow. 13, 9 (2020), 1582–1597. https:
+//doi.org/10.14778/3397230.3397250
+
+[65] Nikolaos Tziavelis, Deepak Ajwani, Wolfgang Gatterbauer, Mirek Riedewald, and
+Xiaofeng Yang. 2020. Optimal Algorithms for Ranked Enumeration of Answers
+to Full Conjunctive Queries. arXiv:1911.05582 [cs.DB]
+
+[66] Michael D. Vose. 1991. A Linear Algorithm For Generating Random Numbers
+With a Given Distribution. IEEE Transactions on software engineering 17, 9 (1991),
+972–975.
+
+[67] Denny Vrandečić. 2012. Wikidata: A New Platform for Collaborative Data Col-
+lection. In Proceedings of the 21st International Conference on World Wide Web
+(Lyon, France) (WWW ’12 Companion). Association for Computing Machinery,
+New York, NY, USA, 1063–1064. https://doi.org/10.1145/2187980.2188242
+[68] Alastair J. Walker. 1977. An Efficient Method for Generating Discrete Random
+Variables with General Distributions. ACM Trans. Math. Softw. 3, 3 (1977), 253–
+256.
+
+[69] WikiData. 2021. WikiData Query Service. http://query.wikidata.org/.
+[70] Weipeng P. Yan and Per-Åke Larson. 1995. Eager Aggregation and Lazy Aggre-
+gation. In VLDB. Morgan Kaufmann Publishers Inc., San Francisco, CA, USA,
+345––357.
+
+[71] Mihalis Yannakakis. 1981. Algorithms for Acyclic Database Schemes. In Proc.
+VLDB 1981 (Cannes, France). IEEE Computer Society, Cannes, France, 82–94.
+[72] Zhuoyue Zhao, Robert Christensen, Feifei Li, Xiao Hu, and Ke Yi. 2018. Random
+Sampling over Joins Revisited. In Proceedings of the 2018 International Conference
+on Management of Data, SIGMOD Conference 2018, Houston, TX, USA, June 10-
+15, 2018, Gautam Das, Christopher M. Jermaine, and Philip A. Bernstein (Eds.).
+Association for Computing Machinery, New York, NY, USA, 1525–1539. https:
+//doi.org/10.1145/3183713.3183739
+
+

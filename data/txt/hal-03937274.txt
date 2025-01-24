@@ -1,0 +1,4059 @@
+Static Analysis of Graph Database Transformations
+Iovka Boneva, Benoit Groz, Jan Hidders, Filip Murlak, Slawomir Staworko
+
+To cite this version:
+
+Iovka Boneva, Benoit Groz, Jan Hidders, Filip Murlak, Slawomir Staworko. Static Analysis of Graph
+Database Transformations. Symposium on Principles of Database Systems, Jun 2023, Seattle, United
+States. ￿hal-03937274v2￿
+
+HAL Id: hal-03937274
+
+https://hal.science/hal-03937274v2
+
+Submitted on 17 Apr 2023
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Distributed under a Creative Commons Attribution 4.0 International License
+
+Static Analysis of Graph Database Transformations
+Iovka Boneva
+Benoît Groz
+Jan Hidders
+iovka.boneva@univ-lille.fr
+groz@lri.fr
+j.hidders@bbk.ac.uk
+Univ. Lille, CNRS, UMR 9189 CRIStAL
+Univ. Paris Saclay, CNRS, UMR 9015
+Birkbeck, University of London
+F-59000 Lille, France
+LISN
+London, United Kingdom
+91405 Orsay, France
+
+Filip Murlak
+f.murlak@uw.edu.pl
+University of Warsaw
+Warsaw, Poland
+
+Sławek Staworko
+slawek.staworko@relational.ai
+RelationalAI
+Berkeley, USA
+Univ. Lille, CNRS, UMR 9189 CRIStAL
+F-59000 Lille, France
+
+ABSTRACT
+We investigate graph transformations, defined using Datalog-like
+rules based on acyclic conjunctive two-way regular path queries
+(acyclic C2RPQs), and we study two fundamental static analysis
+problems: type checking and equivalence of transformations in the
+presence of graph schemas. Additionally, we investigate the prob-
+lem of target schema elicitation, which aims to construct a schema
+that closely captures all outputs of a transformation over graphs
+conforming to the input schema. We show all these problems are in
+EXPTIME by reducing them to C2RPQ containment modulo schema;
+we also provide matching lower bounds. We use cycle reversing to
+reduce query containment to the problem of unrestricted (finite or
+infinite) satisfiability of C2RPQs modulo a theory expressed in a
+description logic.
+
+CCS CONCEPTS
+• Theory of computation → Logic and databases.
+
+KEYWORDS
+graph databases, static analysis, schemas, query containment
+
+ACM Reference Format:
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko.
+2023. Static Analysis of Graph Database Transformations. In Proceedings of
+the 42nd ACM SIGMOD-SIGACT-SIGAI Symposium on Principles of Database
+Systems (PODS ’23), June 18–23, 2023, Seattle, WA, USA. ACM, New York,
+NY, USA, 23 pages. https://doi.org/10.1145/3584372.3588654
+
+1 INTRODUCTION
+The growing adoption of graph databases calls for suitable data
+processing methods. Query languages for graph databases typically
+define their semantics as a set of tuples, which alone is inadequate
+for scenarios such as (materialized) graph database views and data
+migration in the context of schema evolution [11], with the schema
+describing the expected structure of the graph. A more adequate
+
+This work is licensed under a Creative Commons Attribution Inter-
+national 4.0 License.
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+© 2023 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-0127-6/23/06.
+https://doi.org/10.1145/3584372.3588654
+
+mechanism is that of a transformation, which takes a graph as input
+and produces a graph on the output.
+
+Example 1.1. Consider a scenario where the schema of a medical
+knowledge graph undergoes changes due to advances in the under-
+standing of biomolecular processes. The purpose of this knowledge
+graph is to catalog vaccines based on the antigen they are designed
+to target and to identify the pathogens that exhibit the antigens,
+each antigen being exhibited by at least one pathogen. Additionally,
+some pairs of antigens are known to be cross reacting: if a vaccine
+v targets an antigen x that is cross reacting with an antigen y, then
+v also targets y. Thus, the set of all antigens targeted by a vaccine
+is represented implicitly.
+
+The schema S0 of the original knowledge graph is presented in
+Figure 1 as a graph itself. It specifies the allowed node and edge
+
+S0: Vaccine
+
+S1: Vaccine
+
+crossReacting
+
+*
+
+designTarget
+
+1
+
+*
+
+*
+
+*
+Antigen
+
+exhibits +
+
+Pathogen
+
+*
+
+*
+
+designTarget
+
+targets
+
+1
+
++
+
+exhibits +
+
+*
+Antigen
+
+Pathogen
+
+Figure 1: Evolving schema of a medical knowledge graph.
+
+labels, and expresses participation constraints on edges in a manner
+that is typical for data modeling languages, e.g., A
+indicates
+that every A-node has one outgoing r -edge to a B-node but a B-node
+may have arbitrarily many incoming r -edges from A-nodes.
+
+r*
+
+B
+
+1
+
+Now, suppose that new findings refute the rule of cross-reacti-
+vity of antigens. The cross-reacting edges between antigens are no
+longer adequate for representing information about the antigens
+that a vaccine targets, and so, in the new schema S1, this infor-
+mation is recorded explicitly with targets edges. Since up to that
+point, the knowledge graph did not contain any data points that
+contradicted the cross-reactivity rule, the logic of the rule can be
+used to transform the old knowledge graph to one that conforms to
+the new schema. Afterwards cross-reacting edges are removed. □
+In the present paper, we study two classical problems of static
+analysis on graph transformations: type checking, that verifies if for
+every graph conforming to the source schema the transformation
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+outputs a graph conforming to the target schema, and equivalence,
+that verifies if two transformations produce the same output for
+every graph conforming to the source schema. Additionally, when
+the target schema is not known, we investigate the problem of target
+schema elicitation that constructs the containment-minimal target
+schema that captures the graphs produced by the transformation.
+We study executable graph transformations defined with Datalog-
+like rules. The rules specify how to construct the output graph from
+the results of regular path queries evaluated over the input graph.
+To allow multiple copies of the same input node the rules use node
+constructors, essentially explicit Skolem functions that create nodes.
+As an example, the cross-reactivity rule from Example 1.1 gives rise
+to the following graph transformation rule
+
+targets(fV (x), fA(y)) ← (designTarget · crossReacting∗)(x, y) ,
+where fV (x) and fA(y) are constructors of Vaccine and Antigen
+nodes respectively. The two constructors can, for instance, have the
+following definitions fV (x) = (Vaccine, x) and fA(y) = (Antigen, y);
+essentially, they take the identifiers of the original nodes and deco-
+rate them with their type.
+
+We investigate transformations that use only acyclic two-way
+conjunctive regular path queries (acyclic C2RPQs), which is arguably
+of practical relevance in the context of graph transformations. For
+instance, we have found no cyclic queries in the transformations
+implementing graph data migration between consecutive versions
+of the FHIR data format [34, 53] (Fast Healthcare Interoperability
+Resources is an international standard for interchange of medical
+healthcare data). Our constructions rely on acyclicity of C2RPQs
+to obtain relatively low computational complexity. We argue that
+the acyclicity assumption cannot be lifted without a significant
+complexity increase (see Section 7).
+
+Node constructors are closely related to object creating func-
+tions [36, 37]. Our use of node constructors is inspired by analogous
+constructions in transformation languages such as R2RML [18, 22,
+55], where node IRIs are typically obtained by concatenation of a
+URL prefix and the key values of a object represented by the con-
+structed node. Our node constructors can have an arbitrary arity,
+thus allowing for instance to create nodes in the target graph that
+represent relationships (edges) between nodes in the source graph.
+To isolate the concern of possible overlaps between node construc-
+tors, we make the natural assumption that node constructors are
+injective, have pair-wise disjoint ranges, and for every node kind
+(label) a single dedicated node constructor is used. These assump-
+tions allow us to remove the need to analyze the definitions of node
+constructors, which is out of the scope of the present paper, and
+they are consistent with how the analogous constructions are used
+in languages such as R2RML and FHIR mapping language.
+
+For schemas, we employ a natural formalism of graph schemas
+with participation constraints, inspired by standard data modeling
+languages such as Entity-Relationship diagrams [17], and already
+studied, for instance, in the context of graph database evolution [11].
+Such schemas allow one to declare the available labels of nodes and
+edges and to express participation constraints. In contrast to more
+expressive languages as ShEx and SHACL [19, 57], our formalism
+allows a single label per node, which determines the node type. Thus,
+roughly speaking, our schema formalism is to ShEx and SHACL
+what DTD is to XML Schema.
+
+The key contributions of the present paper are as follows.
+
+(1) We define graph database transformations and we reduce
+the problems of interest to containment of C2RPQs in unions
+of acyclic C2RPQs modulo schemas.
+
+(2) We reduce the query containment problem to the unre-
+stricted (finite or infinite) satisfiability of a C2RPQ modulo
+a set of constraints expressed in the Horn fragment of a
+description logic known as ALCIF .
+The reduction involves an application of the cycle reversing
+technique [20, 38], carefully tailored to our needs.
+
+(3) The unrestricted satisfiability problem for ALCIF can be
+solved in EXPTIME owing to a simple model property [16],
+but applying this result directly to the instance obtained via
+cycle reversing would lead to doubly exponential complex-
+ity due to an exponential blow-up inherent to cycle revers-
+ing. We provide a new algorithm with improved complexity
+bounds, which allows to accommodate the blow-up while
+keeping the overall complexity in EXPTIME.
+We also reformulate the simplicity of models in terms of a
+graph-theoretical notion of (k, l)-sparsity [44], which allows
+to streamline the reasoning.
+
+These reductions allow to solve all problems of interest in EXPTIME
+and we also establish the matching lower bounds.
+
+The paper is organized as follows. In Section 2 we discuss related
+work. In Section 3 we introduce basic notions. In Section 4 we
+define graph transformations and the problems of interest, which
+we reduce to query containment modulo schema. In Section 5 we
+reduce the latter to satisfiability of a query modulo Horn-ALCIF
+theory, which we solve in Section 6. In Section 7 we summarize
+our findings and identify directions of future work. Full proofs and
+some standard definitions have been moved to Appendix.
+
+2 RELATED WORK
+Graph-based data models have been proposed in various forms
+and shapes since the 1980s [4].
+
+The proposals in the 1980s and 1990s included labeled graphs
+[32], graphs where certain nodes represent complex values [33, 43],
+graphs where nodes have associated complex values [1, 2], and
+graphs where nodes are associated with nested graphs [45]. More
+recently the RDF data model [30] and the Property Graph data
+model [3] have become popular. RDF graphs are similar to labeled
+graphs except that nodes are unlabeled and participate in at least
+one edge, and the labels of edges can be nodes and participate in
+edges. Property Graphs are also similar to labeled graphs except
+that nodes and edges have multiple labels and properties, and edges
+have identity. In our work we assume one of the simplest models,
+namely, labeled graphs where nodes have multiple labels and edges
+have a single label; our schemas require exactly one label per node.
+Since we focus here on transformations of the graph structure, we
+have no explicit notion of value associated with nodes and edges,
+but there are straightforward ways of adding this, as is done for
+example in [32].
+
+The term graph transformations can refer to different for-
+malisms [54]: the purpose of graph grammars is to define graph
+languages; algebraic graph transformations are mainly used to mo-
+del systems with infinite behavior and are not functional (they
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+produce multiple outputs on single input). Therefore, not only are
+these formalisms ill-suited for defining transformations of graph
+databases, but also the problems studied for them are unrelated to
+the problems we study here. Monadic second-order (MSO) graph
+transductions [21] can capture our transformations only when re-
+stricted to unary node constructors; moreover, resorting to MSO
+logic typically incurs a prohibitive complexity overhead.
+
+Transformation languages for graph databases are often
+based on Datalog extended with node-creation syntax in the head
+of the rules. It could be just a variable that is not bound in the
+body of the rule, like in IQL [2] and G-Log [51]; this ensures a
+fresh node is created for each valuation that makes the body true.
+Another option is to replace the unbound variable with a term
+consisting of a constructor function (sometimes called a Skolem
+function) applied to bound variables, like in O-logic [46] and F-logic
+[41]; the constructor creates a fresh node when called for the first
+time for certain arguments, and after that the same node for the
+same arguments. We adopt the idea of node constructors because
+we believe it provides a powerful and intuitive way to control the
+identity of new nodes.
+
+A different proposal, based on structural recursion, is offered
+by UnQL [12], but the underlying data model considers graphs
+equivalent if they are bisimilar, which makes the expressive power
+quite different.
+
+Graph transformations can also be expressed using query lan-
+
+guages such as SPARQL and Cypher.
+
+Nevertheless, we believe that a rule-based transformation lan-
+guage is more convenient for defining transformations and it can
+co-exist with an expressive query language. For instance, in the
+XML world, XSLT [40] (rule-based) focuses on transformations,
+while XQuery [56] is mostly used for querying XML data.
+
+In the context of data exchange, schema mappings provide
+a declarative way to define database transformations [7, 13, 24].
+Our transformations could be simulated by considering canonical
+solutions for plain SO-tgds [5]
+
+extended to allow acyclic C2RPQs in rule bodies. Note, however,
+that equivalence is undecidable for plain SO-tgds with keys [25],
+and open for plain SO-tgds [42].
+
+The static type checking problem originates in formal lan-
+guage theory and has been studied for finite state transducers on
+words and for various kinds of tree transducers, including some
+designed to capture XML transformation languages [47–50]. Type
+checking has also been studied for graph transformations. In [33]
+labelled graphs are transformed using addition, deletion, and re-
+duction operations, and type checking is investigated for schemas
+similar to ours but without participation constraints. The typing
+problem for UnQL is studied in [39], but the approach relies on
+schemas specifying graphs up to bisimulation, which limits their
+power to express participation constraints. Regarding transforma-
+tions defined by schema mappings, if the mapping does not define
+target constraints, then the target schema is simply a relational sig-
+nature and type checking is reduced to trivial syntactic check, and
+as such it is irrelevant. This is most often the case for graph schema
+mappings [7, 13], with seldom exceptions such as [10] for map-
+ping relational to graph-shaped data. Their notion of consistency
+is related to type checking, but is studied for a simpler formalism
+without path queries. In the context of XML schema mappings,
+
+absolute consistency can be seen as a counterpart of type checking
+for non-functional transformations [8].
+
+3 PRELIMINARIES
+
+Graphs. We fix an enumerable set N of node identifiers, a recur-
+sively enumerable set Γ of node labels, and an recursively enumer-
+able set Σ of edge labels. We work with labeled directed graphs,
+and in general, a node may have multiple labels while an edge has
+precisely one label. We allow, however, multiple edges between
+the same pair of nodes, as long as these edges have different labels.
+We model graphs as relational structures over unary relation sym-
+bols Γ and binary relation symbols Σ. That is, a graph G is a pair
+(cid:0)dom(G), ·G (cid:1) where dom(G) ⊆ N is the set of nodes of G and the
+function ·G maps each A ∈ Γ to a set AG ⊆ dom(G) and each r ∈ Σ
+to a binary relation r G ⊆ dom(G) × dom(G). A graph G is finite if
+dom(G) is finite and AG and r G are empty for all but finitely many
+A ∈ Γ and r ∈ Σ. In the sequel, we use u, v, . . . to range over node
+identifiers, A, B, C, . . . to range over node labels, and r , r ′, . . . to
+range over edge labels. Also, we use r − for inverse edges and let
+(r −)G = (cid:8)(u, v) | (v, u) ∈ r G (cid:9). We let Σ± = Σ ∪ {r − | r ∈ Σ} and
+use R, R′, . . . to range over Σ±.
+
+Schemas. We consider a class of schemas that constrain the num-
+ber of edges between nodes of given labels and we express these
+constraints with the usual symbols: ? for at most one, 1 for pre-
+cisely one, + for at least one, * for arbitrary many, and 0 for none.
+We focus on these basic cardinality constraints that are most com-
+monly used in practice; e.g., Chen’s original ER diagrams only used
+those [17]. In fact, we were unable to find any non-basic cardinality
+constraints in the FHIR specifications [34], while in the SHACL
+schemas in Yago 4.0 [58] we found only one: a person may have at
+most two parents.
+
+Now, a schema is a triple S = (ΓS , ΣS , δS ), where ΓS ⊆ Γ is a
+finite set of allowed node labels, ΣS ⊆ Σ is a finite set of allowed
+edge labels, and δS : ΓS × Σ±
+× ΓS → {?, 1, +, *, 0}. Schemas can be
+S
+presented as graphs themselves, interpreted as illustrated next.
+
+Example 3.1. Take the schema S0 in Figure 1 and consider, for
+instance, the designTarget edge. It indicates that every Vaccine has
+a single design target Antigen, in symbols
+
+δS0 (Vaccine, designTarget, Antigen) = 1 ,
+and that every Antigen may be the design target of an arbitrary
+number of Vaccines, in symbols
+
+δS0 (Antigen, designTarget−, Vaccine) = * .
+Edges that are not present are implicitly forbidden, e.g., no exhibits
+edge is allowed from Vaccine to Pathogen:
+
+δS0 (Vaccine, exhibits, Pathogen) = 0 ,
+δS0 (Pathogen, exhibits−, Vaccine) = 0 .
+Now, a graph G conforms to a schema S if 1) every node in G has a
+single node label in ΓS and every edge has a label in ΣS , and 2) for
+all A, B ∈ ΓS and R ∈ Σ±
+, for every node with label A the number of
+S
+its R-successors with label B is as specified by δS (A, R, B). By L(S)
+we denote the set of all finite graphs that conform to S.
+
+□
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+Queries. We work with conjunctive two-way regular path queries
+(C2RPQs) that have the form
+
+q( ¯x) = ∃ ¯y.φ1(z1, z ′
+1, . . . , zk , z ′
+k
+
+1) ∧ . . . ∧ φk (zk , z ′
+k
+
+) ,
+
+where ¯x = {z1, z ′
+and z ′
+i
+follows the grammar
+
+} \ ¯y and for every i ∈ {1, . . . , k}, zi
+are variables and the formula φi is a regular expression that
+
+φ ::= (cid:156) | ϵ | A | R | φ · φ | φ + φ | φ∗ ,
+where A ∈ Γ matches nodes, R ∈ Σ± matches edges, ϵ matches
+empty paths, and (cid:156) matches no path. The semantics of C2RPQs
+is defined in the standard fashion [15] and we denote the set of
+answers to q( ¯x) in G by [q( ¯x)]G .
+Example 3.2. Recall the schema S0 in Figure 1. The following
+query selects vaccines together with the antigens they are designed
+to target or target through cross-reaction.
+q(x, y) = (Vaccine · designTarget · crossReacting∗ · Antigen)(x, y). □
+Trivial atoms are of the form (cid:156)(x, x), ϵ(x, x), and A(x, x), and in
+the sequel, we abuse notation and write them as unary atoms:
+(cid:156)(x), ϵ(x), and A(x), respectively. The multigraph of a C2RPQ q
+has variables of q as nodes and an edge from x to y for every non-
+trivial atom φ(x, y). The subclass of acyclic C2RPQs consists of
+queries whose multigraph is acyclic i.e., it does not have a path
+consisting of distinct edges that visits the same node twice. Note
+that acyclicity for C2RPQs needs to be more restrictive than the
+classical acyclicity of conjunctive queries based on Gaifman graphs.
+Indeed, the Gaifman graph of a C2RPQ φ(x, y) ∧ ψ (x, y) is acyclic
+but its matches may form nontrivial cycles in the input graph.
+
+A Boolean C2RPQ q has all its variables existentially quantified,
+and it may have only a single answer, the empty tuple, in which
+case, we say that q is satisfied in G and write G |= q. We also
+use unions of C2RPQs (abbreviated as UC2RPQs) represented as
+sets of C2RPQs Q( ¯x) = {q1( ¯x), . . . , qk ( ¯x)} and extend the notions
+of answers, satisfaction, and acyclicity to UC2RPQs in the natural
+fashion. Given two UC2RPQs P( ¯x) and Q( ¯x), and a schema S, we say
+that P( ¯x) is contained in Q( ¯x) modulo S, in symbols P( ¯x) ⊆S Q( ¯x),
+if [P( ¯x)]G ⊆ [Q( ¯x)]G for every G ∈ L(S).
+Description logics. We operate on properties of graphs formu-
+lated in the description logic ALCIF (and its fragments) [6]. In
+description logics, elements of Γ and Σ are called concept names
+and role names, respectively. ALCIF allows to build more complex
+concepts with the following grammar:
+
+C ::= ⊥ | A | C ⊓ C | ¬C | ∃R.C | ∃≤1
+
+R.C ,
+
+where A ∈ Γ and R ∈ Σ±. We also use additional operators that are
+redundant but useful when defining fragments; for brevity we intro-
+duce them as syntactic sugar: ⊤ := ¬⊥, C1 ⊔ C2 := ¬(¬C1 ⊓ ¬C2),
+∀R.C := ¬∃R.¬C, (cid:154)R.C := ¬∃R.C. We extend the interpretation
+function ·G to complex concepts as follows:
+(C1 ⊓ C2)G = CG
+
+1 ∩ CG
+2 ,
+(∃R.C)G = (cid:8)u ∈ dom(G) | ∃v. (u, v) ∈ RG ∧ v ∈ CG (cid:9) ,
+
+(¬C)G = dom(G) \ CG ,
+
+⊥G = ∅ ,
+
+(∃≤1
+
+R.C)G = (cid:8)u ∈ dom(G) | ∃≤1
+
+v. (u, v) ∈ RG ∧ v ∈ CG (cid:9) .
+
+Statements in description logics have the form of concept inclusions,
+C ⊑ D
+
+where C and D are concepts. A graph G satisfies C ⊑ D, in symbols
+G |= C ⊑ D, if CG ⊆ DG . A set T of concept inclusions is tradi-
+tionally called a TBox and we extend satisfaction to TBoxes in the
+canonical fashion: G |= T if G |= C ⊑ D for each C ⊑ D ∈ T .
+
+In the Horn fragment of ALCIF , written Horn-ALCIF , we
+
+only allow concept inclusions in the following normal forms:
+
+K ⊑ ∀R.K ′ ,
+K ⊑ ∃≤1
+
+K ⊑ A ,
+K ⊑ ∃R.K ′ ,
+
+K ⊑ ⊥ ,
+K ⊑ (cid:154)R.K ′ ,
+where A ∈ Γ, R ∈ Σ±, and K, K ′ are intersections of concept names
+(intersection of the empty set of concepts is ⊤). If statements of the
+form K ⊑ A1 ⊔ A2 ⊔ · · · ⊔ An are allowed too, then we recover the
+full power of ALCIF (up to introducing auxiliary concept names).
+Participation constraints of schemas can be expressed with sim-
+ple Horn-ALCIF statements as illustrated in following example.
+
+R.K ′ ,
+
+Example 3.3. For instance, the assertion in S0 (Figure 1) that
+Pathogen manifests at least one Antigen is expressed with the state-
+ment Pathogen ⊑ ∃exhibits.Antigen. The assertion that an Antigen
+may be exhibited by an arbitrary number of Pathogens needs no
+Horn-ALCIF statement. However, statements are needed for im-
+□
+plicitly forbidden edges, e.g., Vaccine ⊑ (cid:154)exhibits.Antigen.
+
+4 GRAPH TRANSFORMATIONS
+We propose transformations of graphs defined with Datalog-like
+rules that use acyclic C2RPQs in their bodies. To allow multiple
+copies of the same source node we use node constructors. Formally,
+a k-ary node constructor is a function f : N k → N and we denote
+the set of node constructors by F . To remove the concern of over-
+lapping node constructors, and the need to analyze their definitions,
+we assume that for every node label A ∈ Γ we have precisely one
+node constructor fA, all node constructors are injective, and their
+ranges are pairwise disjoint.
+
+We introduce two kinds of graph transformation rules: node rules
+
+and edge rules. A node rule has the form
+A(cid:0)fA( ¯x)(cid:1) ← q( ¯x) ,
+where A ∈ Γ, fA ∈ F , and q is an acyclic C2RPQ. An edge rule has
+the form
+
+r (cid:0) f ( ¯x), f ′( ¯y)(cid:1) ← q( ¯x, ¯y) ,
+where r ∈ Σ, f , f ′ ∈ F , and q is an acyclic C2RPQ. Note that an
+equality between variables z = z ′ can be expressed as ϵ(z, z ′), and
+consequently, we can assume that ¯x and ¯y are disjoint.
+
+Now, a graph transformation T is a finite set of graph transfor-
+mation rules. By ΓT and ΣT we denote the finite sets of node and
+edge labels, respectively, used in the heads of the rules of T .
+Example 4.1. Below we present rules defining the transforma-
+tion T0 of the medical database, described in Example 1.1. We
+use 3 unary node constructors fA(x) for Antigen nodes, fP (x) for
+Pathogen nodes, and fV (x) for Vaccine nodes.
+
+Vaccine(fV (x)) ← (Vaccine)(x) ,
+Antigen(fA(x)) ← (Antigen)(x) ,
+
+designTarget(fV (x), fA(y)) ← (designTarget)(x, y) ,
+
+targets(fV (x), fA(y)) ← (designTarget · crossReacting∗)(x, y) ,
+
+Pathogen(fP (x)) ← (Pathogen)(x) ,
+exhibits(fP (x), fA(y)) ← (exhibits)(x, y) .
+
+□
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Now, given a graph G and a graph transformation T the result of
+applying T to G is a graph T (G) such that (for A ∈ Γ and r ∈ Σ)
+
+AT (G) = (cid:8)fA(t) (cid:12)
+rT (G) = (cid:8)(cid:0) f (t), f ′(t ′)(cid:1) (cid:12)
+
+(cid:12) A(cid:0)fA( ¯x)(cid:1) ← q( ¯x) ∈ T , t ∈ [q( ¯x)]G (cid:9) ,
+(cid:12) r (cid:0)f ( ¯x), f ′( ¯y)(cid:1) ← q( ¯x, ¯y) ∈ T ,
+(t, t ′) ∈ [q( ¯x, ¯y)]G (cid:9) .
+
+We are interested in the following two classical static analysis tasks.
+Type checking Given a transformation T , a source schema S, and
+a target schema S ′ check whether for every G that conforms
+to S the output of transformation T (G) conforms to S ′.
+Equivalence Given a source schema S and two transformations
+T1 and T2 check whether T1 and T2 agree on every graph
+that conforms to S.
+
+In settings where the target schema is not known, it might be useful
+to construct one. Naturally, we wish to preclude a trivial solution
+that produces the universal schema that accepts all graphs over a
+given set of node and edge labels. Instead, we propose to construct
+a schema that offers the tightest fit to the set of output graphs. To
+define formally this requirement, we define schema containment
+in the classical fashion: a schema S is contained in S ′ if and only if
+L(S) ⊆ L(S ′).
+Schema elicitation Given a transformationT and a source schema
+S, construct the containment-minimal target schema S ′ such
+that T (G) ∈ L(S ′) for every G ∈ L(S).
+
+We observe that T (G) may have nodes with no label, which may
+preclude it from satisfying any schema, and consequently, schema
+elicitation may also return error.
+
+We prove the main result by reducing the problems of interest to
+query containment modulo schema (and vice versa), which we later
+show to be EXPTIME-complete. Although schema elicitation is not
+a decision problem, we show EXPTIME-completeness of deciding
+if the result of schema elicitation is equivalent to a given schema.
+Should schema elicitation have lesser complexity, so would have
+the corresponding decision problem since schema equivalence is
+easily decided in polynomial time.
+
+Theorem 4.2. Type checking, schema elicitation, and equivalence
+of graph transformations are EXPTIME-complete.
+
+We outline the main ideas of the proof by illustrating how a trans-
+formation T can be analyzed with a toolbox of methods based on
+query containment modulo source schema S. We formulate these
+methods with an entailment relation:
+
+(T , S) |= K ⊑ K ′
+
+iff T (G) |= K ⊑ K ′ for every G ∈ L(S).
+
+W.l.o.g. we assume that every rule of transformation T is trim i.e., it
+uses in its body a query q( ¯x) that is satisfiable modulo S, in symbols
+∃ ¯x .q( ¯x) ⊈S (cid:156); otherwise, T can be trimmed.
+
+First, we group queries from rules of T based on the labels of
+nodes and edges they create. For A, B ∈ ΓT and r ∈ ΣT we define
+(cid:12) A(cid:0)fA( ¯x)(cid:1) ← q( ¯x) ∈ T (cid:9) ,
+
+QA( ¯x) = (cid:8)q( ¯x) (cid:12)
+QA,r, B ( ¯x, ¯y) = (cid:8)q( ¯x, ¯y) (cid:12)
+QA,r −, B ( ¯x, ¯y) = (cid:8)q( ¯y, ¯x) (cid:12)
+
+(cid:12) r (cid:0) fA( ¯x), fB ( ¯y)(cid:1) ← q( ¯x, ¯y) ∈ T (cid:9) ,
+(cid:12) r (cid:0) fB ( ¯y), fA( ¯x)(cid:1) ← q( ¯y, ¯x) ∈ T (cid:9) .
+
+In essence, QA( ¯x) identifies tuples over the input graph that yield
+a node constructed with fA and with label A while QA, R, B ( ¯x, ¯y)
+
+identifies tuples that yield R-edges from a node created with fA to
+a node created with fB .
+Example 4.3. A couple of examples of above queries for the trans-
+formation T0 in Example 4.1 follow.
+QVaccine(x) = (Vaccine)(x) ,
+QVaccine,targets,Antigen(x, y) = (designTarget · crossReacting∗)(x, y) ,
+QVaccine,designTarget,Antigen(x, y) = (designTarget)(x, y) .
+□
+Since an edge rule does not assign labels to nodes it creates, the
+result of a transformation may be a graph with nodes without
+a label. Such a situation precludes type checking from passing
+and prevents schema elicitation from producing meaningful out-
+put. Consequently, we first verify that every node in every output
+graph has exactly one label, in symbols (T , S) |= ⊤ ⊑ (cid:195) ΓT , where
+(cid:195){A1, . . . , Ak } is a shorthand for A1 ⊔ . . . ⊔ Ak
+. We prove the
+following (Lemma B.6).
+(T , S) |= ⊤ ⊑ (cid:195) ΓT
+
+for all A, B ∈ ΓT and R ∈ Σ±
+T
+We point out that the restriction of one node constructor per node
+label ensures that each node of the output has at most one label.
+
+.
+
+iff
+∃ ¯y.QA, R, B ( ¯x, ¯y) ⊆S QA( ¯x)
+
+Example 4.4. Take T0 from Example 4.1 and S0 in Figure 1. Veri-
+fying that (T0, S0) |= ⊤ ⊑ (cid:195) ΓT0 requires a number of containment
+tests including the following two.
+
+∃y.(designTarget · crossReacting∗)(x, y) ⊆S0 (Vaccine)(x) ,
+∃y.(designTarget)(x, y) ⊆S0 (Vaccine)(x) .
+
+□
+
+Now, to perform type checking against a given target schema S ′,
+we verify that ΓT ⊆ ΓS ′ and ΣT ⊆ ΣS ′. Then, we take the TBox TS ′
+of concept inclusions that expresses participation constraints of the
+target schema S ′ and we verify that (T , S) |= TS ′. Type checking
+succeeds if and only if all the above tests succeed (Lemma B.2).
+
+The TBox TS ′ consists of statements from a small fragment L0
+
+of Horn-ALCIF which allows only statements of the forms
+
+A ⊑ ∃R.B ,
+
+A ⊑ (cid:154)R.B ,
+where A, B ∈ Γ and R ∈ Σ±. The entailment of such statements is
+also reduced to query containment (Lemma B.7):
+
+R.B ,
+
+A ⊑ ∃≤1
+
+(T , S) |= A ⊑ ∃R.B iff QA( ¯x) ⊆S ∃ ¯y.QA, R, B ( ¯x, ¯y) ,
+(T , S) |= A ⊑ (cid:154)R.B iff ∃ ¯y.QA( ¯x)∧QA, R, B ( ¯x, ¯y) ⊆S
+(T , S) |= A ⊑ ∃≤1
+
+R.B iff
+
+(cid:211)
+
+i (cid:156)(xi ) ,
+
+∃ ¯x .QA( ¯x)∧QA, R, B ( ¯x, ¯y)∧QA, R, B ( ¯x, ¯z) ⊆S
+
+(cid:211)
+
+i ϵ(yi , zi ) .
+
+Example 4.5. Take the transformation T0 and the schemas S0 and
+S1 in Figure 1. The schema S1 requires every vaccine to target
+at least one antigen, in symbols Vaccine ⊑ ∃targets.Antigen. This
+statement is entailed by T0 and S0 if and only if the following holds
+(Vaccine)(x) ⊆S0 ∃y.(designTarget · crossReacting∗)(x, y) . □
+For schema elicitation, we use a close correspondence between
+schemas and L0 TBoxes. It is sufficient to construct the TBox T
+containing all L0 statements that are entailed by T and S; T corre-
+sponds to the containment-minimal target schema (Lemma B.5).
+
+Finally, the equivalence of two transformations T1 and T2 is
+essentially the equivalence (modulo S) of the respective queries QA
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+S:
+s
+
+S∗:
+s
+
++
+
+?
+
+1
+
+1
+
+A
+
+A
+
+*
+
+*
+
+*
+
+*
+
+r
+
+r
+
+s
+
+G0:
+
+s
+
+s
+
+s
+
+s
+
+s
+. . .
+
+r
+
+G∞:
+r
+
+G∗
+∞:
+s
+
+s
+
+s
+
+r
+
+s
+
+s
+
+s
+
+s
+
+s s
+
+s
+
+s
+
+. . .
+
+s
+
+s
+
+. . .
+
+. . .
+
+. . .
+
+Figure 2: Query containment over finite and infinite graphs.
+
+and QA,R, B of both transformations (Lemma B.8). Naturally, query
+equivalence is reduced to query containment, as usual.
+
+We have shown that type checking, schema elicitation, and equiv-
+alence of graph transformations are Turing-reducible in polyno-
+mial time to testing containment of UC2RPQs in acyclic UC2RPQs
+modulo schema. We also show polynomial-time reductions of con-
+tainment of 2RPQs modulo schema to all above problems of interest
+(Lemma F.2). With that, Theorem 4.2 follows from Theorem 5.1.
+
+5 QUERY CONTAINMENT MODULO SCHEMA
+The aim of this section is to show the following result.
+
+Theorem 5.1. Containment of UC2RPQs in acyclic UC2RPQs mod-
+ulo schema is EXPTIME-complete.
+
+The lower bound can be derived from the EXPTIME-hardness of
+unrestricted containment of 2RPQs (using only edge labels) mod-
+ulo very simple TBoxes. The latter is obtained by reduction from
+another reasoning task (satisfiability of ALCI TBoxes) and relies
+on the inner workings of its hardness proof. For completeness,
+we provide a direct reduction from the acceptance problem for
+polynomial-space alternating Turing machines (Theorem F.1). The
+remainder of this section is devoted to the upper bound. We show
+it by reduction to unrestricted (finite or infinite) satisfiability of
+C2RPQs modulo a Horn-ALCIF TBox, which we discuss in Sec-
+tion 6. The principal technique applied in the reduction is cycle
+reversing [20].
+
+Let S be a schema, P a UC2RPQ, and Q an acyclic UC2RPQ. With-
+out loss of generality we may assume that P and Q are Boolean (see
+Lemma D.1). The key idea is to pass from finite to possibly infinite
+graphs, thus making canonical witnesses for non-containment eas-
+ier to find. However, as Example 5.2 shows, we cannot pass freely
+from finite to possibly infinite graphs, as this may affect the answer.
+
+Example 5.2. Consider the schema S in Figure 2. Observe that
+S allows infinite graphs that are essentially infinite trees when
+restricted to s-edges, e.g. G∞ in Figure 2. In fact, every infinite
+graph satisfying S that is connected when restricted to s-edges is
+an infinite tree. On the other hand, every non-empty finite graph
+that conforms to S is a collection of disjoint cycles when restricted
+to s-edges, e.g., G0 in Figure 2. Clearly, the topology of finite and
+infinite graphs defined by the schema differs drastically.
+Now, take the queries P = ∃x .r (x, x), Q = ∃x, y.(r · s
+
++ · r )(x, y),
+and observe that P ⊆S Q. However, the containment does not hold
+□
+over infinite graphs: P is satisfied by G∞ while Q is not.
+
+The reason why we cannot pass directly to infinite models is that
+finite graphs conforming to schema S may display certain additional
+common properties, detectable by queries, but not shared by infinite
+graphs conforming to S. The cycle reversing technique [20] captures
+
+S:
+
+s
+
++
+
+?
+
+A
+
+*
+
+*
+
+r
+
+G:
+
+r
+
+u
+
+s
+
+u′
+
+s
+
+u′′
+
+s
+
+. . .
+
+A ⊓ Br
+
+A ⊓ Br ·s + A ⊓ Br ·s +
+
+Figure 3: Cycle reversal argument.
+
+these properties in S∗ such that
+
+P ⊆S Q
+
+iff
+
+P ⊆∞
+
+S ∗ Q
+
+where by ⊆∞
+S ∗ we mean containment over possibly infinite graphs
+conforming to S∗. However, as the following example shows, we
+cannot obtain S∗ by analysing S alone.
+Example 5.3. In Example 5.2 we saw that in a finite graph con-
+forming to S, each node has exactly one incoming and one outgoing
+s-edge. We can use this observation to tighten the original schema
+S to the schema S∗ (Figure 2). Alas, we still have P ⊈∞
+S ∗ Q because
+there is an infinite graph G∗
+□
+∞ that satisfies P but not Q.
+
+Instead, we first reduce containment modulo schema to finite
+satisfiability, fusing the schema S and the query Q into a single
+Horn-ALCIF TBox, and then pass from finite to unrestricted sat-
+isfiability by applying cycle reversing to the resulting TBox. We
+follow closely the approach of Ibáñez-García et al. [38], relying
+crucially on some of their results.
+
+Let T be a Horn-ALCIF TBox. A finmod cycle is a sequence
+
+K1, R1, K2, R2, . . . , Kn−1, Rn−1, Kn
+where R1, . . . , Rn−1 ∈ Σ± and K1, . . . , Kn are conjunctions of con-
+cept names such that Kn = K1 and
+T |= Ki ⊑ ∃Ri .Ki+1
+
+and T |= Ki+1 ⊑ ∃≤1
+
+R−
+i .Ki
+
+for 1 ≤ i < n. By reversing the finmod cycle we mean extending T
+with concept inclusions
+Ki+1 ⊑ ∃R−
+
+and Ki ⊑ ∃≤1
+
+Ri .Ki+1
+
+i .Ki
+
+for 1 ≤ i < n. The completion T ∗ of a TBox T is obtained from T
+by exhaustively reversing finmod cycles. The following key result
+is stated in [38] in terms of sets of ground facts (so-called ABoxes)
+rather than subgraphs, but our formulation is equivalent.
+
+Theorem 5.4 (Ibáñez-García et al., 2014). A Horn-ALCIF TBox
+T has a finite model containing a finite subgraph H iff its completion
+T ∗ has a possibly infinite model containing H .
+Example 5.5. Schema S from Example 5.2 is equivalent to TBox
+TS that consists of
+
+s−.A .
+
+Br ⊑ ∀s.Br ·s + ,
+
+Br ·s + ⊑ ∀s.Br ·s + ,
+
+⊤ ⊑ A , A ⊑ ∃s.A , A ⊑ ∃≤1
+Non-satisfaction of Q is captured by TBox T¬Q that consists of
+⊤ ⊑ ∀r .Br ,
+Br ·s + ⊑ ∀r .⊥ .
+Let T = TS ∪ T¬Q and observe that A ⊓ Br ·s + , s , A ⊓ Br ·s + is a
+finmod cycle in T . By reversing it, we obtain
+A ⊓ Br ·s + ⊑ ∃s−.A ⊓ Br ·s +
+s.A ⊓ Br ·s + .
+Now, suppose that there exists a (finite or infinite) model G of T ∗
+that satisfies P (see Figure 3). G must have a node u with (u, u) ∈ r G .
+It follows already from T that u ∈ (A ⊓ Br )G and that u has an
+s-successor u ′ ∈ (A ⊓ Br ·s + )G . The statement A ⊓ Br ·s + ⊑ ∃s−.A ⊓
+Br ·s + in T ∗ implies that u ′ has an s−-successor u ′′ ∈ (A ⊓ Br ·s + )G .
+
+and A ⊓ Br ·s + ⊑ ∃≤1
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+As each node has at most one incoming s-edge, u = u ′′ and u ∈
+(Br ·s + )G . But u has an outgoing r -edge, which contradicts the last
+concept inclusion in T¬Q . Thus, P is not satisfied in T ∗.
+□
+
+between conjunctions of concept names and sets of labels. Note
+that (cid:98)TS ∪ T¬Q is trivially S-driven, as all its existential and at-most
+constraints are of the form A ⊑ ∃R.A′ or A ⊑ ∃≤1
+
+R.A′.
+
+We are now ready to reduce containment modulo schema to
+unrestricted satisfiability modulo Horn-ALCIF TBox. Note that
+the guarantees on the resulting TBox in the statement below are
+sufficient to conclude Theorem 5.1 using Theorem 6.1.
+
+Theorem 5.6. Given a UC2RPQ P, an acyclic UC2RPQ Q, and a
+schema S, one can compute in EXPTIME a UC2RPQ (cid:98)P of polyno-
+mial size and a Horn-ALCIF TBox T using linearly many addi-
+tional concept names and polynomially many at-most constraints,
+such that P ⊆S Q if and only if (cid:98)P is (unrestrictedly) unsatisfiable
+modulo T .
+
+Let us sketch the proof. Let TS be the Horn-ALCIF TBox corre-
+sponding to S. Note that apart from the explicit restrictions captured
+in TS the schema S also ensures that only graphs with exactly one
+label per node are considered. To ensure at most one label from ΓS
+per node, we use the TBox (cid:98)TS = TS ∪{A⊓B ⊑ ⊥ | A, B ∈ ΓS , A (cid:44) B}.
+The concept inclusion ⊤ ⊑ (cid:195) ΓS , expressing that each node has at
+least one label from ΓS , is not Horn and cannot be used. Instead, we
+modify the query P. Assuming ΓS = {A1, A2, . . . , An }, we include
+(A1 + A2 + · · · + An ) before and after each edge label used in an
+atom of P. Additionally, to ensure that P uses only labels allowed
+by S, we substitute in P each label not in ΓS ∪ Σ±
+by (cid:156). Letting (cid:98)P
+S
+be the resulting query, we have
+
+P ⊆S Q
+
+iff
+
+(cid:98)P ⊆
+
+(cid:98)TS
+
+Q
+
+(see Lemma D.3). Because Q is acyclic, by adapting the rolling-up
+technique [35] one can compute in PTIME a Horn-ALCIF TBox
+T¬Q over an extended set of concept names ΓS ∪ ΓQ such that
+
+(cid:98)P ⊆
+
+(cid:98)TS
+
+Q
+
+iff
+
+(cid:98)P is finitely unsatisfiable modulo (cid:98)TS ∪ T¬Q .
+
+(see Lemma C.2). Since (cid:98)TS ∪ T¬Q is a Horn-ALCIF TBox, we can
+(cid:1)∗. As UC2RPQs are witnessed
+consider its completion (cid:0)
+by finite subgraphs whenever they are satisfied, we can infer from
+Theorem 5.4 that (cid:98)P is finitely satisfiable modulo (cid:98)TS ∪ T¬Q iff (cid:98)P is
+satisfiable modulo (cid:0)
+
+(cid:1)∗ (see Lemma D.4).
+
+(cid:98)TS ∪ T¬Q
+
+(cid:98)TS ∪ T¬Q
+
+It remains to compute the completion. Reversing cycles does not
+introduce new concept names, but it may generate exponentially
+many concept inclusions. Identifying a finmod cycle involves decid-
+ing unrestricted entailment of Horn-ALCIF concept inclusions,
+which is decidable in EXPTIME [26]. However, since the input TBox
+might grow to an exponential size as more and more cycles are
+reversed, it is unlikely that the completion can be computed in
+EXPTIME for every Horn-ALCIF TBox. Our key insight is that
+(cid:98)TS ∪ T¬Q enjoys a particular property, invariant under reversing
+cycles, that keeps the complexity under control.
+
+A concept inclusion (CI) of the form K ⊑ ∃R.K ′ or K ⊑ ∃≤1
+R.K ′
+is relevant for a TBox T if the triple (K, R, K ′) is satisfiable modulo
+T ; that is, some model G of T contains nodes u and u ′ such that u ∈
+KG , (u, u ′) ∈ RG , and u ′ ∈ (K ′)G . We say that T is S-driven if for
+each relevant CI in T of the form K ⊑ ∃R.K ′ (resp. K ⊑ ∃≤1
+R.K ′),
+T contains A ⊑ ∃R.A′ (resp. A ⊑ ∃≤1
+R.A′) for some A, A′ ∈ ΓS
+such that A ∈ K, A′ ∈ K ′; here and later we blur the distinction
+
+| · |ΓS |2 at-most constraints.
+
+Lemma 5.7. Every S-driven TBox T can be simplified in polynomial
+time so that it contains at most |Σ±
+S
+From our results in Section 6 it follows that unrestricted entail-
+ment for a Horn-ALCIF TBox T with k concept names and ℓ
+at-most constraints can be solved in time O (cid:0)poly(|T |) · 2poly(k, ℓ)(cid:1)
+(Corollary E.7). Hence, it would suffice to show that by reversing
+a finmod cycle in an S-driven TBox, we obtain another S-driven
+TBox. In fact, we prove something weaker, but sufficient to compute
+the completion in EXPTIME, and conclude that it is S-driven.
+
+Let K1, R1, . . . , Kn−1, Rn−1, Kn be a finmod cycle in an S-driven
+
+Horn-ALCIF TBox T . Reversing it will extend T with CIs
+
+Ki+1 ⊑ ∃R−
+
+i .Ki
+
+and Ki ⊑ ∃≤1
+
+Ri .Ki+1
+
+for 1 ≤ i < n. If all triples (Ki , Ri , Ki+1) are unsatisfiable wrt T ,
+then all CIs to be added are irrelevant for T and we are done.
+Suppose that some (Ki , Ri , Ki+1) is satisfiable. Then, in the model
+for (Ki , Ri , Ki+1) we can trace the finmod cycle forward, witnessing
+each triple. Hence, the whole cycle is satisfiable (all its triples are).
+Then, we can show that there are unique A1, A2, . . . , An ∈ ΓS such
+that Ai ∈ Ki for all i ≤ n, and A1, R1, . . . , An−1, Rn−1, An is a
+finmod cycle in T (Lemma D.6). By reversing it, we can add to T
+CIs
+
+Ai+1 ⊑ ∃R−
+
+i .Ai
+
+and Ai ⊑ ∃≤1
+
+Ri .Ai+1
+
+for 1 ≤ i < n, which makes the resulting extension S-driven.
+
+Based on the obtained invariant we can compute the completion
+(cid:1)∗
+(cid:1)∗ in EXPTIME (Lemma D.7). By reducing (cid:0)
+(cid:0)
+(cid:98)TS ∪ T¬Q
+as described above, we obtain the desired TBox T , thus completing
+the proof of Theorem 5.6.
+
+(cid:98)TS ∪ T¬Q
+
+6 SATISFIABILITY MODULO TBOX
+The last missing piece is to solve the unrestricted satisfiability of
+C2RPQs modulo Horn-ALCIF . Calvanese et al. show that the
+problem is in EXPTIME not only for Horn-ALCIF , but even for
+ALCIF extended with additional features [16]. This result is not
+directly applicable, because our reduction produces a TBox of ex-
+ponential size. The following theorem gives the more precise com-
+plexity bounds that we need.
+
+Theorem 6.1. Unrestricted satisfiability of a C2RPQ p modulo an
+ALCIF TBox T using k concept names and ℓ at-most constraints
+can be decided in time O (cid:0)poly(|T |) · 2poly(|p |,k, ℓ)(cid:1).
+
+Calvanese et al. solve the problem by first showing a simple
+model property and then providing an algorithm testing existence
+of simple models. We rely on the same simple model property,
+but design a new algorithm with the desired complexity bounds.
+Yet, rather than diving into the details of the algorithm, we devote
+most of this section to the simple model property. We do it to
+show a connection to an elegant graph-theoretical notion that helps
+to simplify the reasoning considerably, at least for ALCIF . We
+begin by illustrating how simple models are obtained for queries
+satisfiable modulo schemas (rather than arbitrary TBoxes).
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+c
+
+d
+
+G0:
+x
+
+b
+
+a
+
+a
+
+a a
+
+S:
+
+a
+
+?
+
+?
+
+b*
+
+*
+
+*
+
+d *
+
+a
+a
+
+*
+
+*
+
+c
+
+c
+
+b
+
+a
+
+Gt :
+
+d
+
+a
+
+b
+
+a
+a
+
+a
+
+c
+
+c
+
+a
+
+a
+
+y
+
+a
+
+d
+
+a
+
+a
+
+a
+
+a
+
+d
+
+b
+
+Figure 4: Simple witness for satisfiability.
+
+Example 6.2. Take the schema S in Figure 4 (its two types are
+represented with a blue square and a red circle), and consider the
+following satisfiable (cyclic) query
+
++ · d · a)(x, y) ∧ (a∗)(x, y) ∧ (a∗ · b · d · a∗)(x, y) .
+p(x, y) = (a · b · c
+Since p is satisfiable modulo S, we take any graph conforming to
+S where p is satisfied, and we choose any 3 paths witnessing each
+of the regular expressions of p. We construct the initial graph G0
+consisting of the 3 paths joined at their ends: it might look like the
+one in Figure 4. We observe that S requires every red circle node
+to have at most one outgoing a-edge and at most one incoming
+a-edge (to and from a red circle node). The initial graph G0 violates
+this requirement and to enforce it we exhaustively merge offending
+□
+nodes. The final graph Gt is a simple model of p modulo S.
+
+We formalise simple models using a graph-theoretic notion of
+sparsity proposed by Lee and Streinu [44]. We say that a connected
+graph G with n nodes and m edges is c-sparse if m ≤ n + c. (In
+Lee and Streinu’s terminology this corresponds to (1, −c)-sparsity.)
+Being c-sparse is preserved under adding and removing nodes of
+degree 1. By exhaustively removing nodes of degree 1 from a c-
+sparse graph G we arrive at single node or a connected c-sparse
+graph H in which all nodes have degree at least 2. Assuming c ≥ 1,
+it is not hard to see that such a graph consists of at most k = 2c
+distinguished nodes connected by at most l = 3c simple paths
+disjoint modulo endpoints (see Lemma E.1). We call such a graph
+a (k, l)-skeleton, and we refer to the graph H above as the skeleton
+of G. Thus, a c-sparse graph consists of a (2c, 3c)-skeleton and a
+number of attached trees; by attaching a tree to a graph we mean
+taking their disjoint union and adding a single edge between the
+root of the tree and some node of the graph.
+
+For the purpose of the simple model property we need to lift the
+notion of c-sparsity to infinite graphs. We call a (possibly infinite)
+graph c-sparse if it consists of a finite connected c-sparse graph
+with finitely many finitely branching trees attached.
+
+Theorem 6.3. A connected C2RPQ p is satisfiable in a possibly in-
+finite model of an ALCIF TBox T iff p is satisfiable in a possibly
+infinite |p|-sparse model of T .
+
+Proof. Let c be the difference between the number of atoms and
+the number of variables of p. Because p is connected, c ≥ −1. By
+definition, p understood as a graph with variables as nodes and
+atoms as edges is c-sparse.
+
+We write H → H ′ to indicate that there is a homomorphism from
+graph H to graph H ′; that is, a function h mapping nodes of H to
+nodes of H ′ that preserves node labels and the existence of labelled
+edges between pairs of nodes. Let G be a (possibly infinite) model
+
+of p and T . We construct a sequence of finite connected c-sparse
+graphs of strictly decreasing size
+
+G0 → G1 → · · · → Gt → G
+such that G0 |= p and the homomorphism from Gt to G is injective
+over R-successors of every node, for each R.
+
+To construct G0 let us fix a match of p in G together with a (finite)
+witnessing path for each atom of p. We construct G0 as follows.
+For each variable x of p we include a node vx whose set of labels
+is identical to that of the image of x in G under the fixed match.
+Next, for each atom of p that connects variables x and y we add
+a simple path connecting x and y such that the sequence of edge
+labels and sets of node labels read off of this path is identical to that
+of the witnessing path of this atom in G. This graph can be seen
+as a specialization of p where each regular expression is replaced
+by a single concrete word, except that we include full sets of labels
+of nodes, as they are encountered in the witnessing path in G. It
+follows immediately that G0 |= p and that G0 → G. To see that G0
+is c-sparse one can eliminate the internal nodes of the connecting
+paths one by one, like in the proof of Lemma E.1, until a graph
+isomorphic to p remains.
+
+We define the remaining graphs Gi inductively, maintaining an
+additional invariant Gi → G. Suppose we already have Gi together
+with a homomorphism hi : Gi → G for some i ≥ 0. If hi is injective
+over R-successors of each node of Gi , we are done. If not, there
+are two different R-successors u1 and u2 of a node v in Gi that are
+mapped to the same node u ′ in G. It follows that u1 and u2 have the
+same sets of labels types. We let Gi+1 be the graph obtained from Gi
+by merging u1 and u2 into a single node u. We include an R′-edge
+between u and each R′-successor of u1 or u2. This decreases the
+number of nodes by one, and the number or edges by at least one.
+It follows that Gi+1 is c-sparse and Gi → Gi+1 → G.
+
+Because the sizes of graphs Gi are strictly decreasing, at some
+point we will arrive at a graph Gt such that the homomorphism
+from Gt to G is injective over R-successors.
+
+The graph Gt clearly satisfies p. It also satisfies all concept inclu-
+sions in T of the forms K ⊑ A1 ⊔ A2 ⊔ · · · ⊔ An , K ⊑ ⊥, K ⊑ ∀R.K ′,
+K ⊑ (cid:154)R.K ′, and K ⊑ ∃≤1
+R.K ′, because hi is injective over R-
+successors and G |= T . On the other hand, Gt is not guaranteed
+to satisfy concept inclusions of the form K ⊑ ∃R.K ′ in T . In or-
+der to fix it, we exhaustively (ad infinitum) perform the following:
+whenever a node v in Gt is missing an R-successor with some set
+of labels, we add it and map it to some such R-successor u ′ of the
+image of v in G (u ′ exists because G |= T ). As c ≤ |p|, the resulting
+(typically infinite) graph (cid:98)G is |p|-sparse, and it satisfies p and T . □
+
+The connectedness assumption in Theorem 6.3 is not restrictive,
+because a witnessing graph for p can be obtained by taking the
+disjoint union of witnesses for its connected components. Hence,
+it remains to decide for a given connected p if there exists a |p|-
+sparse graph G that satisfies p and T . To get a finer control of the
+effect different parameters of the input have on the complexity,
+we side-step two-way alternating tree automata (2ATA) applied by
+Calvanese et al. and develop a more direct algorithm.
+
+Observe that if p is satisfied in a |p|-sparse graph G, then G
+contains a (4|p|, 5|p|)-skeleton H ′, extending the skeleton of G,
+such that all variables of p are mapped to distinguished nodes of H ′.
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Indeed, H ′ can be obtained by iteratively extending the skeleton
+of G. Suppose that some variable is mapped to a node v that is not
+yet a distinguished node of H ′. If v already belongs to H ′, then it is
+an internal node in a path between two distinguished nodes; we
+then split the path in two, turning v into a distinguished node. If v
+does not belong to H ′, then it belongs to a tree attached to H ′ at a
+node u. If u is not a distinguished node of H ′, we turn it into one, as
+above. Then, we add v to H ′ as a distinguished node, including the
+path between u and v into H ′ as well. As we start from a (2|p|, 3|p|)-
+skeleton and add at most two distinguished nodes and two paths
+for each variable of p, we end up with a (4|p|, 5|p|)-skeleton.
+
+Thus, the algorithm can guess a (4|p|, 5|p|)-skeleton H ′ with
+each path represented by a single symbolic edge and check that it
+can be completed to a suitable graph G by materializing symbolic
+edges into paths and attaching finitely many finitely branching
+trees in such a way that G is a model of T and there is a match of p
+in G that maps variables of p to distinguished nodes of H ′. This can
+be done within the required time bounds by means of a procedure
+that can be seen as a variant of type elimination or an emptiness
+test for an implicitly represented nondeterministic tree automaton
+(see Theorem E.3).
+
+7 DISCUSSION
+
+Summary. In this paper we have studied several static analysis
+problems for graph transformations defined with Datalog-like rules
+that use acyclic C2RPQs. When the source schema is given, we
+studied the equivalence problem of two given transformations, and
+the problem of target schema elicitation for a given transformation.
+If the output schema is also given, we have studied the problem
+of type checking. We have shown that the above problems can be
+reduced to containment of C2RPQs in acyclic UC2RPQs modulo
+schema, a problem that we have reduced to the unrestricted (finite
+or infinite) satisfiabilty of a C2RPQ modulo Horn-ALCIF TBox
+using cycle reversing. For the latter problem we have presented an
+algorithm with sufficiently good complexity to accommodate the
+exponential blow-up introduced by cycle reversing, thus allowing
+to solve in EXPTIME all problems of interest. We have also shown
+matching lower bounds by reducing query containment modulo
+schema to each of the static analysis problems.
+
+Finite containment modulo Horn-ALCIF TBox. In the course
+of the proof of the upper bound for containment modulo schema,
+we essentially solved (finite) containment modulo Horn-ALCIF
+TBox. Indeed, while the EXPTIME upper bound relies on the special
+shape of the TBox expressing the schema, the method can be applied
+directly to any Horn-ALCIF TBox, at the cost of an exponential
+increase in complexity. Thus, we immediately get that finite con-
+tainment of UC2RPQs in acyclic UC2RPQs modulo Horn-ALCIF
+TBoxes can be solved in 2EXPTIME. To the best of our knowledge
+this is the first result on finite containment of C2RPQs in the context
+of description logics. A related problem of finite entailment has been
+studied for various logics [27–29, 31], but while for conjunctive
+queries the solutions carry over to finite containment, for C(2)RPQs
+these logics are too weak to allow this. Unrestricted containment of
+C2RPQs modulo ALCIF TBoxes is known to be in 2EXPTIME [16],
+but passing from unrestricted to finite structures is typically chal-
+lenging for such problems. For example, finite entailment of CRPQs
+
+for a fundamental description logic ALC has been solved only
+recently [31], 15 years after the unrestricted version [14].
+
+Extending queries. It is straightforward to extend our methods to
+two-way nested regular expressions (NREs) [52]. We also intend to
+investigate introducing negation in filter expressions of NREs. Elim-
+inating the acyclicity assumption, on the other hand, is problematic.
+Containment of arbitrary C2RPQs is EXPSPACE-complete [15],
+and we have shown that it reduces to our problems of interest for
+transformation rules with cyclic queries. Hence, extending our EX-
+PTIME upper bounds to transformations allowing cyclic C2RPQs
+is highly unlikely. In fact, even establishing decidability would be
+hard. For acyclic queries we could use the rolling-up technique
+to reduce containment to satisfiability, which allowed us to apply
+the cycle reversing technique and pass from finite to unrestricted
+models. When cyclic queries are allowed, the rolling-up technique
+is inapplicable and we are left with containment of C2RPQs modulo
+constraints, which is a major open problem, not only for constraints
+expressed in description logics. The only positive results we are
+aware of do not go significantly beyond CQs extended with a binary
+reachability relation [23].
+
+Extending schemas. Extending the schema formalism with dis-
+junction is also challenging: the corresponding description logic
+would not be Horn any more and the transition to unrestricted mod-
+els via cycle reversing would not be possible. Supporting multiple
+labels on nodes would not be a trivial extension either: we rely on
+the single label per node assumption in the reduction of the prob-
+lems of interest to containment of UC2RPQs in acyclic UC2RPQs,
+and in the EXPTIME upper bound. Supporting more general car-
+dinality constraints, on the other hand, should be possible, but it
+might affect the complexity upper bounds.
+
+Extending the data model. It is straightforward to encode data
+values in our graph model, for instance, by using dedicated node
+labels to designate literal nodes whose identifiers are their data
+values. Then, one can apply methods similar to type checking to
+verify that transformations are well-behaved, and in particular, do
+not attempt to construct literal nodes from non-literal ones. How-
+ever, the full consequences of allowing literal values in definitions
+of transformation rules need to be thoroughly investigated.
+
+Finally, we have considered equivalence of transformations based
+on equality of results but one could also consider a variant based on
+isomorphism of results. This would be an entirely different problem,
+probably much harder.
+
+ACKNOWLEDGMENTS
+This work was supported by Poland’s National Science Centre grant
+2018/30/E/ST6/00042. We would like to thank Sebastian Maneth,
+Mikaël Monet, Bruno Guillon, and Yazmin Ibáñez-García for their
+comments and discussions. For the purposes of open access, the
+authors have applied a CC BY public copyright licence to any Author
+Accepted Manuscript version arising from this submission.
+
+REFERENCES
+[1] Serge Abiteboul and Richard Hull. 1987. IFO: A Formal Semantic Database Model.
+ACM Trans. Database Syst. 12, 4 (Nov. 1987), 525–565. https://doi.org/10.1145/
+32204.32205
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+[2] Serge Abiteboul and Paris C. Kanellakis. 1998. Object Identity as a Query Lan-
+guage Primitive. J. ACM 45, 5 (Sept. 1998), 798–842. https://doi.org/10.1145/
+290179.290182
+
+[3] Renzo Angles. 2018. The Property Graph Database Model. In Proceedings of the
+12th Alberto Mendelzon International Workshop on Foundations of Data Manage-
+ment, Cali, Colombia, May 21-25, 2018 (CEUR Workshop Proceedings, Vol. 2100).
+CEUR-WS.org. http://ceur-ws.org/Vol-2100/paper26.pdf
+
+[4] Renzo Angles and Claudio Gutierrez. 2008. Survey of graph database models.
+Comput. Surveys 40, 1 (Feb. 2008), 1–39. https://doi.org/10.1145/1322432.1322433
+[5] Marcelo Arenas, Jorge Pérez, Juan Reutter, and Cristian Riveros. 2013. The
+language of plain SO-tgds: Composition, inversion and structural properties. J.
+Comput. System Sci. 79 (Sept. 2013). https://doi.org/10.1016/j.jcss.2013.01.002
+[6] Franz Baader, Ian Horrocks, Carsten Lutz, and Ulrike Sattler. 2017. An Introduction
+
+to Description Logic. Cambridge University Press.
+
+[7] Pablo Barceló, Jorge Pérez, and Juan L. Reutter. 2013. Schema mappings and
+data exchange for graph databases. In Joint 2013 EDBT/ICDT Conferences, ICDT
+’13 Proceedings, Genoa, Italy, March 18-22, 2013. https://doi.org/10.1145/2448496.
+2448520
+
+[8] Mikolaj Bojanczyk, Leszek Aleksander Kolodziejczyk, and Filip Murlak. 2013.
+Solutions in XML data exchange. J. Comput. Syst. Sci. 79 (Sept. 2013). https:
+//doi.org/10.1016/j.jcss.2013.01.004
+
+[9] Iovka Boneva, Benoit Groz, Jan Hidders, Filip Murlak, and Sławek Staworko.
+2023. Static Analysis of Graph Database Transformations. Technical Report.
+https://hal.science/hal-03937274
+
+[10] Iovka Boneva, Sławek Staworko, and Jose Lozano. 2020. Consistency and Certain
+Answers in Relational to RDF Data Exchange with Shape Constraints. In New
+Trends in Databases and Information Systems, Vol. 1259. 97–107. https://doi.org/
+10.1007/978-3-030-54623-6_9
+
+[11] Angela Bonifati, Peter Furniss, Alastair Green, Russ Harmer, Eugenia Oshurko,
+and Hannes Voigt. 2019. Schema Validation and Evolution for Graph Databases.
+In Conceptual Modeling. 448–456. https://doi.org/10.1007/978-3-030-33223-5_37
+[12] Peter Buneman, Mary Fernandez, and Dan Suciu. 2000. UnQL: A Query Language
+and Algebra for Semistructured Data Based on Structural Recursion. The VLDB
+Journal 9 (2000), 76–110. https://doi.org/10.1007/s007780050084
+
+[13] Diego Calvanese, Giuseppe De Giacomo, Maurizio Lenzerini, and Moshe Y Vardi.
+2011. Simplifying schema mappings. In Proceedings of the 14th International
+Conference on Database Theory. 114–125. https://doi.org/10.1145/1938551.1938568
+[14] Diego Calvanese, Thomas Eiter, and Magdalena Ortiz. 2007. Answering Regular
+Path Queries in Expressive Description Logics: An Automata-Theoretic Approach.
+In Proceedings of the Twenty-Second AAAI Conference on Artificial Intelligence,
+July 22-26, 2007, Vancouver, British Columbia, Canada. AAAI Press, 391–396.
+http://www.aaai.org/Library/AAAI/2007/aaai07-061.php
+
+[15] Diego Calvanese, Giuseppe De Giacomo, Maurizio Lenzerini, and Moshe Y. Vardi.
+2000. Containment of Conjunctive Regular Path Queries with Inverse. In KR 2000,
+Principles of Knowledge Representation and Reasoning Proceedings of the Seventh
+International Conference, Breckenridge, Colorado, USA, April 11-15, 2000. 176–185.
+[16] Diego Calvanese, Magdalena Ortiz, and Mantas Simkus. 2011. Containment
+of Regular Path Queries under Description Logic Constraints. In IJCAI 2011,
+Proceedings of the 22nd International Joint Conference on Artificial Intelligence,
+Barcelona, Catalonia, Spain, July 16-22, 2011. 805–812. https://doi.org/10.5591/978-
+1-57735-516-8/IJCAI11-141
+
+[17] Peter P. Chen. 1975. The Entity-Relationship Model: Toward a Unified View of
+Data. In Proceedings of the International Conference on Very Large Data Bases,
+September 22-24, 1975, Framingham, Massachusetts, USA. 173. https://doi.org/10.
+1145/1282480.1282492
+
+[18] Cristina Civili, Jose Mora, Riccardo Rosati, Marco Ruzzi, and Valerio Santarelli.
+2016. Semantic Analysis of R2RML Mappings for Ontology-Based Data Access.
+In Web Reasoning and Rule Systems. 25–38. https://doi.org/10.1007/978-3-319-
+45276-0_3
+
+[19] Julien Corman, Juan L. Reutter, and Ognjen Savkovic. 2018. Semantics and
+Validation of Recursive SHACL. In The Semantic Web – ISWC 2018. 318–336.
+https://doi.org/10.1007/978-3-030-00671-6_19
+
+[20] Stavros S. Cosmadakis, Paris C. Kanellakis, and Moshe Y. Vardi. 1990. Polynomial-
+Time Implication Problems for Unary Inclusion Dependencies. J. ACM 37, 1 (1990),
+15–46. https://doi.org/10.1145/78935.78937
+
+[21] Bruno Courcelle. 1994. Monadic second-order definable graph transductions: a
+survey. Theoretical Computer Science 126 (1994). https://doi.org/10.1016/0304-
+3975(94)90268-2
+
+[22] Richard Cyganiak, Seema Sundara, and Souripriya Das. 2012.
+
+R2RML:
+W3C Recommendation. W3C.
+
+RDB to RDF Mapping Language.
+https://www.w3.org/TR/2012/REC-r2rml-20120927/.
+
+[23] Alin Deutsch and Val Tannen. 2002. Optimization Properties for Classes of
+Conjunctive Regular Path Queries. In Database Programming Languages. 21–39.
+https://doi.org/10.1007/3-540-46093-4_2
+
+[24] Ronald Fagin, Phokion G. Kolaitis, Renée J. Miller, and Lucian Popa. 2005. Data
+exchange: semantics and query answering. Theor. Comput. Sci. 336 (2005). https:
+//doi.org/10.1016/j.tcs.2004.10.033
+
+[25] Ingo Feinerer, Reinhard Pichler, Emanuel Sallinger, and Vadim Savenkov. 2015.
+On the undecidability of the equivalence of second-order tuple generating depen-
+dencies. Information Systems 48 (2015). https://doi.org/10.1016/j.is.2014.09.003
+[26] Giuseppe De Giacomo and Maurizio Lenzerini. 1996. TBox and ABox Reasoning in
+Expressive Description Logics. In Proceedings of the Fifth International Conference
+on Principles of Knowledge Representation and Reasoning. 316–327.
+
+[27] Tomasz Gogacz, Víctor Gutiérrez-Basulto, Albert Gutowski, Yazmín Ibáñez-
+García, and Filip Murlak. 2020. On Finite Entailment of Non-Local Queries
+in Description Logics. In Proceedings of the 17th International Conference on Prin-
+ciples of Knowledge Representation and Reasoning. 424–433. https://doi.org/10.
+24963/kr.2020/43
+
+[28] Tomasz Gogacz, Víctor Gutiérrez-Basulto, Yazmín Ibáñez-García, Jean Christoph
+Jung, and Filip Murlak. 2019. On Finite and Unrestricted Query Entailment
+beyond SQ with Number Restrictions on Transitive Roles. In Proceedings of the
+Twenty-Eighth International Joint Conference on Artificial Intelligence, IJCAI-19.
+1719–1725. https://doi.org/10.24963/ijcai.2019/238
+
+[29] Tomasz Gogacz, Yazmín Angélica Ibáñez-García, and Filip Murlak. 2018. Finite
+Query Answering in Expressive Description Logics with Transitive Roles. In
+Principles of Knowledge Representation and Reasoning: Proceedings of the Sixteenth
+International Conference, KR. 369–378.
+
+[30] W3C: RDF Working Group. 2004. Resource Description Framework. https:
+
+//www.w3.org/RDF/. Accessed: 2022, June 03.
+
+[31] Victor Gutiérrez-Basulto, Albert Gutowski, Yazmin Ibáñez-Garcia, and Filip
+Murlak. 2022. Finite Entailment of UCRPQs over ALC Ontologies. In Proceedings
+of the 19th International Conference on Principles of Knowledge Representation and
+Reasoning, KR. 184–194. https://doi.org/10.24963/kr.2022/19
+
+[32] Marc Gyssens, Jan Paredaens, Jan van den Bussche, and Dirk van Gucht. 1994. A
+graph-oriented object database model. IEEE Transactions on Knowledge and Data
+Engineering 6, 4 (1994), 572–586. https://doi.org/10.1109/69.298174
+
+[33] Jan Hidders. 2003. Typing Graph-Manipulation Operations. In Database Theory
+
+— ICDT 2003. 391–406. https://doi.org/10.1007/3-540-36285-1_26
+
+[34] HL7.org. 2019. FHIR Mapping Language. https://hl7.org/fhir/mapping-language.
+
+html. Accessed: 2022-05-25.
+
+[35] Ian Horrocks and Sergio Tessaris. 2000. A Conjunctive Query Language for
+Description Logic Aboxes. In Proceedings of the Seventeenth National Conference
+on Artificial Intelligence and Twelfth Conference on Innovative Applications of
+Artificial Intelligence. 399–404.
+
+[36] Richard Hull and Masatoshi Yoshikawa. 1990. ILOG: Declarative Creation and Ma-
+nipulation of Object Identifiers. In Proceedings of the 16th International Conference
+on Very Large Data Bases. 455–468. http://www.vldb.org/conf/1990/P455.PDF
+
+[37] Richard Hull and Masatoshi Yoshikawa. 1991. On the Equivalence of Database
+Restructurings Involving Object Identifiers (Extended Abstract). In Proceedings
+of the Tenth ACM SIGACT-SIGMOD-SIGART Symposium on Principles of Database
+Systems. 328–340. https://doi.org/10.1145/113413.113443
+
+[38] Yazmín Angélica Ibáñez-García, Carsten Lutz, and Thomas Schneider. 2014. Finite
+Model Reasoning in Horn Description Logics. In Proceedings of the Fourteenth
+International Conference on Principles of Knowledge Representation and Reasoning.
+288–297.
+
+[39] Kazuhiro Inaba, Soichiro Hidaka, Zhenjiang Hu, Hiroyuki Kato, and Keisuke
+Nakano. 2011. Graph-Transformation Verification Using Monadic Second-Order
+Logic. In Proceedings of the 13th International ACM SIGPLAN Symposium on
+Principles and Practices of Declarative Programming. 17–28. https://doi.org/10.
+1145/2003476.2003482
+
+[40] Michael Kay. 2021. XSL Transformations (XSLT) Version 2.0 (Second Edition). W3C
+Recommendation. W3C. https://www.w3.org/TR/2021/REC-xslt20-20210330/.
+[41] Michael Kifer and Georg Lausen. 1989. F-Logic: A Higher-Order Language for
+Reasoning about Objects, Inheritance, and Scheme. SIGMOD Rec. 18, 2 (June
+1989), 134–146. https://doi.org/10.1145/66926.66939
+
+[42] Phokion G. Kolaitis, Reinhard Pichler, Emanuel Sallinger, and Vadim Savenkov.
+2020. On the Language of Nested Tuple Generating Dependencies. ACM Trans.
+Database Syst. 45, 2 (2020), 8:1–8:59. https://doi.org/10.1145/3369554
+
+[43] Gabriel M. Kuper and Moshe Y. Vardi. 1993. The Logical Data Model. ACM Trans.
+Database Syst. 18, 3 (Sept. 1993), 379–413. https://doi.org/10.1145/155271.155274
+[44] Audrey Lee and Ileana Streinu. 2008. Pebble game algorithms and sparse graphs.
+Discret. Math. 308, 8 (2008), 1425–1437. https://doi.org/10.1016/j.disc.2007.07.104
+[45] Mark Levene and Alexandra Poulovassilis. 1990. The hypernode model and its
+associated query language. In Proceedings of the 5th Jerusalem Conference on
+Information Technology, 1990. ’Next Decade in Information Technology’. 520–530.
+https://doi.org/10.1109/JCIT.1990.128324
+
+[46] David Maier. 1986. A Logic for Objects. In Proceedings of the Workshop on
+
+Foundations of Deductive Databases and Logic Programming. 6 – 26.
+
+[47] Sebastian Maneth, Alexandru Berlea, Thomas Perst, and Helmut Seidl. 2005. XML
+type checking with macro tree transducers. In Proceedings of the twenty-fourth
+ACM SIGMOD-SIGACT-SIGART symposium on Principles of database systems.
+https://doi.org/10.1145/1065167.1065203
+
+[48] Wim Martens and Frank Neven. 2007. Frontiers of tractability for typechecking
+simple XML transformations. J. Comput. System Sci. 73 (2007). https://doi.org/
+10.1016/j.jcss.2006.10.005
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+[49] Wim Martens, Frank Neven, and Marc Gyssens. 2008. Typechecking top-down
+XML transformations: Fixed input or output schemas. Information and Computa-
+tion 206, 7 (2008), 806–827. https://doi.org/10.1016/j.ic.2008.01.002
+
+[50] Tova Milo, Dan Suciu, and Victor Vianu. 2003. Typechecking for XML transform-
+ers. J. Comput. System Sci. 66 (2003). https://doi.org/10.1016/S0022-0000(02)00030-
+2
+
+[51] Jan Paredaens, Peter Peelman, and Letizia Tanca. 1995. G-Log: a graph-based
+query language. IEEE Transactions on Knowledge and Data Engineering 7, 3 (June
+1995), 436–453. https://doi.org/10.1109/69.390249
+
+[52] Jorge Pérez, Marcelo Arenas, and Claudio Gutiérrez. 2010. nSPARQL: A nav-
+https:
+
+J. Web Semant. 8, 4 (2010), 255–270.
+
+igational language for RDF.
+//doi.org/10.1016/j.websem.2010.01.002
+
+[53] Eric Prud’hommeaux, Harold R. Solbrig, and Guoqian Jiang. 2017. ShEx, RDF
+and FHIR. In Summit on Clinical Research Informatics, CRI 2017, San Francisco,
+CA, USA, March 27-30, 2017.
+
+[54] Grzegorz Rozenberg (Ed.). 1997. Handbook of Graph Grammars and Computing
+
+by Graph Transformations, Volume 1: Foundations. World Scientific.
+
+[55] Juan F. Sequeda. 2013. On the Semantics of R2RML and its Relationship with
+the Direct Mapping. In Proceedings of the ISWC 2013 Posters & Demonstrations
+Track, Sydney, Australia, October 23, 2013 (CEUR Workshop Proceedings, Vol. 1035).
+193–196. https://ceur-ws.org/Vol-1035/iswc2013_poster_4.pdf
+
+[56] Josh Spiegel, Michael Dyck, and Jonathan Robie. 2017. XQuery 3.1: An XML Query
+Language. W3C Recommendation. W3C. https://www.w3.org/TR/2017/REC-
+xquery-31-20170321/.
+
+[57] Sławek. Staworko, Iovka Boneva, Jose Emilio Labra Gayo, Samuel Hym, Eric G.
+Prud’hommeaux, and Harold Solbrig. 2015. Complexity and Expressiveness of
+ShEx for RDF. In International Conference on Database Theory (ICDT). 195–211.
+https://doi.org/10.4230/LIPIcs.ICDT.2015.195
+
+[58] Fabian M. Suchanek, Gjergji Kasneci, and Gerhard Weikum. 2007. Yago: A Core
+of Semantic Knowledge. In International Conference on World Wide Web (WWW).
+697–706. https://doi.org/10.1145/1242572.1242667
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+A DETAILS ON QUERIES
+A two-way regular expression is an expression defined with the
+following grammar.
+
+φ ::= (cid:156) | ϵ | A | R | φ · φ | φ + φ | φ∗,
+where A ∈ Γ and R ∈ Σ±. We define the semantics with the notion
+of witnessing paths that we formalize next. Given a graph G, a path
+in G is a sequence π = u0 · ℓ1 · u1 · . . . · uk −1 · ℓk · uk
+from u0 to uk
+are nodes of G, ℓ1, . . . , ℓk ∈ Γ ∪ Σ±, and for
+such that u0, . . . , uk
+every i ∈ {1, . . . , k } the following conditions are satisfied:
+
+(1) if ℓi ∈ Γ, then ui−1 = ui and ui ∈ ℓG
+i
+(2) if ℓi ∈ Σ±, then (ui−1, ui ) ∈ ℓG
+i
+
+.
+
+,
+
+The labeling of π is ℓ1 ·. . .·ℓn . Given a two-way regular expression φ
+we define the corresponding binary relation on nodes of the graph:
+(u, v) ∈ [φ]G iff there is a path from node u to node v in G whose
+labeling is recognized by φ.
+
+Now, a conjunctive two-way regular path query (C2RPQ) is a for-
+
+mula of the form
+
+q( ¯x) = ∃ ¯y.φ1(z1, z ′
+
+1) ∧ . . . ∧ φk (zk , z ′
+k
+
+),
+
+where for every i ∈ {1, . . . , k} the formula φi is a two-way regular
+1, . . . , zk , z ′
+expression and ¯x = {z1, z ′
+} \ ¯y. A C2RPQ is Boolean if
+k
+all of its variables are existentially quantified.
+
+Evaluating a C2RPQ q( ¯x) over a graph G yields a set [q( ¯x)]G of
+tuples over ¯x i.e., functions that assign nodes of G to elements of ¯x.
+Formally, t ∈ [q( ¯x)]G iff there is a tuple t ′ over ¯y such that the two
+tuples combined t ′′ = t ∪ t ′ satisfy all atoms i.e., (t ′′(zi ), t ′′(z ′
+i )) ∈
+[φi ]G for every i ∈ {1, . . . , k}. When the query is Boolean, then it
+may have only a single answer, the empty tuple () i.e., the unique
+function with the empty domain. If indeed () ∈ [q]G we say that q
+is satisfied in G and denote it by G |= q; otherwise, when [q]G = ∅,
+we say that q is not satisfied in G and we write G ̸|= q.
+
+For defining transformations we employ the subclass of acyclic
+C2RPQs. Formally, for a query q we construct its query multigraph
+whose nodes are variables and for every atom φ(x, y) we add an
+edge (x, y) unless the atom is of the form A(x, x), ϵ(x, x), or (cid:156)(x, x).
+q is acyclic if its query multigraph is acyclic.
+
+Finally, the semantics of unions of conjunctive two-way regular
+path queries (UC2RPQs), represented as sets of C2RPQs, is defined
+simply as:
+
+[{Q1( ¯x), . . . , Qk ( ¯x)}]G = [Q1( ¯x)]G ∪ . . . ∪ [Qk ( ¯x)]G .
+A UC2RPQ is acyclic if all of its components are acyclic. A Boolean
+UC2RPQ consists of Boolean C2RPQs.
+
+B PROOFS FOR TRANSFORMATIONS
+We begin by introducing elements of useful terminology. Given any
+finite subsets Γ0 ⊆ Γ and Σ0 ⊆ Σ, we say that a schema S is over Γ0
+and Σ0 if ΓS = Γ0 and ΣS = Σ0. Analogously, we say that a ALCIF
+TBox T is over Γ0 and Σ0 if all base concept names and base rule
+names used in T are from Γ0 and Σ0 respectively. Also, we say that
+a graph G is over Γ0 and Σ0 if G does not use any node or edge
+label outside of Γ0 and Σ0, and we extend this notion to families of
+graphs in the canonical fashion: G is a family of graphs over Γ0 and
+Σ0 if every graph in G is over Γ0 and Σ0. Finally, a transformation T
+is over Γ0 and Σ0 if all rules in T use in their heads node and edge
+labels in Γ0 and Σ0 respectively.
+
+However, for a transformation we shall need to identify tighter
+sets of node and edge labels when the input schema is known.
+As such, a transformation rule ρ ← q( ¯x) is productive modulo a
+schema S if q( ¯x) ⊈S (cid:156). A transformation T is trimmed modulo S if
+1) every rule in T is productive modulo S, 2) for every A ∈ ΓT there
+is an A-node rule in T , and 3) for every r ∈ ΣT there is a r -edge rule
+in T . Naturally, checking that a transformation is trimmed can be
+Turing-reduced in polynomial time to testing query containment
+modulo schema. Moreover, for a given schema S we can trim a
+given transformation T by removing all unproductive rules and
+removing from ΓT and ΣT any symbols that are not present in the
+head of any of the remaining rules.
+
+Next, an L0 TBox over Γ0 and Σ0 is a set of statements of the
+
+forms
+
+A ⊑ ∃≤1
+
+R.B,
+
+A ⊑ ∃R.B,
+A ⊑ (cid:154)R.B,
+where A, B ∈ Γ0 and R ∈ Σ±
+0 . T is coherent iff 1) T does not contains
+two contradictory rules A ⊑ ∃R.B and A ⊑ (cid:154)R.B for any A, B ∈ Γ
+and R ∈ Σ±, and 2) T contains A ⊑ ∃≤1
+R.B whenever it contains
+A ⊑ (cid:154)R.B. Now, for a given schema S the corresponding L0 TBox
+TS (over ΓS and ΣS ) is defined as follows.
+TS = {A ⊑ ∃R.B | A, B ∈ ΓS , R ∈ Σ±
+
+S , δS (A, R, B) ∈ {1, +}}
+
+∪ {A ⊑ ∃≤1
+∪ {A ⊑ (cid:154)R.B | A, B ∈ ΓS , R ∈ Σ±
+
+R.B | A, B ∈ ΓS , R ∈ Σ±
+
+S , δS (A, R, B) ∈ {1, ?, 0}}
+
+S , δS (A, R, B) = 0}.
+
+It is easy to see that there is one-to-one correspondence between
+schemas and coherent TBoxes. More precisely, given Γ0 ⊆ Γ and
+Σ0 ⊆ Σ, for any schema S over Γ0 and Σ0, TS is a coherent TBox
+over ΓS and ΣS , and for any coherent TBox T over Γ0 and Σ0 there
+is a unique schema S over Γ0 and Σ0 such that TS = T . Naturally,
+TS also captures the semantics of the cardinality constraints of S.
+
+Proposition B.1. For any schema S and for any graph G, G con-
+forms to S if and only if G |= TS , G |= ⊤ ⊑ (cid:195) ΓS , and G |= A⊓B ⊑ ⊥
+for any A, B ∈ ΓS .
+Proof. Straightforward since the ALCIF formulas are transla-
+tions of the conditions of conformance of a graph to a schema. □
+
+We use the above result to reduce type checking to testing entail-
+ment of simple ALCIF statements. Recall that for a schema S and a
+transformation T we define the entailment relation (T , S) |= K ⊑ K ′
+as T (G) |= K ⊑ K ′ for every G ∈ L(S).
+Lemma B.2. Given two schemas S and S ′ and a transformation T ,
+{T (G) | G ∈ L(S)} ⊆ L(S ′) if and only if (T , S) |= ⊤ ⊑ (cid:195) ΓT and
+(T , S) |= TS ′.
+Proof. Immediate consequence of Proposition B.1 and the fact that
+transformations must use a single dedicated node constructor for
+each node label. This ensures that (T , S) |= A ⊓ B ⊑ ⊥ holds for any
+□
+A, B ∈ ΓS ′.
+Later we prove how to reduce entailment of statements to query
+containment. Before, we address the problem of schema elicitation
+by observing that the correspondence between schemas and their
+L0 TBoxes is tighter. We first need to establish two auxiliary results.
+The first one characterizes the containment of schemas, which is
+expressed as an extension of a syntactic containment relation ≼
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+on the symbols used to specify participation constraints. More
+precisely, we define ≼ as the transitive and reflexive closure of the
+following assertions: 0 ≼ ?, 1 ≼ ?, ? ≼ +, and + ≼ *.
+
+Proposition B.3. Take finite Γ0 ⊆ Γ and Σ0 ⊆ Σ. Given two
+schemas S1 and S2 over Γ0 and Σ0, L(S1) ⊆ L(S2) if and only if
+
+δS1 (A, R, B) ≼ δS2 (A, R, B)
+
+for every A, B ∈ Γ0 and R ∈ Σ±
+0 .
+
+Proof. For the if part, we take any G that conforms to S1 and we
+note first that every node of G has exactly one label in Γ0. Also, for
+any A, B, ∈ Γ0 and any R ∈ Σ±
+
+0 we observe that
+δS1 (A, R, B) ≼ δS2 (A, R, B)
+implies that any A-node in G whose number of R-successors with
+label B satisfies the participation constraint δS1 (A, R, B) will also
+□
+satisfy δS2 (A, R, B).
+Next, we establish correspondence between L0 theories of sets of
+graphs and their containment-minimal schemas.
+
+Proposition B.4. Take finite Γ0 ⊆ Γ and Σ0 ⊆ Σ and take any
+nonempty family G of graphs over Γ0 and Σ0 such that G |= ⊤ ⊑
+(cid:195) Γ0 and G |= A ⊓ B ⊑ ⊥ for all A, B ∈ Γ0. Let T be the set of all
+L0 statements over Γ0 and Σ0 that hold in every graph in G. Then,
+T corresponds to the containment minimal schema S over Γ0 and Σ0
+such that G ⊆ L(S).
+
+Proof. We first argue that T is coherent. Indeed, should T contain
+two contradictory statements A ⊑ ∃R.B and A ⊑ (cid:154)R.B, then no
+graph in G could satisfy T and we know that G is nonempty.
+Consequently, T corresponds to a schema that we denote S◦ =
+(Γ0, Σ0, δS ◦ ). Naturally, G ⊆ L(S◦) because G |= ⊤ ⊑ (cid:195) Γ0 and
+G |= A ⊓ B ⊑ ⊥.
+
+Now, take any schema S over Γ0 and Σ0 such that G ⊆ L(S). We
+show that L(S◦) ⊆ L(S) with a proof by contradiction. Suppose
+L(S◦) ⊈ L(S). By Proposition B.3, there are A, B ∈ Γ0 and R ∈ Σ±
+0
+such that δS ◦ (A, R, B) (cid:36) δS (A, R, B). This means that TS contains
+an (A, R, B)-constraint ϕ that TS ◦ does not (by (A, R, B)-constraints
+we mean A ⊑ ∃R.B, A ⊑ ∃≤1
+R.B, and A ⊑ (cid:154)R.B). Since ϕ (cid:60) TS ◦
+there is a graph G ∈ G such that H ̸|= ϕ, and consequently, G does
+□
+not conform to S. Thus G ⊈ L(S), a contradiction.
+
+We obtain the following result allowing to solve the problem of
+schema elicitation problem.
+
+Lemma B.5. Take a schema S and a transformationT that is trimmed
+modulo S and such that (T , S) |= ⊤ ⊑ (cid:195) ΓT . Let T be the set of all L0
+statements over ΓT and ΣT that are satisfied by every graph in the
+family {T (G) | G ∈ L(S)}. Then, T corresponds to the containment
+minimal schema over ΓT and ΣS that contains {T (G) | G ∈ L(S)}.
+Proof. The proof follows immediately from Proposition B.4 except
+for the case when T is empty. Then, however, ΓT and ΣT are empty
+too and so is T . However, the schema that corresponds to T is
+also empty and it recognizes only empty graphs. As such it is
+the containment minimal schema over ΓT and ΣT that contains
+□
+{T (G) | G ∈ L(S)} ⊆ {∅}.
+To move to reducing entailment of statements to query containment
+we repeat the definitions of the relevant queries but in this version
+
+we clearly indicate the transformation in question. More precisely,
+For a transformation T , A, B ∈ ΓT , and r ∈ ΣT we define:
+
+(cid:12) A(cid:0) fA( ¯x)(cid:1) ← q( ¯x) ∈ T (cid:9),
+
+A( ¯x) = (cid:8)q( ¯x) (cid:12)
+QT
+A,r, B ( ¯x, ¯y) = (cid:8)q( ¯x, ¯y) (cid:12)
+QT
+A,r −, B ( ¯x, ¯y) = (cid:8)q( ¯y, ¯x) (cid:12)
+QT
+
+(cid:12) r (cid:0) fA( ¯x), fB ( ¯y)(cid:1) ← q( ¯x, ¯y) ∈ T (cid:9),
+(cid:12) r (cid:0) fB ( ¯y), fA( ¯x)(cid:1) ← q( ¯y, ¯x) ∈ T (cid:9).
+
+Now, we prove that the entailment of ⊤ ⊑ (cid:195) ΓT is reduced to query
+containment.
+
+A,R, B
+
+( ¯x, ¯y) ⊆S QT
+A
+
+Lemma B.6. Given a schema S and a transformation T , (T , S) |=
+⊤ ⊑ (cid:195) ΓT if and only if ∃ ¯y.QT
+( ¯x) for every A, B ∈
+ΓT and R ∈ Σ±
+T .
+Proof. For the if direction, we take any graph G ∈ L(S) and any
+element in u ∈ dom(T (G)). This element has been introduced
+by node rule or by an edge rule, but only the latter is of con-
+cern. Thus, assume that u = f (t) has been generated by the rule
+R(fA( ¯x), fB ( ¯y)) ← Q( ¯x, ¯y) with the valuation ¯x = t and ¯y = t ′
+. Since (t, t ′) ∈ QT
+( ¯x), t ∈
+(G) and ∃ ¯y.QT
+(G), and therefore, there is a node rule A(fA( ¯x)) ← Q ′( ¯x) such
+QT
+A
+that t ∈ Q ′(G). Consequently, u ∈ AT (G).
+
+( ¯x, ¯y) ⊆S QT
+A
+
+A, R, B
+
+A, R, B
+
+A, R, B
+
+For the only if direction, we take any G ∈ L(S) and any answer
+( ¯x, ¯y) which implies that (t, t ′) ∈ q( ¯x, ¯y) for some
+(t, t ′) ∈ QT
+rule R(fA( ¯x), fB ( ¯y)) ← q( ¯x, ¯y). Consequently, T (G) contains the
+fact R(fA(t), fB (t ′)). Since T (G) satisfies the statement ⊤ ⊑ (cid:195) ΓT
+and nodes constructed with fA can only be part of node label as-
+sertions with A, T (G) |= fA(t). Therefore, there must be a rule
+A(fA( ¯x) ← q′( ¯x) that generated the fact fA(t) with the valuation
+¯x = t. Consequently, t ∈ [QA]T (G).
+□
+
+T we have that
+
+Lemma B.7. Take a schema S and a transformation T , such that
+ΓT ⊆ ΓS , ΣS ⊆ ΣS , and (T , S) |= ⊤ ⊑ (cid:195) ΓT . For any A, B ∈ ΓT and
+any R ∈ Σ±
+(T , S) |= A ⊑ ∃R.B iff QA( ¯x) ⊆S QT
+(T , S) |= A ⊑ (cid:154)R.B iff ∃ ¯y.QA( ¯x)∧QT
+(T , S) |= A ⊑ ∃≤1
+R.B iff
+
+A, R, B ( ¯x),
+A, R, B ( ¯x, ¯y) ⊆S (cid:156),
+
+∃ ¯x .QT
+
+A, R, B ( ¯x, ¯z) ⊆S
+Proof. We prove each of the 3 claims separately.
+
+A, R, B ( ¯x, ¯y)∧QT
+
+A( ¯x)∧QT
+
+(cid:211)
+
+i [ϵ(yi , zi ).
+
+A, R, B
+
+A, R, B
+
+( ¯x), t ∈ [QT
+
+( ¯x)]G . Since QT
+A
+
+(1) For the if part, we fix a graph G ∈ L(S) and take any node
+u = fA(t) with label A in T (G). Thus, there is a node rule
+A(fA( ¯x)) ← q( ¯x) such that t ∈ [q( ¯x)]G and consequently,
+( ¯x)]G
+( ¯x) ⊆S QT
+t ∈ [QT
+A
+and there exists rule R(fA( ¯x), fB ( ¯y)) ← q′( ¯x, ¯y) such that
+(t, t ′) ∈ [q′( ¯x, ¯y)]G . Consequently, T (G) contains the edge
+R(fA(t), fB (t ′)). Because T (G) satisfies ⊤ ⊑ (cid:195) ΓT , there is
+also a rule B(fB ( ¯y)) ← q′′( ¯y) such that t ′ ∈ [q′′( ¯y)]G , and
+hence the node fB (t ′) has label B in G.
+For the only if part, we fix a graph G ∈ L(S) and take any t ∈
+]G , which means that there is a node rule A(fA( ¯x)) ←
+[QT
+A
+q( ¯x) with t ∈ [q( ¯x)]G . Consequently, A(fA(t)) belongs to
+T (G). Since M0(G) |= A ⊑ ∃R.B, G has an edge R(fA(t), v)
+and the node v has label B. This edge must be generated
+by an edge rule R(fA( ¯x), fB ( ¯y)) ← q′( ¯x, ¯y). Consequently, t
+belongs to the answers to ∃ ¯y.q′( ¯x, ¯y)] which is contained in
+QA, R, B ( ¯x) modulo S.
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+(2) The proof of this statement is by contradiction and it uses
+arguments that are analogous to those used in the proof of
+the above claim and we only outline it. We take a graph
+G ∈ L(S) such that in T (G) there is a node fA(t) with label
+A and an R-edge to a node with with label B. This happens
+if and only if the intersection of QA( ¯x) and ∃ ¯y.QA, R, B ( ¯x, ¯y)
+is non-empty.
+
+(3) Similarly, the proof is by contradiction but uses argument
+analogous to those in the proof of the first claim and we
+only outline it. We take a graph G ∈ L(S) such that T (G)
+has an A-node fA(t) which has R-edges to two different B-
+1) and fB (t ′
+nodes fB (t ′
+2). This is possible if and only if the
+( ¯x) ∧ QT
+query ∃ ¯x .QT
+2, and
+A
+consequently, ∃ ¯x .QT
+( ¯x, ¯z) ⊆S
+A
+(cid:211)
+i ϵ(yi , zi ) returns (t ′
+2). Because node constructors are
+invective, t ′
+1 (cid:44) t ′
+2) cannot be answer to
+(cid:211)
+□
+i ϵ(yi , zi ).
+
+A, R, B
+( ¯x) ∧ QT
+1, t ′
+2, and therefore, (t ′
+
+( ¯x, ¯y) returns both t ′
+( ¯x, ¯y) ∧ QT
+
+1 and t ′
+
+1, t ′
+
+A, R, B
+
+A, R, B
+
+For testing equivalence of two transformations we observe that
+since a transformation is equivalent to its trimmed version, two
+transformations T1 and T2 are equivalent modulo S if and only
+if they trimmed versions trimS (T1) and trimS (T2) are equivalent
+modulo S. In the following lemma, Q1 ≡S Q2 is short for Q1 ⊆S Q2
+and Q2 ⊆S Q1.
+
+Lemma B.8. Take a schema S and two transformations T1 and T2
+that are both trimmed modulo S. We have that T1 ≡S T2 if and only
+if the following conditions are satisfied:
+
+(1) ΓT1 = ΓT2 and ΣT1 = ΣT2 ,
+(2) QT1
+( ¯x) ≡S QT2
+A
+A
+( ¯x, ¯y) ≡S QT2
+(3) QT1
+
+( ¯x) for every A ∈ ΓT1 ,
+
+A, R, B
+
+A,R, B
+
+( ¯x, ¯y) for every A, B ∈ ΓT1 , R ∈ ΣT1 .
+Proof. The if part is trivial. We prove the only if part by proving
+the contraposition: we show that if one of the conditions (1), (2),
+and (3) is not satisfied, then T1 (cid:46)S T2.
+
+If (1) is not satisfied, then one of the transformations has at least
+one rule ρ that generate a node or an edge with a label that is not
+employed by the other transformations. Since both transformations
+are trimmed, there exists an input graph G such that the rule ρ
+produces objects on the output. But then T1(G) (cid:44) T2(G).
+
+If (2) is not satisfied, then there is an input graph G such that
+one of the transformations generates a node that the other does
+not. Hence, T1(G) (cid:44) T2(G).
+
+If (3) is not satisfied, then analogously, there is an input graph
+G such that one of the transformations generates an edge that the
+□
+other does not. Hence, T1(G) (cid:44) T2(G).
+
+C ROLLING UP QUERIES
+We next show how to reduce the non-satisfaction of an acyclic
+UC2RPQ Q to the satisfaction of a Horn-ALCIF TBox T¬Q . The
+TBox Q is basically a recursive program that defines a collection of
+sets (monadic relations) of nodes. We illustrate this construction
+with the following example.
+
+Example C.1. We take the following Boolean query.
+Q0 = ∃x0, x1, x2, x3. (a · b∗ · c)(x2, x1) ∧ (A)(x3, x1) ∧ (a−)(x1, x0).
+
+We construct a TBox that essentially simulates automata for the
+regular expressions, which are presented in Figure 5.
+
+b
+
+q1
+
+a
+
+q0
+
+c
+
+q2
+
+q3
+
+A
+
+q4
+
+a−
+
+q6
+
+q5
+
+Figure 5: Automata for regular expressions of Q.
+
+The TBox T¬Q0 consists of the following constraints.
+q1 ⊑ ∀c.q2 ,
+⊤ ⊑ q0 ,
+q5 ⊑ ∀a−.q6 ,
+⊤ ⊑ q3 ,
+
+q1 ⊑ ∀b.q1 ,
+q2 ⊓ q4 ⊑ q5 ,
+
+q0 ⊑ ∀a.q1 ,
+q3 ⊓ A ⊑ q4 ,
+
+q6 ⊑ ⊥ .
+□
+
+T¬Q introduces a set fresh node labels ΓQ and the satisfaction T¬Q
+is defined in terms of the existence of valuations of symbols in ΓQ .
+More precisely, given a graph G over Γ0 and Σ0 and a TBox T over
+Γ0 ∪ Γ1 and Σ0, we say that G satisfies T if and only if there is an
+interpretation ·U : Γ1 → P(dom(G)) of symbols in Γ1 such that
+G ∪ U |= T .
+
+Lemma C.2. Given a Boolean acyclic UC2RPQs Q, one can compute
+in polynomial time a Horn-ALCIF TBox T¬Q and a reserved set of
+concept names ΓQ such that for every G that does not use labels in
+ΓQ , G ̸|= Q if and only if G satisfies T¬Q .
+Proof. We prove the lemma for queries that are Boolean C2RPQs
+that are acyclic and connected. The claim extends to unions of
+Boolean acyclic C2RPQs in a straightforward fashion: it suffices to
+take the union of the desired TBoxes of all connected components
+of the union. Consequently, the query can be seen as a tree and we
+assume that it is defined with the following grammar:
+
+Q ::= φ(Q, . . . , Q),
+where φ is a two-way regular expression over Σ and Γ. For instance,
+the query from Example C.1 is represented as Q0 = a−(A, a · b∗ · c).
+We express the semantics of such defined queries as the set of all
+nodes that satisfy it.
+[φ(Q1, . . . , Qk )]G = {u ∈ dom(G) | ∃v. (v, u) ∈ [φ]G , v ∈ (cid:209)
+Naturally, a graph G satisfies Q iff [Q]G (cid:44) ∅.
+
+Now, fix an acyclic Boolean C2RPQ Q and let Φ be the set of
+all two-way regular expressions used in Q. For any φ ∈ Φ by
+Nφ = (Kφ , Iφ , δφ , Fφ ) we denote an ϵ-free NDA over the alphabet
+Σ ∪ Γ that recognizes φ, where Kφ is a finite set of states, Iφ ⊆ Kφ
+is the set of initial states, Fφ ⊆ Kφ is the set of final states, and
+δφ ⊆ Kφ ×(Σ∪Γ)×Kφ is the transition table. We assume that the size
+of Nφ is polynomial in the size of the expression φ (such automaton
+can be obtained for instance with the standard Glushkov technique).
+We also assume that the sets of states are pair-wise disjoint.
+
+i [Qi ]G }.
+
+The set of additional node labels consists of the states of au-
+tomata: ΓQ = (cid:208)
+φ Kφ . The constructed TBox consists of two sub-
+sets of rules: T¬Q = T1 ∪ T0. The set T1 encodes transitions of the
+automata that simulate their execution.
+
+(1) For every φ and every (q, R, q′) ∈ δφ such that R ∈ Γ±, T1
+
+(2) For every φ and every (q, A, q′) ∈ δφ such that A ∈ Σ, T1
+
+contains q ⊑ ∀R.q′;
+
+contains q ⊓ A ⊑ q′;
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+(cid:46)
+
+(3) For every node φ of Q with children φ1, . . . , φk
+
+, every q ∈ Iφ ,
+{q′ | q′ ∈ Fφi , 1 ≤ i ≤ k} ⊑ q. Note that when
+
+T1 contains
+φ is a leaf of Q, then T1 contains ⊤ ⊑ q for every q ∈ Iφ .
+The set T0 contains denial rules that ensure lack of valid run.
+(4) For every q ∈ Fφ of the root φ of Q, T0 contains q ⊑ ⊥;
+Now, we fix a graph G whose node labels do not use any symbol
+in ΓQ . We first argue that there is a unique minimal interpretation
+U0 : ΓQ → P(dom(G)) such that G ∪ U0 |= T1. Indeed, since the
+rules are Horn-like, an intersection of two models of T1 is also a
+model of T1.
+
+Next, we prove the main claim with an inductive argument which
+requires defining subqueries of Q. For φ ∈ Φ and q ∈ Kφ by Qq we
+are children of
+denote the query ψ (Q1, . . . , Qk ), where Q1, . . . , Qk
+φ in Q and ψ is the two-way regular expression corresponding to
+the automaton Mφ,q = (Kφ , Iq, δφ , {q}) (essentially, we make q the
+only final state). We claim that for any φ ∈ Φ, any q ∈ Kφ , and any
+u ∈ NG we have
+
+u ∈ [Qq ]G iff u ∈ qU0 .
+In essence, the unary predicate q identifies all nodes at which the
+subquery Qq is satisfied. We prove the above claim with double in-
+duction: firstly over the height of the subquery Qq = ψ (Q1, . . . , Qk ),
+and secondly, over the length of the witnessing path for (v, u) ∈
+[ψ ]G such that v ∈ (cid:209)
+
+i [Qi ]G .
+
+If we let Iφ = {q1, . . . , qk }, then Q is equivalent to the union
+. Consequently, Q is satisfied at a node u ∈ NG
+of Qq1 ∪ . . . ∪ Qqk
+U0 for some i ∈ {1, . . . , k }. As such, Q is not satisfied at
+iff u ∈ qi
+any node of G if and only if U0 |= qi ⊑ ⊥ for every i ∈ {1, . . . , k}
+i.e., U0 |= T0. We finish the proof by observing that if the minimal
+model U0 does not satisfy T0, then none of supersets of U0 does. □
+
+D PROOFS FOR CONTAINMENT
+Lemma D.1. Given a schema S, a UC2RPQ P( ¯x), and an acyclic
+UC2RPQ Q( ¯x), one can compute in polynomial time a schema S◦, a
+Boolean UC2RPQ P ◦, and a Boolean acyclic UC2RPQ Q◦ such that
+P( ¯x) ⊆S Q( ¯x) iff P ◦ ⊆S ◦ Q◦.
+Proof. Let ¯x = (x1, x2, . . . , xn ) and let ΓS = {A1, . . . , Ak }. We
+take a fresh node labels X1, . . . , Xn (cid:60) ΣS and fresh edge labels
+r1, r2, . . . , rn (cid:60) ΣS . The schema S◦ is obtained from S as follows:
+ΓS ◦ = ΓS ∪ {A0},
+ΣS ◦ = ΣS ∪ {r1, . . . , rn },
+
+δS ◦ (A, R, B) =
+
+δS (A, R, B)
+?
+0
+
+if A, B ∈ ΓS and R ∈ Σ±
+S ,
+if A = Xi , R ∈ {ri , r −
+otherwise.
+
+i }, and B ∈ ΓS ,
+
+
+
+
+
+Now, the queries P ◦ and Q◦ are obtained from P( ¯x) and Q( ¯x)
+by quantifying existentially x1, x2, . . . , xn and also adding atoms
+∃y.(Xi · ri )(y, xi ) for every i ∈ {1, . . . , n}. It is routine to check
+that P( ¯x) ⊆S Q( ¯x) if and only if P ◦ ⊆S ◦ Q◦. There are two key
+facts. Firstly, 2RPQs in P and Q do not use labels r1, r2, . . . , rn (nor
+wildcards) and consequently cannot traverse edges with such labels.
+
+Secondly, the schema S◦ ensures that the original regular expres-
+sion can be witnessed only by paths that begin and end in nodes
+□
+with labels in ΣS only.
+Corollary D.2. Given a schema S, two unary acyclic 2RPQs p(x)
+and q(x), one can compute in polynomial time a schema S◦ and
+Boolean 2RPQs p◦ and q◦ such that p(x) ⊆S q(x) iff p◦ ⊆S ◦ p◦.
+Proof. The construction of S◦ is as in Lemma D.1 and the construc-
+tion of Boolean RPQs depends on the form of the unary RPQ: 1) if
+p(x1) = ∃x2.φ(x1, x2), then p◦ = r1 · φ and 2) if p(x1) = ∃x2.φ(y, x),
+1 ; q◦ is constructed in the same way.
+then p◦ = φ · r −
+□
+
+(cid:98)TS
+
+Q.
+
+Lemma D.3. P ⊆S Q iff (cid:98)P ⊆
+Proof. Each finite graph falsifying the left-hand side condition
+falsifies the right-hand side condition as well. For the converse, let
+G be a finite graph falsifying the right-hand side condition. Without
+loss of generality we can assume that only labels from ΓS ∪ ΣS are
+used in G. Let G ′ be obtained by dropping all nodes without a label,
+as well as edges incident with these nodes. Because all concept
+inclusions in (cid:98)TS that require a witnessing neighbour specify the
+label of this neighbour, they are not affected by this modification.
+Other concept inclusions are always preserved when passing to
+a subgraph. It follows that G ′ conforms to S. The RPQs in (cid:98)P can
+only traverse nodes with a label from ΓS , so (cid:98)P is still satisfied in G ′.
+Then, P is satisfied as well. Q is not satisfied in G ′, because G ′ is a
+□
+subgraph of G.
+
+Lemma D.4. (cid:98)P is finitely satisfiable modulo (cid:98)TS ∪ T¬Q iff (cid:98)P is sat-
+isfiable modulo (cid:0)
+
+(cid:1)∗
+
+(cid:98)TS ∪ T¬Q
+
+.
+
+(cid:17)∗
+
+(cid:98)TS ∪ T¬Q
+
+(cid:98)TS ∪ T¬Q
+
+Proof. Suppose that (cid:98)P is satisfied in a finite model G of (cid:98)TS ∪ T¬Q .
+(cid:1)∗
+By Theorem 5.4, there is a (possibly infinite) model of (cid:0)
+containing G as a subgraph. This model obviously satisfies (cid:98)P.
+Conversely, suppose that there is a possibly infinite graph G
+satisfying (cid:98)P and (cid:16)
+. Let p be the disjunct of (cid:98)P that is
+satisfied in G. Let H be the image of p in G, including a finite
+witnessing path for each RPQ. Note that H is finite. By Theorem 5.4,
+there is a finite model of (cid:98)TS ∪ T¬Q containing H as a substructure.
+□
+This models satisfies (cid:98)P as well.
+Lemma D.5. Every S-driven TBox T can be simplified in polyno-
+| · |ΓS |2 at-most constraints.
+mial time so that it contains at most |Σ±
+S
+Proof. To achieve this, for each such CI of the form K ⊑ ∃≤1
+R.K ′
+in T we do one of the following.
+• If T contains A ⊑ ∃≤1
+
+A ∈ K and A′ ∈ K ′, then simply remove K ⊑ ∃≤1
+T . This is correct because A ⊑ ∃≤1
+
+R.A′ for some A, A′ ∈ ΓS such that
+R.K ′ from
+R.K ′.
+
+R.A′ |= K ⊑ ∃≤1
+
+• Otherwise, because T is S-driven, it follows that the triple
+(K, R, K ′) is not satisfiable modulo T . That is, T |= K ⊑
+(cid:154)R.K ′. Since K ⊑ (cid:154)R.K ′ |= K ⊑ ∃≤1
+R.K ′, we can safely
+replace K ⊑ ∃≤1
+
+R.K ′ with K ⊑ (cid:154)R.K ′ in T .
+
+The resulting TBox T ′ is equivalent to T and it only contains
+at-most constraints involving single concept names from ΓS . The
+number of those is clearly bounded by |Σ±
+□
+S
+
+| · |ΓS |2.
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+Lemma D.6. Let T be an S-driven Horn-ALCIF TBox that was
+obtained from (cid:98)TS ∪ T¬Q by reversing some finmod cycles. For every
+satisfiable finmod cycle
+
+K1, R1, . . . , Kn−1, Rn−1, Kn
+in T there exist unique A1, A2, . . . , An ∈ ΓS such that Ai ∈ Ki for
+all i ≤ n, and
+
+A1, R1, . . . , An−1, Rn−1, An
+
+is a finmod cycle in T
+Proof. Since all triples in K1, R1, . . . , Kn−1, Rn−1, Kn are satisfiable,
+all CIs Ki ⊑ ∃Ri .Ki+1 and Ki+1 ⊑ ∃≤1
+R−
+i .Ki are relevant for T .
+We cannot simply apply the fact that T is S-driven, because these
+CIs need not belong to T : they are only entailed by T . The proof
+will proceed in several steps.
+
+The first step is to see that each Ki contains a label from ΓS .
+Towards contradiction, suppose it does not. We construct a graph
+witnessing that T does not entail Ki ⊑ ∃Ri .Ki+1, which is a con-
+tradiction. Let Ti be the tree-shaped graph obtained by unravelling
+some model of T witnessing that (Ki , Ri , Ki+1) is satisfiable, from a
+node u satisfying Ki . Clearly, Ti is also a model of T , its root u sat-
+isfies Ki and has an Ri -successor u ′ satisfying Ki+1. We construct
+G as the graph with a single node u0 whose labels are copied from
+the root u of Ti but with any letter from ΓS dropped. To see that
+G ̸|= Ki ⊑ ∃Ri .Ki+1, note that as u ∈ (Ki )Ti and Ki contains no
+labels from ΓS , also u0 ∈ (Ki )G ; but clearly u0 has no Ri -successors
+at all. Let us check that G |= T .
+
+• New CIs of the form K ⊑ A are not introduced by reversing
+cycles, so it suffices to look at ones from (cid:98)TS ∪ T¬Q . There,
+such CIs are only present in T¬Q and always satisfy A (cid:60) ΓS
+(see the proof of Lemma C.2). Hence, as they were satisfied
+in Ti and G was obtained by dropping labels from ΓS , they
+still hold in G.
+
+• CIs of the form K ⊑ ⊥ in T were satisfied in Ti and they
+cannot be violated by dropping labels (recall that K does not
+use negation).
+
+• All CIs of the forms K ⊑ ∀R.K ′, K ⊑ (cid:154)R.K ′, and K ⊑
+
+∃≤1
+
+R.K are trivially satisfied in G.
+
+• Consider a CI of the form K ⊑ ∃R.K ′ from T . Suppose
+that u0 ∈ KG . Then also u ∈ KTi . This means that the CI
+was “fired” in Ti , which implies that (K, R, K ′) is satisfiable
+modulo T and K ⊑ ∃R.K ′ is relevant for T . As T is S-driven,
+it follows in particular that K contains a label from ΓS . But
+this contradicts the fact that u0 ∈ KG . Hence, K ⊑ ∃R.K ′ is
+trivially satisfied in G.
+
+Thus we have shown that G |= T . This concludes the first step.
+
+Now, as all Ki contain a label from ΓS and all triples (Ki , Ri , Ki+1)
+are satisfiable modulo T , it follows that for each i there exists
+exactly one label Ai ∈ ΓS such that Ai ∈ Ki . It remains to show
+that Ai ⊑ ∃Ri .Ai+1 and Ai+1 ⊑ ∃≤1
+
+Let us begin with Ai ⊑ ∃Ri .Ai+1. Consider graph G obtained
+from Ti (same as above) by removing all subtrees rooted at Ri -
+successors of the root that satisfy Ki+1. Clearly, G ̸|= Ki ⊑ ∃Ri .Ki+1.
+As T |= Ki ⊑ ∃Ri .Ki+1, it follows that G ̸|= T . Then, some CI of
+the form K ⊑ ∃R.K ′ from T is violated in G, because CIs of other
+forms are preserved when passing to a subgraph. In particular, it
+must be the case that the root of G satisfies K. But then also the
+
+R−
+i .Ai .
+
+|= T , the root u of Ti has an
+root of Ti satisfies K and since Ti
+R-successor u ′ that satisfies K ′. This means that K ⊑ ∃R.K ′ is
+relevant for T . Because T is S-driven, it must contain A ⊑ ∃R.A′
+for some A, A′ ∈ ΓS such that A ∈ K, A′ ∈ K ′. As the root of G
+satisfies both K and Ki , and we know that A ∈ K and Ai ∈ Ki
+and that labels from ΓS are exclusive, it follows that A = Ai . We
+claim that also R = Ri and A′ = Ai+1. If R (cid:44) Ri , then u ′ is not an
+Ri -successor of the root in Ti , and it has not been removed in G.
+That would imply that G actually does satisfy K ⊑ ∃R.K ′. Since
+we know this is not the case, we conclude that R = Ri . Similarly,
+suppose that A′ (cid:44) Ai+1. Because u ′ satisfies K ′ and A′ ∈ K ′, it must
+have label A′. But then u ′ cannot have label Ai+1, which means it
+cannot satisfy Ki+1, and has not been removed in G. This yields a
+contradiction just like before and we can conclude that A′ = Ai+1.
+Wrapping up, we have seen that A ⊑ ∃R.A′ belongs to T and that
+A = Ai , R = Ri , and A′ = Ai+1. This means that Ai ⊑ ∃Ri .Ai+1
+belongs to T .
+
+Finally, let us see that Ai+1 ⊑ ∃≤1
+
+R−
+i .Ai belongs to T . Consider
+the model Ti but reorganize it so that the root u satisfies Ki+1 and
+has an R−
+-successor u ′ satisfying Ki . Let G be the graph obtained
+i
+from Ti by duplicating the whole subtree rooted at u ′, and adding
+-edge from u to the root u ′′ of the copy. Clearly G ̸|= Ki+1 ⊑
+an R−
+i
+i .Ki and since T |= Ki+1 ⊑ ∃≤1
+∃≤1
+R−
+R−
+i .Ki , we conclude that
+G ̸|= T . It follows immediately that G violates some CI of the form
+K ⊑ ∃≤1
+R.K ′ from T , as CIs of other forms are not affected by the
+modification turning Ti to G. Similarly, it must hold that R = R−
+,
+i
+and that u satisfies K and u ′ and u ′′ satisfy K ′. It follows that
+K ⊑ ∃≤1
+R.K ′ is relevant, Ai+1 ∈ K, Ai ∈ K ′, and Ai+1 ⊑ ∃≤1
+R−
+i .Ai
+□
+belongs to T .
+
+Lemma D.7. For T = (cid:98)TS ∪T¬Q , the completion T ∗ can be computed
+in EXPTIME.
+Proof. Construct a graph G T over all possible intersections K of
+concept names used in T , including an edge with label R ∈ Σ±
+from K to K ′ iff
+
+T |= K ⊑ ∃R.K ′
+
+and T |= K ′ ⊑ ∃≤1
+
+R−.K .
+
+G T has exponential size and can be constructed in EXPTIME, be-
+cause CI entailment by Horn-ALCIF TBoxes can be tested in
+exponential time [26]. Repeat the following until the graph stops
+changing. Pick an R-edge from K to K ′ such that there is no R−-
+edge from K ′ to K. Check if there exists a path from K ′ to K in G T .
+If so, the identified path combined with the R-edge from K to K ′
+constitutes a finmod cycle
+
+K1, R1, . . . , Kn−1, Rn−1, Kn
+
+in T . Add to G T an R−
+-edge from Ki+1 to Ki for all i < n and
+i
+extend T with the corresponding concept inclusions. Note that this
+includes an R−-edge from K ′ to K and concept inclusions
+K ′ ⊑ ∃R−.K and T |= K ⊑ ∃≤1
+
+R.K ′ .
+
+Moreover, if there are unique A1, A2, . . . , An ∈ ΓS such that Ai ∈ Ki
+for i ≤ n, check if
+
+A1, R1, . . . , An−1, Rn−1, An
+
+is a cycle in G T . If so, add to G an R−
+edge from Ai+1 to Ai , and
+i
+the corresponding CIs to T . By Lemma D.6, this ensures that the
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+extended T is S-driven. We can now reduce it and recompute G T
+based on the updated T . Using the complexity bounds for CI en-
+tailment given in Corollary E.7, we conclude that this can be done
+in EXPTIME. Note that we are indeed relying on the more precise
+complexity bounds here, because at later iterations of the cycle
+reversing procedure the TBox might well contain exponentially
+many concept inclusions. However, it has still only the original
+concept names and, after reducing, only a polynomial number of
+□
+at-most restrictions.
+
+E PROOFS FOR SATISFIABILITY
+E.1 Introductory lemmas
+We begin by showing the two lemmas mentioned in the body of
+the paper.
+Lemma E.1. For c ≥ 1, if a finite connected c-sparse graph has only
+nodes of degree at least 2, then it is (2c, 3c)-skeleton.
+
+Proof. Let G be a finite connected c-sparse graph without nodes
+of degree 0 or 1. We claim that G consists of at most 2c nodes
+connected by at most 3c paths disjoint modulo endpoints. If G is
+empty, we are done. Otherwise, we eliminate vertices of degree 2
+that are incident with two different edges by merging these edges
+into a single edge. This process results in a c-sparse multigraph G0,
+whose edges represent simple paths in G. This graph is either a
+single node with a loop or all its nodes have degree at least 3. In the
+first case it follows that G is a single cycle, and thus a (1, 1)-skeleton.
+In the second case, assuming that G0 has n nodes and m edges, we
+□
+have 3n/2 ≤ m ≤ n + c. It follows that c > 0, n ≤ 2c, m ≤ 3c.
+
+Lemma E.2. If p is satisfied in a |p|-sparse graph G, then G contains
+a (4|p|, 5|p|)-skeleton H , extending the skeleton of G, such that all
+variables of p are mapped to distinguished nodes of H and G can be
+obtained by attaching finitely many finitely branching trees to H .
+
+Proof. The skeleton H0 of G is a (2|p|, 3|p|)-skeleton. Consider a
+match of p in G. Some variables of p might well be matched to
+nodes on the paths connecting the distinguished nodes of H0 or
+in the attached trees. We define H as follows. First, we add to H
+as distinguished nodes all images of variables of p that lie on the
+paths connecting distinguished nodes of H0. Next, for each attached
+tree T that contains an image of a variable of p, we add to H as
+distinguished nodes all the images of variables of p that belong to
+T together with all their least common ancestors in T , as well as
+the node of H to which the root of T is connected. All ancestors (in
+T ) of these nodes are added to H as ordinary nodes. The skeleton
+□
+H thus obtained has the required properties.
+
+E.2 The main result
+The goal of this section is to prove the following theorem.
+
+Theorem E.3. Given a C2RPQ p and an ALCIF TBox T using
+k concept names and ℓ at-most constraints, one can decide in time
+O (cid:0)poly(|T |) · 2poly(|p |,k, ℓ)(cid:1) if there exists a |p|-sparse graph that
+satisfies p and T .
+
+The proof of Theorem E.3 is not very hard, but it combines
+several components and requires developing some machinery. Let
+us begin with a road map.
+
+Relying on Lemma E.2, we guess a (4|p|, 5|p|)-skeleton H . The
+distinguished nodes of H are represented explicitly, together with
+all their labels, but each of the connecting paths is represented by
+a single symbolic edge. Note that there might be multiple symbolic
+edges between the same pair of distinguished nodes, representing
+different paths. We need to check that H can be completed to a graph
+G by materializing the symbolic edges into paths and attaching
+finitely many finitely branching trees in such a way that G is a
+model of T and there is a match of p in G that maps variables of p
+to distinguished nodes of H .
+
+To achieve this, we guess an annotation of H that summarizes
+how the witnessing paths of p can traverse the parts of G missing
+from H , and which witnesses of distinguished nodes required by T
+these parts provide (Section E.3). We then check if these promises of
+the annotation are sufficient to guarantee that p and T are satisfied
+(Section E.4). Finally, we verify that the promises of the annotation
+can be fulfilled: we check if we can attach trees to the distinguished
+nodes and expand the symbolic edges into finite paths with attached
+trees in a way that matches the promises of the annotation and
+respects the TBox T (Section E.5).
+
+E.3 Annotated skeleta
+Let Γp , Σp , ΓT , Σ T be the sets of edge and node labels used in p
+and T , respectively. In what follows we only consider graphs and
+skeleta using only node labels from Γp ∪ ΓT and edge labels from
+Σp ∪ Σ T .
+
+Let Φ be the set of two-way regular expressions used in p. For
+each φ ∈ Φ we fix an equivalent linear size non-deterministic
+automaton Aφ over the alphabet Γp ∪ Σ±
+with states Kφ , initial
+p
+states Iφ ⊆ Kφ , and final states Fφ ⊆ Kφ . We assume that all Kφ
+are pairwise disjoint and let δ = (cid:208)
+
+φ ∈Φ δφ .
+
+An annotation of skeleton H is given by the following functions.
+• βsrc and βtgt record information about the source and target
+of the paths represented by each symbolic edge: they both
+map each symbolic edge e to (cid:0)Σp ∪ Σ T
+
+(cid:1)± × 2Γp ∪ΓT .
+
+• δnode records how the witnessing paths for p may loop in
+the subtrees attached to the distinguished nodes. Thus, δnode
+maps every distinguished node to a subset of (cid:208)
+φ ∈Φ Kφ × Kφ .
+• δedge records how the witnessing paths for p progress along
+paths (and the trees attached to them) represented by the
+symbolic edges in the skeleton. Thus, δedge maps every edge
+e to a subset of (cid:208)
+φ ∈Φ Kφ ×Kφ × {↷,↷, ←, →}. If e is an edge
+from u to v, then (s, s ′, →) ∈ δedge(e) indicates that some
+path enters (the part of the model summarized by) the edge
+e from u in state s, and exits at node v in state s ′. Similarly,
+(s, s ′,↷) ∈ δedge(e) indicates a loop: some path enters e from
+v in state s, and exits at the same node v in state s ′, etc.
+
+E.4 Verifying annotated skeleta
+An annotation of H is sufficient for TBox T if the witnesses recorded
+by βsrc and βtgt respect T ; that is, for each distinguished node u
+of H the graph Gu defined below satisfies the TBox T0 obtained
+from T by dropping all concept inclusions of the form A ⊑ ∃R.B.
+To construct Gu we begin from u with labels inherited from H , and
+then for each symbolic edge e incident with u we add an R-successor
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+ve of u with label set Λ, where (R, Λ) = βsrc(e) if u is the source of
+e and (R, Λ) = βtgt(e) if u is the target of e.
+
+An annotation is sufficient for C2RPQ p if there exists a function
+η mapping variables of p to distinguished nodes of H such that for
+each atom φ(x, y) of p, there exists a finite witnessing sequence
+of states and distinguished nodes of H satisfying
+s0u0s1u1 . . . skuk
+the following conditions.
+
+• The witnessing sequence begins and ends correctly; that is,
+
+s0 ∈ Iφ , sk ∈ Fφ , u0 = η(x), uk
+
+= η(y).
+
+• Each transition step along a symbolic edge (or subtree at-
+tached to a distinguished node) updates the state as expected:
+for each i < k one of the following holds:
+– (si , si+1, →) ∈ δedge(e) for some edge e from ui to ui+1;
+– (si , si+1, ←) ∈ δedge(e) for some edge e from ui+1 to ui ;
+– (si , si+1, ↷) ∈ δedge(e) for some edge e from ui to some u,
+
+and ui = ui+1;
+
+and ui = ui+1;
+
+– (si , si+1,↷) ∈ δedge(e) for some edge e from some u to ui ,
+
+– (si , si+1) ∈ δnode(ui ) and ui = ui+1.
+
+We point out that the witnessing sequence may traverse a symbolic
+edge multiple times. In consequence, each tuple in δedge(e) must
+be “realised” by the single path represented by e (and the attached
+trees).
+
+Proposition E.4. One can decide if a given annotated skeleton is
+sufficient for p and T in PTIME.
+
+Proof. To check that the annotated skeleton is sufficient for T it
+is enough to examine the graphs Gu for each distinguished node u
+of the skeleton.
+
+Checking that the annotated skeleton is sufficient for p amounts
+to guessing the function η and for each atom φ(x, y) running a
+reachability test in the product graph whose nodes combine distin-
+guished nodes of the skeleton with states from Kφ , where edges
+are defined according to the symbolic edges in the skeleton and the
+triples from δedge. In the reachability test we check if there exists a
+□
+path beginning in {η(x)} × Iφ and ending in {η(y)} × Fφ .
+
+E.5 Implementing annotated skeleta
+Consider an annotated skeleton H = (cid:0)H, βsrc, βtgt, δedge, δnode(cid:1).
+We say that a graph G implements H if G is obtained from H by
+replacing each symbolic edge e with a path πe connecting the
+endpoints of e and by attaching finitely many finitely branching
+trees in a way consistent with the annotations, in the following
+sense.
+
+• For each symbolic edge e from u to u ′, the subgraph Ge of
+G that consists of πe and all trees attached to the internal
+nodes of πe is correctly summarized in the annotations:
+– for each (s, s ′, d) ∈ δedge(e) with s, s ′ ∈ Kφ there is a
+path in Ge with endpoints (u, u) if d = ↷, (u, u ′) if d = → ,
+(u ′, u ′) if d =↷ , and (u ′, u) if d = ← , on which Aφ moves
+from state s to state s ′;
+
+– if βsrc(e) = (R1, Λ1) and βsrc(e) = (R2, Λ2), then the first
+edge of πe is an R-edge, the last edge of πe is an R−
+2 -edge,
+the second node on πe has the labels set Λ1, and the penul-
+timate node on πe has label set Λ2.
+
+• For each distinguished node u, the trees attached to u are
+summarized correctly in the annotations: for each (s, s ′) ∈
+δnode(u) with s, s ′ ∈ Kφ there is a tree T s,s ′
+attached to u
+and a path that starts and ends in u and otherwise only visits
+nodes of T s,s ′
+, on which Aφ moves from state s to state s ′.
+• G is a model of T .
+
+u
+
+u
+
+u
+
+Note that all the missing pieces of the graph are essentially trees
+(finitely branching, but typically infinite). Indeed, each T s,s ′
+simply
+is a tree, but also Ge can be viewed as a tree: its root is the source
+of e, the root has exactly one child, the path πe constitutes a special
+finite branch ending in the target of e which is a leaf in this tree.
+Importantly, each (s, s ′) ∈ δnode(u) is witnessed by a finite subgraph
+of T s,s ′
+, and each triple (s, s ′, d) ∈ δedge(e) is witnessed by a finite
+u
+subgraph of Ge . The algorithm to check if there exist such T s,s ′
+and Ge can be seen as an emptiness test for tree automaton, or as a
+variant of type elimination.
+
+u
+
+We first define types, which can also be viewed as states of a tree
+automaton. We assign to each node of the tree a type that records
+the following information:
+
+• a subset of Γp ∪ ΓT , representing the labels of the current
+
+node;
+
+p ∪ Σ±
+T
+
+• an element of Σ±
+
+and a subset of Γp ∪ ΓT , representing
+the label on the edge to the parent and the parent’s label set;
+• with ℓ the number of at-most restrictions in T , a list of
+t ≤ ℓ + 1 elements of Σ±
+p ∪ Σ±
+and subsets of Γp ∪ ΓT ,
+T
+representing labels on the edges to t children of the current
+node and the children’s label sets;
+
+• a Boolean flag indicating whether the current node belongs
+
+• a subset of (cid:208)
+
+u
+
+at all);
+
+to the special path (not used for T s,s ′
+
+φ ∈Φ Kφ ×Kφ ×{↷, ↷, ↓, ↑} recording the progress
+on witnessing δedge or δnode:
+– (s, s ′, ↷) indicates that from state s in the current node we
+can navigate the current subtree and return to the current
+node in state s ′,
+– (s, s ′, ↷) indicates that from state s in the current node we
+can navigate outside of the current subtree and return to
+the current node in state s ′,
+
+– (s, s ′, ↓) indicates that from state s in the current node, we
+
+can reach the target node of e in state s ′,
+
+– (s, s ′, ↑) indicates that from state s in target node of e we
+
+can reach the current node in state s ′.
+
+Actually, all four kinds of triples are required along the spe-
+cial path, but in the remaining nodes we only need the triples
+
+of the form (s, s ′, ↷).
+
+By a pre-type we shall understand a type with the boolean flag
+
+and the progress information dropped; that is, a tuple
+
+(Λ, R′, Λ′, R1, Λ1, . . . , Rt , Λt )
+
+with Λ, Λ′, Λ1, . . . , Λt ⊆ Γp ∪ ΓT , and R′, R1, . . . , Rt ∈ Σ±
+p ∪ Σ±
+,
+T
+and 0 ≤ t ≤ ℓ + 1. In what follows we blur the distinction between
+conjunctions K of concept names and sets Λ of labels, as usual, and
+write K ⊆ Λ.
+
+A pre-type (Λ, R′, Λ′, R1, Λ1, . . . , Rt , Λt ) is compatible with T iff
+
+there exists a graph G such that
+
+• there are pairwise different nodes u, u ′, u1, . . . , ut with label
+
+sets Λ, Λ′, Λ1, . . . , Λt ;
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+• there is an R′-edge from u to u ′ and an Ri -edge from u to ui
+
+for all i ≤ t, and no other edges are incident with u ′;
+
+• for each K ⊑ ∃≤1
+
+R.K ′ in T with K ⊆ Λ, every R-successor
+
+of u that satisfies K ′ belongs to {u ′, u1, . . . , ut }; and
+
+• G satisfies T except that CIs of the form K ⊑ ∃R.K ′ are not
+
+required to be satisfied for u ′.
+
+Note that unlike in the notion of satisfiability used in Appendix D,
+the witnessing nodes cannot have additional labels, not listed in
+Λ, Λ′, Λ1, . . . , Λt .
+Lemma E.5. Given T and p one can compute the set of pre-types
+compatible with T within the time bound stated in Theorem E.3
+Proof. Each pre-type (Λ, R′, Λ′, R1, Λ1, . . . , Rt , Λt ) can be inter-
+preted as a star-shaped graph consisting of nodes u, u ′, u1, . . . , un
+with label sets Λ, Λ′, Λ1, . . . , Λt such that u ′ is an R′-successor of u,
+ui is an Ri -successor of u for all i ≤ t, and there are no other edges.
+Thus we can speak of a pre-type satisfying a concept inclusion, etc.
+We say a pre-type (Λ, R′, Λ′, R1, Λ1, . . . , Rt , Λt ) is repeatable if
+R.K ′ in T such that K ⊆ Λ′,
+
+there is no at-most restriction K ⊑ ∃≤1
+R = (R′)−, and K ′ ⊆ Λ.
+
+A pre-type (Λ, R′, Λ′, R1, Λ1, . . . , Rt , Λt ) is said to be compatible
+
+with T modulo a set Θ of pre-types if
+• Θ contains a pre-type (Λi , R−
+• the pre-type satisfies all CIs in T not of the form K ⊑ ∃R.K ′;
+• for each concept inclusion K ⊑ ∃R.K ′ in T with K ⊆ Λ, at
+
+i , Λ, . . . ) for each i ≤ t;
+
+least one of the following holds:
+– R = R′ and K ′ ⊆ Λ′, or
+– R = Ri and K ′ ⊆ Λi for some 1 ≤ i ≤ t, or
+– R = R0 and K ′ ⊆ Λ0 for some repeatable (Λ0, R−
+
+0 , Λ, . . . )
+
+from Θ.
+
+Now, to compute the set of pre-types compatible with T , we
+start with the set Θ = Θ0 of all pre-types, and exhaustively remove
+those pre-types that are not compatible with T modulo Θ. This
+algorithm terminates after at most
+
+|Θ0| =
+
+ℓ+1
+(cid:213)
+
+t =0
+
+(cid:12)
+(cid:12)Σ±
+
+p ∪ Σ±
+T
+
+t +1
+(cid:12)
+(cid:12)
+
+·
+
+(cid:16)2 |Γp ∪ΓT | (cid:17)t +2
+
+iterations. Each iteration takes time polynomial in |Θ| and |T |.
+
+The result is the maximum set Θ of pre-types such that each
+pre-type from Θ is compatible with T modulo Θ. Each pre-type
+compatible with T will belong to this set, because the graph wit-
+nessing the triple can be used to argue that the triple will not be
+removed at any iteration. Conversely, each triple from Θ is compat-
+ible with T , because one can construct a witnessing tree-shaped
+graph top-down, using the witnesses justifying the presence of
+□
+pre-types in Θ in the last iteration of the algorithm.
+
+Lemma E.6. The existence of a graph implementing a given anno-
+tated skeleton is decidable within the time bound from Theorem E.3.
+Proof. We call a type (Λ, R′, Λ′, R1, Λ1, . . . , Rt , Λt , b, ∆) compati-
+ble with T if the underlying pre-type (Λ, R′, Λ′, R1, Λ1, . . . , Rt , Λt )
+is compatible with T . Repeatable types are defined analogously,
+based on the underlying pre-types. Clearly, Lemma E.5 suffices to
+precompute the set of types compatible with T . Our task is to check
+if from these types one can construct the witnessing Ge and T s,s ′
+.
+We will build them bottom-up, guaranteeing that each promise
+related to p is fulfilled in a finite fragment.
+
+u
+
+A type (Λ, R′, Λ′, R1, Λ1, . . . , Rt , Λt , b, ∆) is compatible with p
+i , Λ, . . . , bi , ∆i ) ∈
+
+modulo a set Θ of types if there exists types (Λi , R−
+Θ for 1 ≤ i ≤ t such that
+
+i
+
+, and (s2, R−
+
+0, and (s2, R−
+
+i , s ′) ∈ δ for
+
+• if b = 0, then bi = 0 for all 1 ≤ i ≤ t, else t ≥ 1, b1 = 1, and
+bi = 0 for all 1 < i ≤ t;
+• for each (s, s ′, ↷) ∈ ∆,
+– (s, A, s ′) ∈ δ for some A ∈ Λ, or
+– (s, Ri , s1) ∈ δ , (s1, s2, ↷) ∈ ∆∗
+some s1, s2 and 1 ≤ i ≤ t, or
+– (s, R0, s1) ∈ δ , (s1, s2, ↷) ∈ ∆∗
+some s1, s2 and repeatable (Λ0, R−
+0 , Λ, . . . , 0, ∆0) ∈ Θ,
+(cid:1) such that there are states
+is the set of all (cid:0)s, s ′, ↷
+where ∆∗
+i
+(cid:1) ∈ ∆i for all j < m;
+s = s1, s2, . . . , sm = s ′ with (cid:0)sj , sj+1, ↷
+• if b = 1, then for each (s, s ′, ↑) ∈ ∆, there are s1, s2 such that
+(s, s1, ↑) ∈ ∆1, (s1, s2, ↷) ∈ ∆∗
+• if b = 1, then for each (s, s ′, ↓) ∈ ∆, there are s1, s2 such that
+(s, R1, s1) ∈ δ , (s1, s2, ↷) ∈ ∆∗
+• if b = 1, then for each (s, s ′, ↷) ∈ ∆1, there are s1, . . . , sm
+1 , s1), (sm, R1, s ′) ∈ δ and for all j < m, ei-
+such that (s, R−
+, or (sj , sj+1, ↷) ∈ ∆, or
+ther (sj , sj+1, ↷) ∈ ∆∗
+(sj , A, Sj+1) ∈ δ for some A ∈ Λ.
+
+1, and (s2, s ′, ↓) ∈ ∆1;
+
+0 , s ′) ∈ δ for
+
+2 ∪ · · · ∪ ∆∗
+m
+
+1, and (s2, R−
+
+1 , s ′) ∈ δ ;
+
+Let us first see how to decide the existence of Ge for a given
+symbolic edge e. The algorithm begins with the set Θ of all “initial
+types”, which are
+
+• types (Λ, R′, Λ′, b, ∆) such that
+
+– Λ is the label set of the target of e,
+– (R′, Λ′) = βsrc(e),
+– b = 1,
+– ∆ consists of all (s, s ′, ↷) such that (s, s ′,↷) ∈ δedge(e), as
+
+well as all (s, s, ↑) and (s, s, ↓);
+
+• types (Λ, R′, Λ′, . . . , b, ∆) compatible with T such that
+
+– b = 0,
+– ∆ = ∅.
+
+Then, we exhaustively extend Θ with types that are compatible with
+T and compatible with p modulo Θ. When no more types can be
+added, the graph Ge exists iff Θ contains a type (Λ, R′, Λ′, . . . , b, ∆)
+such that
+
+• Λ is the label set of the source of the symbolic edge e;
+• (cid:0)(R′)−, Λ(cid:1) = βsrc(e);
+• b = 1;
+• ∆ contains no triples of the form (s, s ′, ↷);
+• for each (s, s ′, ↷) ∈ δedge(e) there are states s1, s2 such that
+(cid:0)s, (R′)−, s1(cid:1) ∈ δ , (s1, s2, ↷) ∈ ∆∗, and (cid:0)s2, (R′)−, s ′(cid:1) ∈ δ ;
+• for each (s, s ′, ↓) ∈ δedge(e) there are states s1, s2 such that
+(cid:0)s, (R′)−, s1(cid:1) ∈ δ , (s1, s2, ↷) ∈ ∆∗, and (s2, s ′, ↓) ∈ ∆;
+• for each (s, s ′, ↑) ∈ δedge(e) there are states s1, s2 such that
+(s, s1, ↑) ∈ ∆, (s1, s2, ↷) ∈ ∆∗, and (s2, R′, s ′) ∈ δ .
+
+This number of iterations of the algorithm is bounded by the
+
+number of all types,
+
+ℓ+1
+(cid:213)
+
+(cid:12)
+(cid:12)Σ±
+
+p ∪ Σ±
+T
+
+t +1
+(cid:12)
+(cid:12)
+
+·
+
+(cid:16)2 |Γp ∪ΓT | (cid:17)t +2
+
+· 2 ·
+
+(cid:16)2
+(cid:12)
+(cid:12)(cid:208)
+
+φ ∈Φ Kφ ×Kφ ×{↷,↷, ↓, ↑}(cid:12)
+
+(cid:12)(cid:17)t
+
+.
+
+t =0
+Each iteration takes time polynomial in |Θ|ℓ and |T |. The promised
+complexity bounds follow.
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+Deciding the existence of the witnessing trees for a node u of
+the annotated skeleton is very similar. We can reuse the set Θ
+computed for any symbolic edge e. The only delicate issue is that
+we need to account for βsrc(e ′) for all edges e ′ outgoing from u
+and βtgt(e ′′) for all edges e ′′ incoming to u. Essentially, we check
+if there exists a type (Λ, R1, Λ1, . . . , Rt , b, ∆) – note the missing R′
+and Λ′ – with b = 0 and t ≤ ℓ + deg(u), compatible with T and
+compatible with p modulo Θ, except that for i = 1, 2, . . . , deg(u),
+the components Ri , Λi must be as specified by βsrc(e ′) and βtgt(e ′′)
+for outgoing e ′ and incoming e ′′, and their corresponding types
+must be (Λi , R−
+i , Λ, 0, ∅), not required to belong to Θ. This can be
+done in time polynomial in |Θ|ℓ, T , and H .
+□
+
+Corollary E.7. Unrestricted entailment of concept inclusions by an
+ALCIF TBox T using k concept names and ℓ at-most constraints
+can be decided in time O (cid:0)poly(|T |) · 2poly(k, ℓ)(cid:1).
+Proof. The result holds in full generality, but we only sketch the
+arguments for the two kinds of concept inclusions we need to
+compute the completion. For existential constraints, note that
+
+T |= A1 ⊓ · · · ⊓ An ⊑ ∃R.K ′
+
+iff the query
+
+is unsatisfiable modulo the TBox
+
+∃x .(A1 · . . . · An · B)(x, x)
+
+T ∪ (cid:8)K ′ ⊑ ∀R−.B′ , B ⊓ B′ ⊑ ⊥(cid:9) ,
+where B and B′ are fresh concept names. For at-most constraints,
+
+T |= A1 ⊓ · · · ⊓ An ⊑ ∃≤1
+
+R.A′
+
+1 ⊓ · · · ⊓ A′
+m
+
+iff the query
+
+∃x, y, z.(A1 · . . . · An )(x, x)∧(R · A′
+∧(R · A′
+
+1 · . . . · A′
+1 · . . . · A′
+
+m · B)(x, y)∧
+m · B′)(x, z)
+
+is unsatisfiable modulo the TBox
+
+T ⊔ (cid:8)B ⊓ B′ ⊑ ⊥(cid:9)
+where B and B′ are fresh concept names.
+
+□
+
+F PROOF OF HARDNESS
+Theorem F.1. Testing containment of Boolean 2RPQs modulo schema
+is EXPTIME-hard.
+
+We present a reduction of the acceptance problem of an alternat-
+ing Turing machine with a polynomial bound on space. We begin
+by defining a special variant of alternating Turing machines. We
+also present a number of conceptual tools used in the reduction.
+
+Alternating Turing machines. We consider a variant of alternat-
+ing Turing machine with the following particularities:
+
+• there is a single distinguished initial state that the machine
+
+never reenters;
+
+• there are two special states qyes and qno that are final (no
+
+transition allowed to follow)1;
+
+• the transition table has exactly two transitions for any non-
+
+final state and any symbol;
+
+1The state qno is not necessary for the purposes of our reduction but we include it for
+the sake of completeness of this variant of ATM
+
+• there exists 3 special symbols: □ for empty tape space, ▷
+for left tape boundary, and ◁ for right tape boundary; we
+only assume that the input word does not use those sym-
+bols and the transition table handles the boundary symbols
+appropriately.
+
+It’s relatively easy to see that any alternating Turing machine with
+polynomially bounded space can converted to the variant above.
+Formally, an alternating Turing machine (ATM) is a tuple M =
+(A, K, q0, δ1, δ2), where A is a finite alphabet, K is a finite set of states
+with two distinguished final states qyes and qno and partitioned
+into three pair-wise disjoint subsets K = K∀ ∪ K∃ ∪ {qyes, qno},
+q0 ∈ K is a distinguished initial state, and δi : (K \ {qyes, qno}) ×
+A → (K \ {q0}) × A × {−1, +1} are two transition tables such that
+δi (q, x) = (q′, y, d) satisfies the following two conditions:
+
+(1) if x = ▷, then y = ▷ and d = +1 and
+(2) if x = ◁, then y = ◁ and d = −1.
+
+A configuration of M is a string of the form ▷·w ·q·v ·◁, where q ∈ K
+and w, v ∈ Σ∗ Applying a transition (q′, z, d) ∈ K × A × {−1, +1}
+to the configuration ▷ · w · x · q · y · v · ◁ yields:
+
+(1) ▷ · w · q′ · x · z · v · ◁ if d = −1
+(2) ▷ · w · x · z · q′ · v · ◁ if d = +1
+
+We consider ATMs with polynomially bounded space, a class of
+Turing machines that defines the class ASPACE known to coincide
+with EXPTIME. Recall that a binary tree is a finite prefix-closed
+subset T ⊆ {1, 2}∗ and a labeled-tree is a function λ that assigns a
+label to every element (node) of a tree.
+
+Given an ATM M and a polynomial poly(n), a run of M w.r.t. poly
+on an input w ∈ (Σ \ {▷, ◁, □})∗ is a binary tree λ whose nodes are
+labeled with configurations of M such that:
+
+(1) the root node is labeled with λ(ε) = ▷·q0 ·w ·□poly(|w |)−|w | ·◁
+(2) for non-leaf node n ∈ dom(λ) let λ(n) = ▷ · w · q · x · v · ◁; for
+every i ∈ {1, 2} if n has a child n · i, then the configuration
+λ(n · i) is obtained by applying the transition δi (q, x) to the
+configuration λ(n). Also, if q ∈ K∀, then n has both children
+n · 1 and n · 2 and if q ∈ K∃, then n has precisely one child,
+(3) for every leaf node n ∈ dom(λ) the configuration λ(n) uses a
+
+final state qyes or qno.
+
+A run is accepting if and only if all its leaves use the state qyes.
+The ATM M (with space bound poly) accepts a word w, in symbols
+M(w) = yes if and only if there is an accepting run of M w.r.t. poly
+on w.
+Reduction outline. We present a reduction of the problem of
+word acceptance by an ATM with polynomial bound on space to
+the complement of the problem of containment of Boolean 2RPQs
+in the presence of schema. We point out that the class of ASPACE-
+complete problems is closed under complement, and consequently,
+this reduction proves that the query containment problem is EXP-
+TIME-hard.
+
+More precisely, for an ATM M, whose space is bounded by
+poly(n), and an input word w we construct a schema S and two
+Boolean 2RPQs p and q such that
+
+M(w) = yes
+
+iff p ⊈S q
+
+iff ∃G ∈ L(S). G |= p ∧ G ̸|= q .
+
+In the sequel, we refer to p as the positive query and to q as the
+negative query. Naturally, we present a reduction that is polynomial
+i.e., the combined size of p, q, and S is bounded by polynomial in
+the size of M and w.
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+The reduction constructs a schema S and queries p and q for
+which the counter-example of p ⊆S q represents an accepting run
+of M on w. Before we present the reduction in detail, we introduce
+3 conceptual devices that we use in the reduction: nesting queries,
+encoding disjunction, and enforcing tree structure.
+
+that ensures that an inner node does not have two outgoing edges
+with the same label and that no node has two incoming edges. We
+point out that when q is not satisfied at a node, schema ensures
+that it has at most one incoming edge. To enforce the correct tree
+structure we define the following unary query
+
+Nesting queries. The reduction employs a relatively large and
+complex queries and throughout the reduction we employ nesting
+of regular path queries that is expanded as follows:
+
+p[q] = p · q · q−
+with the inverse operator being extended to regular path queries in
+the standard fashion.
+ϵ − = ϵ ,
+(cid:156)− = (cid:156) ,
+(φ1 · φ2)− = φ−
+(φ1 + φ2)− = φ−
+We point out that, in general, this definition is not equivalent to the
+standard meaning of nesting of regular expressions but in our re-
+duction nested queries are evaluated at nodes for which the schema
+ensures the intended meaning.
+
+A− = A ,
+(φ∗)− = (φ−)∗ .
+
+1 + φ−
+2 ,
+
+2 · φ−
+1 ,
+
+Encoding disjunction. The first conceptual device allows us to
+express disjunction in schemas, which we illustrate on the following
+example. Take two node labels A and B and suppose we wish to
+require A-nodes to have either one outgoing a-edge or one outgoing
+b-edge to a node with label B. The schema formalism allows us to
+make the following restriction.
+
+A → a : B?, b : B? .
+Alone, it is insufficient as it allows nodes that do not fulfill the
+disjunctive requirement: a A-node that has no outgoing edge or
+has both outgoing edges. We remove those cases with the help of a
+positive and a negative query. Namely, we define
+
+p = A[(a + b)]
+
+and
+
+q = A[a][b]
+
+and we observe that in a graph that conforms to the above schema
+any node with label A that satisfies p and does not satisfy q has
+precisely one outgoing edge.
+
+Enforcing tree structure. In our reduction we aim at constructing
+a tree-shaped counter examples and we use the positive query to
+diligently enforce disjunction in every node. In essence, the positive
+query will traverse the counter-example and impose satisfaction
+of a relevant query in every node. We present this device on an
+example where we define rooted binary trees. The general shape of
+the tree follows the schema in Figure 6.
+
+?
+Node
+?
+
+a1
+
+a1
+
+?
+
+?
+
+?
+
+?
+
+a2
+
+a2
+
+?
+
+?
+
+Leaf
+
+Figure 6: Example schema for modeling trees.
+
+Naturally, the schema alone is insufficient to capture the right
+structure of the tree. Consequently, additional requirements are
+imposed with the help of the following negative Boolean query
+1 ][a−
+q = Node[a1 ·Node][a1 ·Leaf ]+Node[a2 ·Node][a2 ·Leaf ]+[a−
+2 ]
+
+1 · a2)∗ ·
+2 )∗(cid:1)(x, x) .
+
+pTree(x) = (cid:0)((Node[a1][a2] · a1)∗ · Leaf · (a−
+
+2 )∗ · a−
+Leaf · (a−
+The key observation here is that a−
+1 is always followed by a2 and
+the query can move up the tree only after a leaf has been reached.
+This ensures a proper traversal of the structure, with every node sat-
+isfying the pattern Node[a1][a2]. Consequently, for any connected
+graph G that conforms to the above schema, satisfies p, and does
+not satisfy q, G is a binary tree.
+The input of the reduction. We fix an ATM M = (A, K, q0, δ1, δ2)
+whose space is bounded by poly(n) and we fix an input word w ∈
+(A \ {▷, ◁, □})∗. We let n = |w |, m = poly(|w |), and assume that
+A = {a1, . . . , ak } and that K = {q0, q1, . . . , qℓ }. Throughout the
+description of the reduction, unless we say otherwise, we use a, b
+to range over symbols in A, we use q, p to range over states in K,
+and we use i, j to range over tape positions {1, . . . , m}.
+The schema. We construct a schema S whose signature is
+ΣS = {Config, Pos, Symb, St} ,
+ΓS = {∀1, ∀2, ∃1, ∃2, pos1, . . . , posm } ∪ {a1, . . . , ak } ∪ {q0, . . . , qℓ } .
+In essence, Config-nodes represent configurations and Pos-nodes
+represent tape cells. The edges labeled with {∀1, ∀2, ∃1, ∃2} are
+transition edges that connect configurations. The schema S is pre-
+sented in Figure 7. We introduce macros that illustrate the intended
+
+S:
+
+?
+
+∃2
+∃1
+? ?
+
+Config
+
+? ?
+∀1
+∀2
+
+?
+
+?
+
+?
+
+?
+
+?
+
+a1
+...
+posm
+
+?
+
+?
+
+?
+
+q 0
+
+...
+
+?
+
+Symb
+
+?
+
+a k
+
+?
+
+Pos
+
+?
+
+q
+ℓ
+?.
+.
+.
+pos1
+
+?
+
+?
+
+St
+
+Figure 7: Schema for the reduction.
+
+meaning of the remaining edge labels. The first macro checks that
+the symbol at position i on the tape is a.
+
+Symboli,a
+
+= Config (cid:2)posi · a(cid:3) .
+
+The next one checks that the configuration is a given state q with
+the head at a given position i.
+
+Statei,q = Config [posi · q] .
+Finally, we also introduce a macro that asserts the state of a config-
+uration without any constraint on the position of the head.
+
+Stateq = Config (cid:2) +i posi · q(cid:3) .
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Iovka Boneva, Benoît Groz, Jan Hidders, Filip Murlak, and Sławek Staworko
+
+The positive query ensuring that transitions are executed properly
+is more difficult to define and we decompose it into several macros.
+First, we define a macro Movei,q,a that verifies that that a config-
+uration in state q at position i with symbol a ∈ Σ has the right
+children configurations. We define this macro depending on the
+type of state:
+(1) For q ∈ {qyes, qno} no children are necessary (the negative query
+qBadTransitionsEdges forbids any)
+Movei,q,a = Stateq · Symboli,a .
+(2) For q ∈ K∃ we check that one of the transitions is implemented
+(the negative query qTwoExistentialEdges forbids more than one). We
+let δ1(q, a) = (q1, b1, d1) and δ2(q, a) = (q2, b2, d2).
+Movei,q,a = [Statei,q · Symboli,a · ∃1 · Statei+d1,q1 · Symboli,b1 ]
++ [Statei,q · Symboli,a · ∃2 · Statei+d2,q2 · Symboli,b2 ] .
+(3) For q ∈ K∀ both transitions must be implemented. Again we let
+δ1(q, a) = (q1, b1, d1) and δ2(q, a) = (q2, b2, d2).
+Movei,q,a = [Statei,q · Symboli,a · ∀1 · Statei+d1,q1 · Symboli,b1 ]
+· [Statei,q · Symboli,a · ∀2 · Statei+d2,q2 · Symboli,b2 ] .
+Now, a transition is executed correctly if the following positive
+query holds at a configuration node.
+
+pExecution = Config
+
+(cid:104)+i,q,a Movei,q,a
+
+(cid:105)
+
+.
+
+To handle the tape we need to make sure that 1) the tape of the
+initial configuration contains precisely the input word and 2) that
+symbols at the positions without head are copied correctly. For the
+first, we define the following macro.
+InitTape = Symbol1,w1 ·. . . Symboln,wn
+The next macro verifies that the symbol at a position i of the tape
+is a correct copy of its preceding configuration.
+
+·Symboln+1,□·. . .·Symbolm,□ .
+
+PosCopyi
+
+= (cid:2)+a Symboli,a (∃1 + ∃2 + ∀1 + ∀2)−Symboli,a
+
+(cid:3) .
+
+Naturally, when the head in the preceding configuration is at po-
+sition i, then we must only verify that symbols at positions other
+than i are copied.
+
+TapeCopy = +i
+
+(cid:0)[(∃1 + ∃2 + ∀1 + ∀2)−Headi ] ·
+PosCopy1 · . . . · PosCopyi−1 ·
+PosCopyi+1 · . . . · PosCopym
+
+(cid:1) .
+
+Finally, the query that verifies the correctness of the tape follows.
+pTapeCopy = Config (cid:2)State1,q0 · InitTape + TapeCopy(cid:3) .
+Now, we take the conjunction of the queries that verify local cor-
+rectness of a configuration.
+
+pConfig = pHead · pTape · pTransition · pExecution · pTapeCopy .
+Additionally, we define a configuration that is a leaf (accepting)
+pAccept = pConfig · Stateqyes .
+
+And, the initial configuration
+
+(cid:3) .
+
+pStart = pConfig · Stateq0 .
+
+And analogously, a macro that asserts heads position only
+
+Headi = Config (cid:2) +q posi · q(cid:3) .
+The negative query. We define a number of queries that detect
+violations of good structure of a run; their union will be used as
+the negative query. First, we identify configurations that has two
+different symbols at a position of the tape.
+
+qTwoSymbols = Config (cid:2)+i +a(cid:44)b Symboli,a · Symboli,b
+
+(cid:3) .
+Similarly, we identify configurations with two different heads.
+
+qTwoHeads = Config
+
+(cid:104)+i(cid:44)j∨p(cid:44)q Statei,q · Statej,p
+
+(cid:105)
+
+.
+
+Next, we identify configurations with outgoing transition edges
+that do not fit their state.
+
+qBadTransitionEdges = Config
+
++q ∈K∀ Stateq [∃1 + ∃2] +
++q ∈K∃ Stateq [∀1 + ∀2] +
+Stateqyes [∀1 + ∀2 + ∃1 + ∃2] +
+Stateqno [∀1 + ∀2 + ∃1 + ∃2]
+
+
+
+
+
+
+
+
+
+
+
+.
+
+
+
+
+
+
+
+
+
+
+
+Additionally, identify configurations with existential states that
+have both existential outgoing edges (the definition of a run requires
+precisely one).
+
+qTwoExistentialEdges = +q ∈K∃ Stateq [∃1][∃2] .
+The initial configuration, which is the only configuration with state
+q0, should be the root of the run and as such it should not have any
+incoming transition edges.
+
+qBadTreeRoot = Stateq0 [∃−
+
+1 + ∃−
+
+2 + ∀−
+
+1 + ∀−
+
+2 ] .
+
+To make sure that the run is a tree, no configuration should have
+two incoming transitions (note that the schema forbids more than
+one incoming edge with the same label).
+2 ] + [∃−
+1 ] + [∃−
+
+qBadTreeNode = Config
+
+1 ][∀−
+2 ] +
+1 ][∀−
+2 ]
+
+1 ] + [∃−
+2 ] + [∀−
+
+1 ][∀−
+2 ][∀−
+
+1 ][∃−
+2 ][∀−
+
+(cid:20)[∃−
+[∃−
+
+(cid:21)
+
+.
+
+Similar requirements apply to tape: we do not allow tape positions
+that are used by two different configurations.
+i ][pos−
++p(cid:44)q St[p−][q−] +
++a(cid:44)b Symb[a−][b−] .
+
+qBadTape =+i(cid:44)j Pos[pos−
+
+j ] +
+
+Finally, we construct the union of the above queries.
+qM = qTwoSymbols + qTwoHeads + qBadTransitionEdges +
+
+qTwoExistentialEdges + qBadTreeRoot + qBadTreeNode + qBadTape .
+
+The positive query. We first construct a query that ensures that a
+configuration is valid and then we design a path query that traverses
+the tree and ensures that each of its configurations is valid. A valid
+configuration satisfies the following queries. It has a head at some
+position.
+pHead = Config [+i Headi ] .
+
+Every position has a symbol.
+
+pTape = Config (cid:2)+a Symbol1,a
+
+(cid:3) . . . (cid:2)+a Symbolm,a
+
+The configuration has the required outgoing transitions and only
+final states are accepted in leaves.
+
+pTransition = Config
+
+
+
+
+
+
+
+
+
++q ∈K∀ Stateq [∀1][∀2] +
++q ∈K∃ Stateq [∃1 + ∃2] +
++ Stateqno
+Stateqyes
+
+.
+
+
+
+
+
+
+
+
+
+Static Analysis of Graph Database Transformations
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Finally, we define the positive query, based on the ideas of enforcing
+tree structure in pTree. It traverses the counter-example and ensures
+that it contains only good configurations.
+pM,w = pStart ·
+(cid:0)(pConfig · (∀1 + ∃1 + ∃2))∗ · pAccept · (∃−
+(pConfig · (∀1 + ∃1 + ∃2))∗ · pAccept · (∃−
+
+2 )∗ · ∀−
+2 )∗ · pStart .
+
+2 + ∀−
+2 + ∀−
+
+1 + ∃−
+1 + ∃−
+
+1 · ∀2(cid:1)∗ ·
+
+Before stating the main proof we present in Figure 8 a conceptual
+automaton that corresponds to the above Boolean 2RPQ. In the
+
+pConfig · (∀1 + ∃1 + ∃2)
+
+2 + ∃−
+∀−
+
+1 + ∃−
+2
+
+pStart
+
+q0
+
+q1
+
+pAccept
+
+∀−
+1 · ∀2
+
+pStart
+
+q2
+
+q3
+
+Figure 8: Conceptual automaton of the positive query pM,w .
+
+proof below, we refer to pi, j as the query defined with the above
+automaton whose initial state is qi and final state is qj . The main
+claim follows.
+
+Claim. pM,w ⊈S qM if and only if M(w) = yes.
+Proof. For the if direction, we take the accepting run λ and con-
+struct the corresponding graph G as follows. The nodes and their
+labels are as follows.
+
+ConfigG = {cn | n ∈ dom(λ)},
+
+PosG = {tn,i | n ∈ dom(λ), 1 ≤ i ≤ M },
+StG = {sn | n ∈ dom(λ)},
+
+SymbG = {en,i | n ∈ dom(λ), 1 ≤ i ≤ M } .
+
+The edges of G are:
+
+(1) (cn, posi , tn,i ) for every n ∈ dom(λ) and i ∈ {1, . . . , M },
+(2) (tn,i , q, sn ) for every n ∈ dom(λ) where q is the state of
+
+configuration λ(n);
+
+(3) (tn,i , a, ei,n ) for every n ∈ dom(λ) and i ∈ {1, . . . , M } where
+a is the symbol at position i of the tape of configuration λ(n);
+(4) (cn, ∀1, cn ·1) and (cn, ∀2, cn ·2) for every n ∈ dom(λ) such
+
+that the configuration λ(n) is at state q ∈ K∀;
+
+(5) (cn, ∃j , cn ·j ) for every n ∈ dom(λ) such that the configura-
+tion λ(n) is at state q ∈ K∃ and n has a child n · j in λ for
+some j ∈ {1, 2}.
+
+It is easy to show that G satisfies the schema S, does not satisfy
+q, all Config-nodes satisfy pConfig, the root node satisfies pStart and
+every leaf node satisfies pAccept .
+
+With a simple induction, on the height of a node n ∈ dom(λ), we
+prove that for any n ∈ dom(λ) the node cn satisfies the query p1,2.
+This shows that the root node cε satisfies the query p0,3 = p.
+
+For the only if direction, we take any G that satisfies S, satisfies
+p, and does not satisfy q. W.l.o.g. we can assume that G is connected;
+otherwise we take any connected component that satisfies p. We
+show that G is a tree encoding an accepting run of M on w. Note that
+
+q is a Boolean RPQ, and thus a single two-way regular expression.
+Thus, in the sequel we analyze its witnessing paths in G but p
+should not be confused with a binary query; a Boolean RPQ ask
+the existence of a witnessing path without the need to report its
+endings.
+
+Take any pair of nodes u0 and v0 such that there is a path from
+u0 to v0 that witnesses q (which is a regular expression). Since G
+does not have a node with two incoming edges (qBadTreeNode and
+qBadTape are not satisfied at any node), u0 and v0 are the same node.
+Consequently there is a path from u0 to u0 that witnesses p1,2 and
+we show with an induction on the length of the path from u0 to
+any reachable Config-node v that there is a path form v to v that
+witnesses p1,2, and consequently, v satisfies pConfig. This implies
+that G has the form of a tree, all of its Config-nodes satisfy pConfig
+and all its leaves satisfy pAccept . Moreover, we can construct an
+□
+accepting run λ from G that shows that M(w) = yes.
+
+Finally, we observe that the sizes of S, p, and q are polynomial in
+the size of M and w, which proves the main claim.
+The hardness of containment in the presence of schema implies
+hardness of the static analysis problems we study.
+
+Lemma F.2. Type checking, equivalence, and schema elicitation are
+EXPTIME-hard.
+
+Proof. We reduce the containment of unary 2RPQs in the presence
+of schema to the problems of interest. Note that by Theorem F.1 and
+Corollary D.2, containment of unary acyclic 2RPQs is EXPTIME-
+hard. We take any schema S and two unary 2RPQs p(x) and q(x). In
+all reductions S is the input schema and we assume a single unary
+constructor F = { fA}.
+We begin by showing that testing (T , S) |=
+We take the transformation T defined with the following rules.
+
+ΓT is EXPTIME-hard.
+
+(cid:46)
+
+A(fA(x)) ← q(x)
+We observe that (T , S) |=
+For equivalence, we define the following two transformations.
+
+and a(fA(x), fA(x)) ← p(x) .
+ΓT if and only if p(x) ⊆S q(x).
+
+(cid:46)
+
+T1 : A(fA(x)) ← q(x) .
+T2 : A(fA(x)) ← q(x) , A(fA(x)) ← p(x) .
+We observe that T1 ≡S T2 if and only if p(x) ⊆S q(x).
+For type checking we define the following transformation and
+output schema
+
+T : A(fA(x)) ← p(x) ,
+
+A(fA(x)) ← q(x) ,
+
+a(fA(x), fA(x)) ← q(x) .
+
+S ′ : A → a : A1 .
+
+We observe that that T (S) ⊆ S ′ if and only if p(x) ⊆S q(x).
+To prove that schema elicitation is also EXPTIME-hard, we take
+the previous transformation T , the input schema S, and show that
+p(x) ⊆S q(x) if and only if the ⊆-minimal schema that captures
+the output graphs is precisely S ′. We observe that deciding equiv-
+alence of two schemas is easily accomplished in polynomial time
+and therefore any algorithm for schema elicitation must require
+□
+exponential time.
+
+

@@ -1,0 +1,2040 @@
+Eﬀicient Computation of Quantiles over Joins
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld,
+
+Mirek Riedewald
+
+To cite this version:
+
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld, Mirek Riedewald. Ef-
+ficient Computation of Quantiles over Joins. SIGMOD/PODS 2023 - International Conference on
+Management of Data, Jun 2023, Seattle, WA, United States. pp.303-315, ￿10.1145/3584372.3588670￿.
+￿lirmm-04277973￿
+
+HAL Id: lirmm-04277973
+
+https://hal-lirmm.ccsd.cnrs.fr/lirmm-04277973
+
+Submitted on 9 Nov 2023
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Nikolaos Tziavelis
+Northeastern University
+Boston, MA, United States
+tziavelis.n@northeastern.edu
+
+Efficient Computation of Quantiles over Joins
+Nofar Carmeli
+Inria, LIRMM, Univ Montpellier,
+CNRS
+Montpellier, France
+nofar.carmeli@inria.fr
+
+Wolfgang Gatterbauer
+Northeastern University
+Boston, MA, United States
+w.gatterbauer@northeastern.edu
+
+Benny Kimelfeld
+Technion - Israel Institute of
+Technology
+Haifa, Israel
+bennyk@technion.ac.il
+
+Mirek Riedewald
+Northeastern University
+Boston, MA, United States
+m.riedewald@northeastern.edu
+
+ABSTRACT
+We present efficient algorithms for Quantile Join Queries, abbre-
+viated as %JQ. A %JQ asks for the answer at a specified relative
+position (e.g., 50% for the median) under some ordering over the
+answers to a Join Query (JQ). Our goal is to avoid materializing the
+set of all join answers, and to achieve quasilinear time in the size of
+the database, regardless of the total number of answers. A recent
+dichotomy result rules out the existence of such an algorithm for a
+general family of queries and orders. Specifically, for acyclic JQs
+without self-joins, the problem becomes intractable for ordering by
+sum whenever we join more than two relations (and these joins are
+not trivial intersections). Moreover, even for basic ranking func-
+tions beyond sum, such as min or max over different attributes, so
+far it is not known whether there is any nontrivial tractable %JQ.
+In this work, we develop a new approach to solving %JQ and show
+how this approach allows not just to recover known results, but also
+generalize them and resolve open cases. Our solution uses two sub-
+routines: The first one needs to select what we call a “pivot answer”.
+The second subroutine partitions the space of query answers ac-
+cording to this pivot, and continues searching in one partition that
+is represented as new %JQ over a new database. For pivot selection,
+we develop an algorithm that works for a large class of ranking
+functions that are appropriately monotone. The second subroutine
+requires a customized construction for the specific ranking function
+at hand.
+
+We show the benefit and generality of our approach by using
+it to establish several new complexity results. First, we prove the
+tractability of min and max for all acyclic JQs, thereby resolving
+the above question. Second, we extend the previous %JQ dichotomy
+for sum to all partial sums (over all subsets of the attributes). Third,
+we handle the intractable cases of sum by devising a deterministic
+approximation scheme that applies to every acyclic JQ.
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+© 2023 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+This is the author’s version of the work. It is posted here for your personal use. Not
+for redistribution. The definitive Version of Record was published in Proceedings of the
+42nd ACM SIGMOD-SIGACT-SIGAI Symposium on Principles of Database Systems (PODS
+’23), June 18–23, 2023, Seattle, WA, USA, https://doi.org/10.1145/3584372.3588670.
+
+1
+
+CCS CONCEPTS
+• Theory of computation → Database query processing and
+optimization (theory); Database theory.
+
+KEYWORDS
+join queries, quantiles, median, ranking function, answer order,
+pivot, approximation, inequality predicates
+
+ACM Reference Format:
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld,
+and Mirek Riedewald. 2023. Efficient Computation of Quantiles over Joins.
+In Proceedings of the 42nd ACM SIGMOD-SIGACT-SIGAI Symposium on
+Principles of Database Systems (PODS ’23), June 18–23, 2023, Seattle, WA, USA.
+ACM, New York, NY, USA, 14 pages. https://doi.org/10.1145/3584372.3588670
+
+1 INTRODUCTION
+Quantile queries ask for the element at a given relative position
+𝜙 ∈ [0, 1] in a given list 𝐿 of items [21]. For example, the lower
+quartile, median, and upper quartile are the elements at positions
+𝜙 = 0.25, 𝜙 = 0.5, and 𝜙 = 0.75, respectively. We investigate
+quantile queries where 𝐿 is the result of a Join Query (JQ) 𝑄 over a
+database, with a ranking function that determines the order between
+the answers. Importantly, the list 𝐿 can be much larger than the
+input database 𝐷 (specifically, 𝐿 can be Ω(|𝐷 |𝑘 ) for some degree 𝑘
+determined by 𝑄), and so, 𝑄 and 𝐷 form a compact representation
+for 𝐿. Our main research question is when we can find the quantile
+in quasilinear time. In other words, the time suffices for reading 𝐷,
+but we are generally prevented from materializing 𝑄 (𝐷).
+
+For illustration, consider a social network where users orga-
+nize events, share event announcements, and declare their plans
+to attend events. It has the three relations Admin(user, event),
+Share(user, event, #likes), and Attend(user, event, #likes). We wish
+to extract statistics about triples of users involved in events, begin-
+ning by joining the three relations using the JQ
+
+Admin(𝑢1, 𝑒) , Share(𝑢2, 𝑒, 𝑙2) , Attend(𝑢3, 𝑒, 𝑙3).
+Now, suppose that all we do is apply a quantile query to the result
+of 𝑄, say the 0.1-quantile ordered by 𝑙2 + 𝑙3 (the sum of likes of the
+share and the participation). The direct way of finding the quantile
+is to materialize the join, sort the resulting tuples, and take the
+element at position 𝜙 = 0.1. Yet, this result might be considerably
+larger than the database, and prohibitively expensive to compute,
+even though in the end we care only about one value. Can we do
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld, & Mirek Riedewald
+
+better? This is the research question that we study in this paper.
+In general, the answer depends on the JQ and order, and in this
+specific example we can, actually, do considerably better.
+
+To be more precise, we study the fine-grained data complexity of
+query evaluation, where the query seeks a quantile over a JQ. We re-
+fer to such a query as a Quantile Join Query and abbreviate it as %JQ.
+So, the JQ 𝑄 is fixed, and so is the ranking function (e.g., weighted
+sum over a fixed subset of the variables). The input consists of 𝐷
+and 𝜙. In terms of the execution cost, we allow for poly-logarithmic
+factors, therefore our goal is to devise evaluation algorithms that
+run in time quasilinear in 𝐷, that is, O (|𝐷 | polylog(|𝐷 |)).
+
+To the best of our knowledge, little is known about the fine-
+grained complexity of %JQ. We have previously studied this prob-
+lem [7] for Conjunctive Queries (which are more general than Join
+Queries since they also allow for projection) under the name “se-
+lection problem”.1 Two types of orders were covered: sum of all
+attributes and lexicographic orders. On the face of it, the conclu-
+sion from our previous results is that we are extremely limited in
+what we can do: The problem is intractable for every JQ with more
+than two atoms (each having a set of variables that is not contained
+in that of another atom, and assuming no self-joins), under con-
+ventional conjectures in fine-grained complexity. Nevertheless, we
+argue that our previous results tell only part of the story and miss
+quite general opportunities for tractability:
+
+• What if the sum involves just a subset of the variables, like in
+the above social-network example? Then the lower bounds
+for full sum do not apply. As it turns out, in this case we
+often can achieve tractability for JQs of more than 2 atoms.
+• What if we allow for some small error and not insist on the
+precise 𝜙-quantile? As we argue later, this relaxation makes
+the picture dramatically more positive.
+
+In addition, there are ranking functions that have not been consid-
+ered at all, notably minimum and maximum over attributes, such as
+MIN(rate1, rate2) and MAX(width, height, depth). We do not see
+any conclusion from past results on these, so the state of affairs
+(prior to this paper) is that their complexity is an open problem.
+
+In this work, we devise a new framework for evaluating %JQ
+queries. We view the problem as a search problem in the space of
+query answers, and the framework adopts a divide-and-conquer
+“pivoting” approach. For a JQ 𝑄, we reduce the problem to two
+subroutines, given 𝐷 and 𝜙:
+
+• pivot: Find a pivot answer 𝑝 such that the set of answers
+that precede 𝑝 and the set of answers that follow 𝑝 both
+contain at least a constant fraction of the answers.
+
+• trim: Partition the answers into three splits: less than, equal
+to, and greater than 𝑝. Determine which one contains the
+sought answer and, if it is not 𝑝, produce a new %JQ within
+the relevant split using new 𝑄 ′, 𝐷′ and 𝜙 ′. We view this
+operation as trimming the split condition by updating the
+database so that the remaining answers satisfy the condition.
+
+We begin by showing that we can select a pivot in linear time for
+every acyclic join query and every ranking function that satisfies
+
+1To be precise, in the selection problem, the position of this answer is given as an
+absolute index 𝑖 rather than a relative position 𝜙. (This problem is sometimes referred
+to as unranking [18].) This difference is nonessential as far as this work concerns: all
+our previous lower and upper bounds for selection on JQs apply to %JQs.
+
+2
+
+a monotonicity assumption (also used in the problem of ranked
+enumeration [15, 23]), which all functions considered here satisfy.
+Note that the assumption of acyclicity is required since, otherwise,
+it is impossible to even determine whether the join query has any
+answer in quasilinear time, under conventional conjectures in fine-
+grained complexity [6]. Hence, the challenge really lies in trimming.
+
+Contributions. Using our approach, we establish efficient algo-
+rithms for several classes of queries and ranking functions, where
+we show how to solve the trimming problem.
+
+(1) We establish tractability for all acyclic JQs under the ranking
+
+functions MIN and MAX.
+
+(2) We recover (up to logarithmic factors) all past tractable
+
+cases [7] for lexicographic orders and SUM.
+
+(3) For self-join-free JQs and SUM, we complete the picture by
+extending the previous dichotomy [7] (restricted to JQs) to
+all partial sums.
+
+We then turn our attention to approximate answers. Precisely,
+we find an answer at a position within (1 ± 𝜖)𝜙 for an allowed error
+𝜖. (This is a standard notion of approximation for quantiles [9, 17].)
+To obtain an efficient randomized approximation, it suffices to be
+able to construct in quasilinear time a direct-access structure for
+the underlying JQ, regardless of the answer ordering; if so, then
+one can use a standard median-of-samples approach (with Hoeffd-
+ing’s inequality to guarantee the error bounds). Such algorithms
+for direct-access structures have been established in the past for
+arbitrary acyclic JQs [6, 8]. Instead, we take on the challenge of
+deterministic approximation. Our final contribution is that:
+
+(4) We show that with an adjustment of our pivoting framework,
+we can establish a deterministic approximation scheme in
+time quadratic in 1/𝜖 and quasilinear in database size.
+In contrast to the randomized case, we found the task of determin-
+istic approximation challenging, and our algorithm is indeed quite
+involved. Again, the main challenge is in the trimming phase.
+
+The remainder of the paper is organized as follows: We give pre-
+liminary definitions in Section 2. We describe the general pivoting
+framework in Section 3. In Section 4, we describe the pivot-selection
+algorithm. The main results are in Sections 5 and 6 where we devise
+exact and approximate trimmings, respectively, and establish the
+corresponding tractability results. We conclude in Section 7.
+
+2 PRELIMINARIES
+2.1 Basic Notions
+Sets. We use [𝑟 ] to denote the set of integers {1, . . . , 𝑟 }. A multiset
+𝐿 is described by a 2-tuple (𝑍, 𝛽), where 𝑍 is the set of its distinct
+elements and 𝛽 : 𝑍 → N is a multiplicity function. The set of all
+possible multisets with elements 𝑍 is denoted by N𝑍 .
+
+Relational databases. A schema S is a set of relational symbols
+{𝑅1, . . . , 𝑅𝑚 }. A database 𝐷 contains a finite relation 𝑅𝐷 ⊆ dom𝑎𝑅
+for each 𝑅 ∈ S, where dom is a set of constants called the domain,
+and 𝑎𝑅 is the arity of symbol 𝑅. If 𝐷 is clear, we simply use 𝑅 instead
+of 𝑅𝐷 . The size of 𝐷 is the total number of tuples, denoted by 𝑛.
+
+Join Queries. A Join Query (JQ) 𝑄 over schema S is an expres-
+sion of the form 𝑅1 (X1), . . . , 𝑅ℓ (Xℓ ), where {𝑅1, . . . , 𝑅ℓ } ⊆ S and
+the variables of 𝑄 are var(𝑄) = ∪𝑖 ∈ [ℓ ] X𝑖 , sometimes interpreted
+as a tuple instead of a set. Each 𝑅𝑖 (X𝑖 ), 𝑖 ∈ [ℓ] is called an atom of
+
+Efficient Computation of Quantiles over Joins
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+𝑄. A repeated occurrence of a relational symbol is a self-join and a
+JQ without self-joins is self-join-free. A query answer is a homomor-
+phism from 𝑄 to the database 𝐷, i.e. a mapping from var(𝑄) to dom
+constants, such that every atom 𝑅𝑖 (X𝑖 ), 𝑖 ∈ [ℓ] maps to a tuple of
+𝑅𝐷
+. The set of query answers to 𝑄 over 𝐷 is denoted by 𝑄 (𝐷) and
+𝑖
+we often represent a query answer 𝑞 ∈ 𝑄 (𝐷) as a tuple of values
+assigned to var(𝑄). For an atom 𝑅𝑖 (X𝑖 ) of a JQ and database 𝐷, we
+say that tuple 𝑡 ∈ 𝑅𝐷
+𝑖 assigns value 𝑎 to variable 𝑥, and write it as
+𝑡 [𝑥] = 𝑎, if for every index 𝑗 such that X𝑖 [ 𝑗] = 𝑥 we have 𝑡 [ 𝑗] = 𝑎.
+For a predicate 𝑃 (X𝑃 ) over variables X𝑃 ⊆ var(𝑄), we denote by
+(𝑄 ∧ 𝑃)(𝐷) the subset of query answers 𝑄 (𝐷) that satisfy 𝑃 (X𝑃 ).
+Hypergraphs. A hypergraph H = (𝑉 , 𝐸) is a set 𝑉 of ver-
+tices and a set 𝐸 ⊆ 2𝑉 of hyperedges. A path in H is a sequence
+of vertices such that every two consecutive vertices appear to-
+gether in a hyperedge. A chordless path is a path in which no two
+non-consecutive ones appear in the same hyperedge (in particular,
+no vertex appears twice). The number of maximal hyperedges is
+mh(H ) = |{𝑒 ∈ 𝐸 | (cid:154)𝑒′ ∈ 𝐸 : 𝑒 ⊂ 𝑒′}|. A set of vertices 𝑈 ⊆ 𝑉 is in-
+dependent if no pair appears in a hyperedge, i.e., |𝑈 ∩ 𝑒 | ≤ 1, ∀𝑒 ∈ 𝐸.
+Join trees. A join tree of a hypergraph H = (𝑉 , 𝐸) is a tree 𝑇
+where its nodes2 are the hyperedges of H and the running intersec-
+tion property holds, namely: for all 𝑢 ∈ 𝑉 the set {𝑒 ∈ 𝐸 | 𝑢 ∈ 𝑒}
+forms a (connected) subtree in 𝑇 . We associate a hypergraph
+H (𝑄) = (𝑉 , 𝐸) to a JQ 𝑄 where the vertices are the variables
+of 𝑄, and every atom of 𝑄 corresponds to a hyperedge with the
+same set of variables. With a slight abuse of notation, we identify
+atoms of 𝑄 with hyperedges of H (𝑄). A JQ 𝑄 is acyclic if there
+exists a join tree for H (𝑄), otherwise it is cyclic. If we root the join
+tree, the subtree rooted at a node 𝑈 defines a subquery, i.e., a JQ
+that contains only the atoms of descendants of 𝑈 . A partial query
+answer (for the subtree) rooted at 𝑈 is an answer to the subquery.
+If we materialize a relation 𝑅𝑈 for node 𝑈 , a partial query answer
+(for the subtree) rooted at 𝑡 ∈ 𝑅𝑈 must additionally agree with 𝑡.
+
+Complexity. We measure complexity in the database size 𝑛,
+while query size is considered constant. The model of computation
+is the standard RAM model with uniform cost measure. In particular,
+it allows for linear-time construction of lookup tables, which can
+be accessed in constant time. Following our prior work [7], we only
+consider comparison-based sorting, which takes quasilinear time.
+
+2.2 Orders over Query Answers
+To define %JQs, we assume an ordering of the query answers by
+a given ranking function. The ranking function is described by a
+2-tuple (𝑤, ⪯) where a weight function 𝑤 : 𝑄 (𝐷) → dom𝑤 maps
+the answers to a weight domain dom𝑤 equipped with a total order
+⪯. We denote the strict version of the total order by ≺. Assuming
+consistent tie-breaking, the total order extends to query answers,
+i.e., for 𝑞1, 𝑞2 ∈ 𝑄 (𝐷), 𝑞1 ⪯ 𝑞2 iff 𝑤 (𝑞1) ≺ 𝑤 (𝑞2) or 𝑤 (𝑞1) = 𝑤 (𝑞2)
+and 𝑞1 is (arbitrarily but consistently) chosen to break the tie.
+
+Weight aggregation model. We focus on the case of aggregate
+ranking functions where the query answer weights are computed by
+aggregating weights are assigned to the input database. In particular,
+an input-weight function 𝑤𝑥 : dom → dom𝑤 associates each value
+of variable 𝑥 with a weight in dom𝑤. An aggregate function agg𝑤 :
+Ndom𝑤 → dom𝑤 takes a multiset of weights and produces a single
+
+2To avoid confusion, we use the terms hypergraph vertices and tree nodes.
+
+weight. Aggregate ranking functions are typically not sensitive to
+the order in which the input weights are given [11, 12], captured
+by the fact that their input is a multiset. Query answers map to
+dom𝑤 by aggregating the weights of values assigned to a subset
+of the input variables 𝑈𝑤 ⊆ var(𝑄) with an aggregate function
+agg𝑤. Thus, the weight of a query answer 𝑞 ∈ 𝑄 (𝐷) is 𝑤 (𝑞) =
+agg𝑤 ({𝑤𝑥 (𝑞[𝑥]) | 𝑥 ∈ 𝑈𝑤 }). When we do not have a specific
+assignment from variables to values, we use 𝑤 (𝑈𝑤) to refer to the
+expression agg𝑤 ({𝑤𝑥 (𝑥) | 𝑥 ∈ 𝑈𝑤 }). For example, if var(𝑄) =
+{𝑥1, 𝑥2, 𝑥3}, 𝑈𝑤 = {𝑥1, 𝑥3}, 𝑤𝑥 (𝑥) is the identity function for all
+varaibles 𝑥, and agg𝑤 is summation, then 𝑤 (𝑈𝑤) = 𝑥1 + 𝑥3.
+
+Concrete ranking functions. In this paper, we discuss three
+
+types of ranking functions:
+
+(1) SUM: dom𝑤 is R and agg𝑤 is summation. We use the term
+full SUM when 𝑈𝑤 = var(𝑄) and partial SUM otherwise.
+
+(2) MIN/ MAX: dom𝑤 is R and agg𝑤 is min or max.
+(3) LEX: Lexicographic orders fit into our framework by letting
+the domain dom𝑤 consist of tuples in N|𝑈𝑤 | . Every variable
+𝑥 ∈ 𝑈𝑤 is mapped to dom𝑤 as a tuple (0, . . . , 𝑤 ′
+𝑥 (𝑥), . . . , 0)
+where 𝑤 ′
+𝑥 (𝑥) occupies the position of 𝑥 in the lexicographic
+order and 𝑤 ′
+𝑥 : dom → N that orders the
+domain of 𝑥 by mapping it to natural numbers. The aggregate
+function agg𝑤 is then element-wise addition, while the order
+⪯ compares these tuples lexicographically.
+
+𝑥 is a function 𝑤 ′
+
+Problem definition. Let 𝑄 be a JQ and (𝑤, ⪯) a ranking function.
+Given a database 𝐷, a query answer 𝑞 ∈ 𝑄 (𝐷) is a 𝜙-quantile [21]
+of 𝑄 (𝐷) for some 𝜙 ∈ [0, 1] if there exists a valid ordering of
+𝑄 (𝐷) where there are ⌈𝜙 |𝑄 (𝐷)|⌉ answers less-than or equal-to 𝑞
+and ⌊(1 − 𝜙)|𝑄 (𝐷)|⌋ answers greater than 𝑞. A %JQ asks for a 𝜙-
+quantile given 𝐷 and 𝜙. Similarly, an 𝜖-approximate %JQ asks for a
+(𝜙 ± 𝜖)-quantile for a given 𝐷, 𝜙, and 𝜖 ∈ (0, 1).
+
+Monotonicity. Let ⊎ be multiset union. An (aggregate) ranking
+function is subset-monotone [23] if agg𝑤 (𝐿1) ⪯ agg𝑤 (𝐿2) implies
+that agg𝑤 (𝐿 ⊎ 𝐿1) ⪯ agg𝑤 (𝐿 ⊎ 𝐿2) for all multisets 𝐿, 𝐿1, 𝐿2. All
+ranking functions we consider in this work have this property. We
+note that subset-monotonicity has been used as an assumption in
+ranked enumeration [15, 23] and is a stronger requirement than
+the more well-known monotonicity notion of Fagin et al. [10].
+
+Tuple weights. Our ranking function definition uses attribute-
+weights but some of our algorithms are easier to describe when
+dealing with tuple weights. We can convert the former to the latter
+in linear time. First, we eliminate self-joins by materializing a fresh
+relation for every repeated symbol in the query 𝑄. Second, to avoid
+giving the weight of a variable to tuples of multiple relations, we
+define a mapping 𝜇 that assigns each variable 𝑥 ∈ 𝑈𝑤 to a relation
+𝑅 such that 𝑥 occurs in the 𝑅-atom of 𝑄. The weight of a tuple
+𝑡 ∈ 𝑅 is then the multiset of weights for variables assigned to 𝑅:
+𝑤𝑅 (𝑡) = {𝑤𝑥 (𝑡 [𝑥]) | 𝑥 ∈ 𝑈𝑤, 𝜇 (𝑥) = 𝑅}. 3 The total order ⪯ can be
+extended to sets of tuples (𝑡1, . . . , 𝑡𝑟 ) (and thus query answers) by
+aggregating all individual weights contained in the tuple weights.
+
+3The reason that we maintain the attribute weights as a set instead of aggregating
+them is that the aggregate ranking function can be holistic [11], in which case we
+lose the ability to further aggregate. If, on the other hand, the ranking function is
+distributive [11] like SUM, then we can aggregate to obtain a single weight for a tuple.
+
+3
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld, & Mirek Riedewald
+
+2.3 Known Bounds
+Certain upper and (conditional) lower bounds for %JQ follow from
+our previous work [7] on the selection problem which asks for the
+query answer at index 𝑘. The two problems are equivalent for
+acyclic JQs, since an index can be translated into a fraction 𝜙, and
+vice-versa, by knowing |𝑄 (𝐷)|, which can be computed in linear
+time as we explain in Section 2.4.
+
+The lower bounds are based on two hypotheses:
+(1) Hypercliqe [1, 16]: Let a (𝑘+1, 𝑘)-hyperclique be a set of
+𝑘+1 vertices such that every subset of 𝑘 elements is a hyper-
+edge. For every 𝑘 ≥ 2, there is no 𝑂 (𝑚 polylog 𝑚) algorithm
+for deciding the existence of a (𝑘+1, 𝑘)-hyperclique in a 𝑘-
+uniform hypergraph with 𝑚 hyperedges.
+
+(2) 3sum [4, 19]: For any 𝜖 > 0, we cannot decide in time
+𝑂 (𝑚2−𝜖 ) whether there exist 𝑎 ∈ 𝐴, 𝑏 ∈ 𝐵, 𝑐 ∈ 𝐶 from three
+integer sets 𝐴, 𝐵, 𝐶, each of size Ω(𝑚), such that 𝑎 +𝑏 + 𝑐 = 0.
+Hypercliqe implies that we cannot decide in O (𝑛 polylog 𝑛) if a
+cyclic, self-join-free JQ has any answer [6]. For LEX, an acyclic %JQ
+can be answered in O (𝑛) [7]. For full SUM, an acyclic %JQ can be
+answered in O (𝑛 log 𝑛) if its maximal hyperedges are at most 2, and
+the converse is true if it is also self-join-free, assuming 3sum [7].
+
+2.4 Message Passing
+Message passing is a common algorithmic pattern that many al-
+gorithms for acyclic JQs follow. For example, it allows us to count
+the number of answers to an acyclic JQ in linear time [3, 20]. Some
+of the algorithms that we develop also follow this pattern, that we
+abstractly describe below.
+
+Preprocessing. Choose an arbitrary root for a join tree 𝑇 of
+the JQ, and materialize a distinct relation for every 𝑇 -node. For
+every parent node 𝑉𝑝 and child node 𝑉𝑐 , group the 𝑉𝑐 -relation by
+the 𝑉𝑝 ∩ 𝑉𝑐 variables. We will refer to these groups of tuples as join
+groups; a join group shares the same values for variables that appear
+in the parent node. The algorithm visits the relations in a bottom-
+up order of 𝑇 , sending children-to-parent messages. The goal is to
+compute a value val(𝑡) for each tuple 𝑡 of these relations, initialized
+according to the specific algorithm. Sometimes, it is convenient to
+add an artificial root node 𝑉0 = ∅ to the join tree, which refers to a
+zero-arity relation with a single tuple 𝑡0 = (). Tuple 𝑡0 joins with
+all tuples of the previous root and its purpose is only to gather the
+final result at the end of the bottom-up pass.
+
+Messages. As we traverse the relations in bottom-up order, every
+tuple 𝑡 emits its val(𝑡). These messages are aggregated as follows:
+(1) Messages emitted by tuples 𝑡 ′ in a join group are aggregated
+with an operator ⊕. The result is sent to all parent-relation
+tuples that agree with the join values of the group.
+
+(2) A tuple 𝑡 computes val(𝑡) by aggregating the messages re-
+ceived from all children in the join tree, together with the
+initial value of val(𝑡), with an operator ⊗.
+
+Example 2.1 (Count). To count the JQ answers, we initialize
+cnt(𝑡) = 1 for all tuples 𝑡, set ⊕ to product ((cid:206)), and ⊗ to sum ((cid:205)).
+Figure 1 illustrates how messages are aggregated so that cnt(𝑡) is
+the number of partial answers for the subtree rooted at 𝑡. To get
+the final count, we sum the counts in the root relation (9 + 4 = 13 in
+the example), e.g., by introducing the artificial root-node tuple 𝑡0.
+
+(a) Example database and final
+counts of subtree answers.
+
+(b) Messages received and aggre-
+gated by an 𝑅-tuple.
+
+Figure 1: Message passing for counting the answers to the JQ
+𝑅(𝑥1, 𝑥2), 𝑆 (𝑥1, 𝑥3),𝑇 (𝑥2, 𝑥4), 𝑈 (𝑥4, 𝑥5).
+
+3 DIVIDE-AND-CONQUER FRAMEWORK
+We describe a general divide-and-conquer framework for acyclic
+%JQs that applies to different ranking functions. It follows roughly
+the same structure as linear-time selection [5] in a given array
+of elements. This classic algorithm searches for the element at a
+desired index 𝑘 in the array by “pivoting”. In every iteration, it
+selects a pivot element and creates three array partitions: elements
+that are lower, equal, and higher than the pivot. Depending on
+the partition sizes and the value of 𝑘, it chooses one partition and
+continues with that, thereby reducing the number of candidate
+elements. We adapt the high-level steps of this algorithm to our
+setting. The crucial challenge is that we do not have access to the
+materialized array of query answers (which can be very large),
+but only to the input database and JQ that produce them. In the
+following, we discuss the general structure of the algorithm and
+the subroutines that are required for it to work. In later sections,
+we then concretely specify these subroutines.
+
+Pivot selection. We define what constitutes a “good” pivot. In-
+tuitively, it is an element whose position is roughly in the middle of
+the ordering. With such a pivot, the partitioning step is guaranteed
+to eliminate a significant number of elements, resulting in quick
+convergence. Ideally, we would want to have the true median as
+our pivot because it is guaranteed to eliminate the largest fraction
+( 1
+2 ) of elements. However, to achieve convergence in a logarith-
+mic number of iterations, it is sufficient to choose any pivot that
+eliminates any constant fraction 𝑐 > 0 of elements.
+
+Definition 3.1 (𝑐-pivot). For a constant 𝑐 ∈ (0, 1) and a set 𝑍
+equipped with a total order ⪯, a 𝑐-pivot 𝑝 for 𝑍 is an element of 𝑍
+such that |{𝑧 ∈ 𝑍 | 𝑝 ⪯ 𝑧}| ≥ 𝑐 |𝑍 | and |{𝑧 ∈ 𝑍 | 𝑝 ⪰ 𝑧}| ≥ 𝑐 |𝑍 |.
+
+Our goal is to find such a 𝑐-pivot for the set of query answers
+
+𝑄 (𝐷) ordered by the given ranking function.
+
+Partitioning. Assuming an appropriate query answer 𝑝 as our
+pivot, we use it to partition the query answers. This means that we
+want to separate the answers into those whose weight is less than,
+equal to, and greater than the weight of the pivot. Since we do not
+have access to the query answers, this partitioning step must be
+performed on the input database and JQ. The less-than and greater-
+than partitions can be described by the original JQ, together with
+inequality predicates: (1) 𝑤 (𝑈𝑤) ≺ 𝑤 (𝑝) and (2) 𝑤 (𝑈𝑤) ≻ 𝑤 (𝑝)
+
+4
+
+𝑆(𝑥1,𝑥3)cnt131141151231241𝑅(𝑥1,𝑥2)cnt119224𝑇(𝑥2,𝑥4)cnt162171262𝑈(𝑥4,𝑥5)cnt6816917911,11,31,41,51,61,7𝑅(𝑥1,𝑥2)𝑆(𝑥1,𝑥3)𝑇(𝑥2,𝑥4)111211+1+1=32+1=33×3×1=9Efficient Computation of Quantiles over Joins
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+respectively. The equal-to partition can be assumed to contain all
+answers that do not fall into either of the other two.
+
+Trimming inequalities. If we materialize as database relations
+the inequalities that arise from the partitioning step, their size can
+be very large. For example, the inequality 𝑥1 + 𝑥2 + 𝑥3 < 0 for
+three variables 𝑥1, 𝑥2, 𝑥3 has a listing representation of size O (𝑛3).
+However, in certain cases it is possible to represent them more
+efficiently, e.g., in space O (𝑛 polylog 𝑛), by modifying the original
+JQ and database. We call this process “trimming.”
+
+Definition 3.2 (Predicate Trimming). Given a JQ 𝑄 and a predicate
+𝑃 (𝑈 ) with variables 𝑈 ⊆ var(𝑄), a trimming of 𝑃 (𝑈 ) from 𝑄
+receives a database 𝐷 and returns a JQ 𝑄 ′ of size O (|𝑄 |) and with
+var(𝑄) ⊆ var(𝑄 ′), and a database 𝐷′ for which there exists an
+O (1)-computable bijection from 𝑄 ′ (𝐷′) to (𝑄 ∧ 𝑃)(𝐷). Trimming
+time is the time required to construct 𝑄 ′ and 𝐷′.
+
+Efficient trimmings of predicates are for instance known for ad-
+ditive inequalities when the sum variables are found in adjacent JQ
+atoms [22] and for not-all-equals predicates [14], which are a gen-
+eralization of non-equality (≠). Ultimately, our ability to partition
+and the success of our approach relies on the existence of efficient
+trimmings of inequalities that involve the aggregate function.
+
+Choosing a partition. After we obtain three new JQs and cor-
+responding databases by trimming, we count their query answers
+to determine where the desired index (calculated from the given
+percentage) falls into. To ensure that this can be done in linear
+time, we want all JQs to be acyclic, and so we restrict ourselves to
+trimmings that do not alter the acyclicity of the JQs. To keep track
+of the candidate query answers, we maintain two weights low and
+high as bounds, which define a contiguous region in the sorted
+array of query answers. Every iteration then applies trimming for
+two additional inequalities 𝑤 (𝑈𝑤) ≻ low and 𝑤 (𝑈𝑤) ≺ high in
+order to restrict the search to the current candidate set.
+
+Termination. The algorithm terminates when the desired index
+falls into the equal partition since any of its answers, including
+our pivot, is a 𝜙-quantile.4 It also terminates when the number of
+candidate answers is sufficiently small, by calling the Yannakakis
+algorithm [24] to materialize them and then applying linear-time
+selection [5]. With 𝑐-pivots, we eliminate at least 𝑐 |𝑄 (𝐷)| answers
+in every iteration; hence, the candidate query answers will be O (𝑛)
+after a logarithmic number of iterations. Notice that our trimming
+definition allows the new database to be larger than the starting
+one, so the database size may increase across iterations. However,
+the number of JQ answers decreases, ensuring termination.
+
+Summary. Our algorithm repeats the above steps (selecting
+pivot, partitioning, trimming) iteratively. It requires the implemen-
+tation of two subroutines: (1) selecting a 𝑐-pivot among the JQ
+answers, which we call “pivot”, and (2) trimming of inequalities,
+which we call “trim”. The pseudocode is in Appendix B.
+
+Lemma 3.3 (Exact Quantiles). Let Q be a class of acyclic JQs
+
+and (𝑤, ⪯) a ranking function. If for all 𝑄 ′ ∈ Q
+
+(1) there exists a constant 𝑐 such that for any database 𝐷, a 𝑐-
+pivot for 𝑄 ′ (𝐷) can be computed in time O (𝑔𝑝 (𝑛)) for some
+function 𝑔𝑝 , and
+
+4If we want to enforce the same tie-breaking scheme across different calls to our
+algorithm, we could continue searching within the equal partition with a LEX order,
+but this requires also trimming for equality-type predicates.
+
+5
+
+(2) for all 𝜆 ∈ dom𝑤, there exist trimmings of 𝑤 (𝑈𝑤) ≺ 𝜆 and
+𝑤 (𝑈𝑤) ≻ 𝜆 from 𝑄 ′ that return 𝑄 ′′ ∈ Q in time O (𝑔𝑡 (𝑛))
+for some function 𝑔𝑡 ,
+
+then a %JQ can be answered for all 𝑄
+O (max{𝑔𝑝 (𝑛), 𝑔𝑡 (𝑛)} log 𝑛).
+
+∈ Q in time
+
+Notice that trimming can result in a different query than the one
+we start with. This is why pivot-selection and trimming need to
+applicable not just to the input query 𝑄, but to all queries that we
+may obtain from trimming (referred to as a class in Lemma 3.3).
+
+Example 3.4. Suppose that 𝑄 is 𝑅1 (𝑥1, 𝑥2), 𝑅2 (𝑥2, 𝑥3) over a data-
+base 𝐷 and we want to compute the median by SUM with at-
+tribute weights equal to their values. First, we call pivot to ob-
+tain a pivot answer 𝑝, which we use to create two partitions: one
+with 𝑥1 + 𝑥2 + 𝑥3 < 𝑤 (𝑝), and one with 𝑥1 + 𝑥2 + 𝑥3 > 𝑤 (𝑝).
+Second, we call trim on these inequalities. By a known con-
+struction [22], these inequalities can be trimmed in O (𝑛 log 𝑛).
+This construction adds a new column and variable 𝑣 to both re-
+lations. We now have two JQs 𝑄lt and 𝑄gt, over databases 𝐷lt,
+𝐷gt. For example, 𝑄lt is 𝑅1lt (𝑥1, 𝑥2, 𝑣), 𝑅2lt (𝑣, 𝑥2, 𝑥3). Suppose that
+|𝑄 (𝐷)| = 1001, hence the desired index is 𝑘 = 500 (with zero-
+indexing). If |𝑄lt (𝐷lt)| = 400 and |𝑄gt (𝐷gt)| = 600, we can infer
+that the middle partition contains 1 one answer with weight 𝑤 (𝑝).
+Thus, we have to continue searching in the index range from 401 to
+1000 with 𝑘′ = 500 − 400 − 1 = 99. To create less-than and greater-
+than partitions in the next iteration, we will start with the original
+𝑄 and 𝐷 and apply inequalities 𝑤 (𝑝) ≤ 𝑥1 + 𝑥2 + 𝑥3 < 𝑤 (𝑝′) and
+𝑤 (𝑝′) < 𝑥1 + 𝑥2 + 𝑥3 < ∞ with some new pivot 𝑝′.
+
+In Section 4, we will show that an efficient algorithm for pivot
+exists for any subset-monotone ranking function. For trim, the
+situation is more tricky and no generic solution is known. For
+each ranking function, we design a trimming algorithm tailored
+to it. This is precisely where we encounter the known conditional
+hardness of SUM [7]. For example, a quasilinear trimming for
+𝑄 (𝑥1, 𝑥2, 𝑥3) :− 𝑅1 (𝑥1), 𝑅2 (𝑥2), 𝑅3 (𝑥3) and 𝑥1 + 𝑥2 + 𝑥3 < 0 would
+violate our 3sum hypothesis (see Section 2.3) because it would allow
+us to count the number of answers in the less-than and greater-than
+partitions. In Section 5, we will show that efficient trimmings exist
+for MIN/MAX and LEX, as well as (partial) SUM in certain cases.
+
+3.1 Adaptation for Approximate Quantiles
+Since %JQ can be intractable (under our efficiency yardstick) for
+some ranking functions such as SUM [7], we aim for 𝜖-approximate
+quantiles. We can obtain a randomized approximation by the stan-
+dard technique of sampling answers uniformly and taking as es-
+timate the 𝜙-quantile of the sample (e.g., as done by Doleschal et
+al. [9] for quantile queries in a different model). Concentration
+theorems such as Hoeffding Inequality imply that it suffices to
+collect 𝑂 (1/𝜖2) samples and repeat the process 𝑂 (log(1/𝛿)) times
+(and select the median of the estimates) to get an 𝜖-approximation
+with probability 1 − 𝛿. So, it suffices to be able to efficiently sam-
+ple uniformly a random answer of an acyclic JQ; we can do so
+using linear-time algorithms for constructing a logarithmic-time
+random-access structure for the answers [6, 8].
+
+We will show that with our pivoting approach, we can obtain
+a deterministic approximation, which we found to be much more
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld, & Mirek Riedewald
+
+challenging than the randomized one. Pivot selection remains the
+same as in the exact algorithm, while for trimming (which as we ex-
+plained is the missing piece for SUM), we introduce an approximate
+solution based on the notion of a lossy trimming. Intuitively, a lossy
+trimming does not retain all the JQ answers that satisfy a given
+predicate. Such a trimming results in some valid query answers
+being lost in each iteration and causes inaccuracy in the final index
+of the returned query answer. However, if the number of lost query
+answers is bounded, then we can also bound the error on the index.
+
+Definition 3.5 (Lossy Predicate Trimming). Given a JQ 𝑄, a predi-
+cate 𝑃 (𝑈 ) with variables 𝑈 ⊆ var(𝑄), and a constant 𝜖 ∈ [0, 1), an
+𝜖-lossy trimming of 𝑃 (𝑈 ) from 𝑄 receives a database 𝐷 and returns
+a JQ 𝑄 ′ of size O (|𝑄 |) and with var(𝑄) ⊆ var(𝑄 ′), and a data-
+base 𝐷′ for which there exists an O (1)-computable injection from
+𝑄 ′ (𝐷′) to (𝑄 ∧ 𝑃)(𝐷), and also |𝑄 ′ (𝐷′)| ≥ (1 − 𝜖)|(𝑄 ∧ 𝑃)(𝐷)|.
+Trimming time is the time required to construct 𝑄 ′ and 𝐷′.
+
+The injection in the definition above implies that some query
+answers that satisfy the given predicate do not correspond to any
+answers in the new instance we construct, but we also ask their
+ratio to be bounded by 𝜖. For 𝜖 = 0, we obtain an exact predicate
+trimming (Definition 3.2) as a special case.5
+
+Lemma 3.6 (Approximate Quantiles). Let Q be a class of acyclic
+
+JQs and (𝑤, ⪯) a ranking function. If for all 𝑄 ′ ∈ Q
+
+(1) there exists a constant 𝑐 such that for any database 𝐷, a 𝑐-
+pivot for 𝑄 ′ (𝐷) can be computed in time O (𝑔𝑝 (𝑛)) for some
+function 𝑔𝑝 , and
+
+(2) for all 𝜆 ∈ dom𝑤 and 𝜖′ > 0, there exist 𝜖′-lossy trimmings of
+𝑤 (𝑈𝑤) ≺ 𝜆 and 𝑤 (𝑈𝑤) ≻ 𝜆 from 𝑄 ′ that return 𝑄 ′′ ∈ Q in
+time O (𝑔𝑡 (𝑛, 𝜖′)) for some function 𝑔𝑡 ,
+
+then an 𝜖-approximate %JQ can be answered for all 𝑄 ∈ Q in time
+O (cid:0) max(cid:8)𝑔𝑝 (𝑛), 𝑔𝑡 (cid:0)𝑛,
+(cid:1) (cid:9) log 𝑛(cid:1), where ℓ is the number
+of atoms of 𝑄.
+
+𝜖
+2⌈ℓ log1/(1−𝑐 )
+
+𝑛⌉
+
+In Section 6 we will give an 𝜖-lossy trimming for additive in-
+equalities, which, combined with the pivot algorithm of Section 4,
+will give us an 𝜖-approximate quantile algorithm for SUM.
+
+4 GENERIC PIVOT SELECTION
+We describe a pivot algorithm for choosing a pivot element among
+the answers to an acyclic JQ. This is one of the two main subroutines
+of our quantile algorithm. We show that a 𝑐-pivot can be computed
+in linear time for a large class of ranking functions.
+
+Lemma 4.1 (Pivot Selection). Given an acyclic JQ 𝑄 over a
+database 𝐷 of size 𝑛 and a subset-monotone ranking function, a 𝑐-
+pivot of 𝑄 (𝐷) together with 𝑐 ∈ (0, 1) can be computed in time O (𝑛).
+
+4.1 Algorithm
+The key idea of our algorithm is the “median-of-medians”, in similar
+spirit to classic linear-time selection [5] or selection for the 𝑋 + 𝑌
+problem [13]. The main difference is that we apply the median-
+of-medians idea iteratively using message passing. The detailed
+pseudocode is given in Appendix C.
+
+Weighted median. An important operation for our algorithm is
+the weighted median, which selects the median of a set, assuming
+that every element appears a number of times equal to an assigned
+weight.6 More formally, for a totally-ordered (⪯) set 𝑍 and a multi-
+plicity function 𝛽 : 𝑍 → N+, the weighted median wmed⪯ (𝑍, 𝛽) is
+the element at position ⌊ |𝐵 |
+2 ⌋ in the multiset 𝐵 = (𝑍, 𝛽) ordered by
+⪯. The weighted median can be computed in time linear in |𝑍 | [13].
+Message passing. Our algorithm employs the message-passing
+framework as outlined in Section 2.4 to compute pivot(𝑡) for each
+tuple 𝑡 bottom-up. The computed pivot(𝑡) is a partial query answer
+for the subtree rooted at 𝑡 and serves as a 𝑐′-pivot for these partial
+answers, for some 𝑐′ ≥ 𝑐. Messages are aggregated as follows: (1)
+The ⊕ operator that combines pivots within a join group is the
+weighted median. The multiplicity function is given by the count of
+subtree answers and the order by the ranking function. The counts
+are also computed using message passing (see Section 2.4). (2) The
+⊗ operator that combines pivots from different children is simply
+the union of (partial) assignments to variables.
+
+Example 4.2. Consider the binary-join 𝑅1 (𝑥1, 𝑥2), 𝑅2 (𝑥2, 𝑥3) un-
+der full SUM. Assume 𝑅1 is the parent in the join tree with tuple
+weights 𝑥1 + 𝑥2, while 𝑅2 is the child with tuple weights 𝑥3. First,
+pivot groups the 𝑅2 tuples by 𝑥2 and, for each group, it finds the
+median 𝑥3 value. The message from 𝑅2 to 𝑅1 is a mapping from
+𝑥2 values to (1) the count of 𝑅2 tuples that contain the 𝑥2 value
+and (2) the median 𝑥3 value over these tuples. Then, every tuple
+𝑟1 ∈ 𝑅1 unions its 𝑥1, 𝑥2 values with the incoming 𝑥3, obtaining
+a pivot(𝑟1) = (𝑥1, 𝑥2, 𝑥3) tuple. To compute the final pivot, pivot
+takes the median of these pivot(𝑟1) tuples, ranked by 𝑥1 + 𝑥2 + 𝑥3,
+and weighted by the count of 𝑅2 tuples that contain the 𝑥2 value.
+
+Example 4.3. Figure 2 shows how an 𝑅-tuple computes its pivot
+under full SUM for the example of Figure 1. Green values in brackets
+[.] represent the counts, while the orange assignments are the
+computed pivots for each tuple or join group. From a leaf node
+like 𝑆 or 𝑈 , messages are simply the relation tuples, each with
+multiplicity 1. To see how a pivot is computed within a join group,
+consider the 𝑇 -node group. The pivot of tuple (1, 6) is smaller than
+the pivot of tuple (1, 7) according to the ranking function because
+1 + 6 + 8 < 1 + 7 + 9. The weighted median selects the latter because
+it has multiplicity 2 (that is the group size for 𝑥4 = 6 in the child 𝑈 ).
+
+Pivot accuracy. As we will show, applying our two operations
+(weighted median, union) results in a loss of accuracy for the pivots,
+captured by the 𝑐 parameter. The pivots computed for the leaf
+relations are the true medians (thus 1
+2 -pivots), but the 𝑐 parameter
+decreases as we go up the join tree. Fortunately, this can be bounded
+by a function of the query size, making our final result a 𝑐-pivot
+with a 𝑐 value that is independent of the data size 𝑛. The algorithm
+keeps track of the 𝑐 value for every node and upon termination, the
+𝑐 value of the root is returned.
+
+Running time. The time is linear in the database size. The
+weighted median and count operations are only performed once for
+every join group and both take linear time. Each tuple is visited only
+once, and all operations per tuple (e.g., number of child relations,
+finding the joining group, union) depend only on the query size.
+
+5An imprecise trimming, which retains more JQ answers than it should, would also
+work for our quantile algorithm.
+
+6This weight is not the same as the weight assigned by the ranking function, thus we
+simply call it multiplicity.
+
+6
+
+Efficient Computation of Quantiles over Joins
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Figure 2: Message passing for computing pivots on the ex-
+ample JQ and database of Figure 1 under SUM with weights
+equal to attribute values.
+
+4.2 Correctness
+First, we show that pivot returns a valid query answer. The concern
+is that a variable 𝑥 may be assigned to different values in the pivots
+that are unioned from different branches of the tree. As we show
+next, this cannot happen because of the join tree properties.
+
+Lemma 4.4. Let 𝑉 be a join-tree node and 𝑅𝑉 the corresponding
+relation. For all 𝑡 ∈ 𝑅𝑉 , the variable assignment pivot(𝑡) computed
+by pivot is a partial query answer for the subtree rooted at 𝑉 .
+
+Next, we show how the accuracy of the pivot is affected by
+
+repeated weighted median and union operations.
+
+Lemma 4.5. Given 𝑟 disjoint sets 𝑍1, . . . , 𝑍𝑟 equipped with
+then
+2 -pivot
+
+a total order ⪯ and corresponding 𝑐-pivots 𝑝1, . . . , 𝑝𝑟 ,
+wmed({𝑝1, . . . , 𝑝𝑟 }, 𝛽) with 𝛽 (𝑝𝑖 ) = |𝑍𝑖 |, for all 𝑖 ∈ [𝑟 ] is a 𝑐
+for 𝑍1 ∪ · · · ∪ 𝑍𝑟 .
+
+Lemma 4.6. Assume a join-tree node 𝑉 , its corresponding relation
+𝑅𝑉 , its children 𝑉1, . . . , 𝑉𝑟 , a subset-monotone ranking function, and
+𝑐-pivots 𝑝𝑖, 𝑖 ∈ 𝑟 for the partial answers which are rooted at 𝑉𝑖 and
+restricted to those that agree with 𝑡. Then, 𝑡 ∪𝑝1 ∪ . . . ∪𝑝𝑟 is a 𝑐𝑟 -pivot
+for the partial answers rooted at 𝑡.
+
+With the three above lemmas, we can complete the proof of
+
+Lemma 4.1 by induction on the join tree.
+
+5 EXACT TRIMMINGS
+We now look into trimmings for different types of inequality predi-
+cates that arise in the partitioning step of our quantile algorithm
+(i.e., the trim subroutine). Our construction essentially removes
+these predicates from the query, while ensuring that the modified
+query can only produce answers that satisfy them.
+
+5.1 MIN/MAX
+When the ranking function is MIN or MAX, then we need to trim
+predicates of the type min{𝑈𝑤 } < 𝜆, 𝜆 ∈ R.
+
+Example 5.1. Suppose the ranking function is MAX, the weighted
+variables are 𝑈𝑤 = {𝑥1, 𝑥2, 𝑥3}, attribute weights are equal to
+database values, and our pivot has weight 10. To create the ap-
+propriate partitions, we trim predicates max{𝑥1, 𝑥2, 𝑥3} < 10 and
+max{𝑥1, 𝑥2, 𝑥3} > 10. Enforcing max{𝑥1, 𝑥2, 𝑥3} < 10 is straight-
+forward by removing from the database all tuples with values
+greater than or equal to 10 for either of the three variables. For
+
+Figure 3: Trimming max{𝑥1, 𝑥2, 𝑥3} > 10 by expressing it as
+three disjoint partitions of the space of 𝑥1, 𝑥2, 𝑥3 combina-
+tions, each one described by unary predicates (e.g., 𝑥1 > 10).
+
+max{𝑥1, 𝑥2, 𝑥3} > 10, there are three ways to satisfy the predicate:
+(1) 𝑥1 > 10, (2) 𝑥1 ≤ 10 ∧𝑥2 > 10, or (3) 𝑥1 ≤ 10 ∧𝑥2 ≤ 10 ∧𝑥3 > 10.
+These three cases are disjoint and cover all possibilities. For each
+case, we create a fresh copy of the database and then enforce the
+predicates in linear time by filtering the tuples. Our JQ over one
+of these three databases produces a partition of the answers that
+satisfy the original inequality. To return a single database and JQ,
+we union the corresponding relations and distinguish between the
+three partitions by appending a partition identifier to every relation.
+
+Generalizing our example in a straightforward way, we show
+
+that trimmings of such inequalities exist for all acyclic JQs.
+
+Lemma 5.2. Given an acyclic JQ 𝑄, variables 𝑈𝑤 ⊆ var(𝑄),
+weight functions 𝑤𝑥 : dom → R for 𝑥 ∈ 𝑈𝑤, and 𝜆 ∈ R, a trimming of
+min𝑥 ∈𝑈𝑤 𝑤𝑥 (𝑥) < 𝜆, min𝑥 ∈𝑈𝑤 𝑤𝑥 (𝑥) > 𝜆, max𝑥 ∈𝑈𝑤 𝑤𝑥 (𝑥) < 𝜆,
+or max𝑥 ∈𝑈𝑤 𝑤𝑥 (𝑥) > 𝜆 takes time O (𝑛) and returns an acyclic JQ.
+Combining Lemma 5.2 together with Lemma 4.1 and Lemma 3.3
+
+gives us the following result:
+
+Theorem 5.3. Given an acyclic JQ over a database 𝐷 of size 𝑛,
+MIN or MAX ranking function, and 𝜙 ∈ [0, 1], the %JQ can be
+answered in time O (𝑛 log 𝑛).
+
+5.2 LEX
+For lexicographic orders, we provided [7] an O (𝑛) selection al-
+gorithm that can also be used for %JQs. Our divide-and-conquer
+approach can recover this result up to a logarithmic factor, i.e., our
+%JQ algorithm runs in time O (𝑛 log 𝑛). To achieve that, we trim
+lexicographic inequalities, similarly to the case of MIN and MAX.
+
+Lemma 5.4. Given an acyclic JQ 𝑄, variables 𝑈𝑤 = {𝑥1, . . . , 𝑥𝑟 } ⊆
+: dom → R for 𝑥 ∈ 𝑈𝑤, and
+𝑥1 (𝑥1), . . . , 𝑤 ′
+𝑥𝑟 (𝑥𝑟 )) <LEX 𝜆 or
+𝑥𝑟 (𝑥𝑟 )) >LEX 𝜆 takes time O (𝑛) and returns an
+
+var(𝑄), weight functions 𝑤 ′
+𝑥
+𝜆 ∈ R𝑟 , a trimming of (𝑤 ′
+(𝑤 ′
+acyclic JQ.
+
+𝑥1 (𝑥1), . . . , 𝑤 ′
+
+5.3 Partial SUM
+We now consider the case of SUM. While we previously gave a
+dichotomy [7] for all self-join-free JQs, this result is limited to
+full SUM. We now provide a more fine-grained dichotomy where
+certain variables may not participate in the ranking. For example,
+the 3-path JQ 𝑅1 (𝑥1, 𝑥2), 𝑅2 (𝑥2, 𝑥3), 𝑅3 (𝑥3, 𝑥4) would be classified
+as intractable by the prior dichotomy, yet with weighted variables
+𝑈𝑤 = {𝑥1, 𝑥2, 𝑥3}, we show that it is in fact tractable.
+
+The positive side of our dichotomy requires a trimming of addi-
+tive inequalities. We rely on a known algorithm that can be applied
+whenever the SUM variables appear in adjacent join-tree nodes.
+
+7
+
+1,11,31,41,51,61,7𝑅(𝑥1,𝑥2)𝑆(𝑥1,𝑥3)𝑇(𝑥2,𝑥4)[1][1][1][2][1]x1:1x3:3[9]x1:1x3:4x1:1x3:5x2:1x4:6x5:8x2:1x4:7x5:9x1:1x3:4x2:1x4:6x5:8x1:1x2:1x3:4x4:6x5:8max(𝑥1,𝑥2,𝑥3)>10𝑥1𝑥2𝑥3≤10>10𝑥1𝑥2𝑥3𝑥1𝑥2𝑥3Partition 1Partition 2Partition 3PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld, & Mirek Riedewald
+
+Lemma 5.5 ([22]). Given a set of variables 𝑈𝑤, let Q be the class of
+acyclic JQs 𝑄 for which there exists a join tree where 𝑈𝑤 ⊆ var(𝑄)
+belong to adjacent join-tree nodes. Then, for all 𝑄 ∈ Q, weight
+functions 𝑤𝑥 : dom → R for 𝑥 ∈ 𝑈𝑤, and 𝜆 ∈ R, a trimming of
+(cid:205)𝑥 ∈𝑈𝑤
+𝑤𝑥 (𝑥) > 𝜆 takes time O (𝑛 log 𝑛) and
+returns a JQ 𝑄 ′ ∈ Q.
+
+𝑤𝑥 (𝑥) < 𝜆 or (cid:205)𝑥 ∈𝑈𝑤
+
+We are now in a position to state our dichotomy:
+
+Theorem 5.6. Let 𝑄 be a self-join-free JQ, H (𝑄) its hypergraph,
+
+and 𝑈𝑤 ⊆ var(𝑄) the variables of a SUM ranking function.
+
+• If H (𝑄) is acyclic, any set of independent variables of 𝑈𝑤
+is of size at most 2, and any chordless path between two 𝑈𝑤
+variables is of length at most 3, then %JQ can be answered in
+O (𝑛 log2 𝑛).
+
+• Otherwise, %JQ cannot be answered in O (𝑛 polylog 𝑛), assum-
+
+ing 3sum and Hyperclique.
+
+We note that the positive side also applies to JQs with self-joins.
+
+6 APPROXIMATE TRIMMING FOR SUM
+We now move on to devise an 𝜖-lossy trimming for additive in-
+equalities in order to get a deterministic approximation for SUM
+and JQs beyond those covered by Theorem 5.6.
+
+Lemma 6.1. Given an acyclic JQ 𝑄, variables 𝑈𝑤 ⊆ var(𝑄),
+weight functions 𝑤𝑥 : dom → R for 𝑥 ∈ 𝑈𝑤, 𝜆 ∈ R, and 𝜖 ∈ (0, 1), an
+𝜖-lossy trimming of (cid:205)𝑥 ∈𝑈𝑤
+𝑤𝑥 (𝑥) > 𝜆 takes
+time O ( 1
+
+𝑤𝑥 (𝑥) < 𝜆 or (cid:205)𝑥 ∈𝑈𝑤
+𝜖 ) and returns an acyclic JQ.
+
+𝜖 2 𝑛 log2 𝑛 log 𝑛
+
+This, together with Lemmas 3.6 and 4.1 gives us the following:
+
+Theorem 6.2. Given an acyclic JQ 𝑄 over a database 𝐷 of size 𝑛,
+SUM ranking function, 𝜙 ∈ [0, 1], and 𝜖 ∈ (0, 1), the 𝜖-approximate
+%JQ can be answered in time O ( 1
+
+𝜖 2 𝑛 log5 𝑛 log 𝑛
+𝜖 ).
+
+To achieve the trimming, we adapt an algorithm of Abo-Khamis
+et al. [2], which we refer to as ApxCnt. It computes an approximate
+count (or more generally, a semiring aggregate) over the answers to
+acyclic JQs with additive inequalities. In contrast, we need not only
+the count of answers, but an efficient relational representation of
+them as JQ answers over a new database. We only discuss the case
+of less-than (<), since the case of greater-than (>) is symmetric.
+The detailed pseudocode is given in Appendix E.
+
+Message passing. ApxCnt uses message passing (see Sec-
+tion 2.4). We first describe the exact, but costly, version of the
+algorithm. The message sent by a tuple is a multiset containing the
+(partial) sums of partial query answers in its subtree. Messages are
+aggregated as follows: (1) The ⊕ operator that combines multisets
+within a join group is multiset union (⊎). (2) The ⊗ operator that
+combines multisets from different children is pairwise summation
+(applied as a binary operator). The messages emitted by the root-
+node tuples contain all query-answer sums, which can be leveraged
+to count the number of answers that satisfy the inequality.
+
+Sketching. Sending all possible sums up the join tree is in-
+tractable since, in the worst case, their number is equal to the
+number of JQ answers. For this reason, ApxCnt applies sketching
+to compress the messages. The basic idea is to replace different
+elements in a multiset with the same element; the efficiency gain
+is due to the fact that an element 𝑠 that appears 𝑟 times can be
+
+8
+
+Figure 4: Example of how we use the message passing frame-
+work [2] to create a relational representation of the query
+answers that satisfy an inequality 𝑥 + 𝑦 + 𝑧 < 𝜆.
+
+represented as 𝑠 × 𝑟 . In more detail, the multiset elements are split
+into buckets, and subsequently, each element within a bucket is
+replaced by the maximum element of the bucket. A sketched multi-
+set 𝐿 is denoted by S𝜖 (𝐿), where 𝜖 is a parameter that determines
+the number of buckets. Let ↓𝜆(𝐿) be the number of elements of 𝐿
+that are less than 𝜆 ∈ R. By choosing buckets appropriately, we can
+guarantee that ↓𝜆(S𝜖 (𝐿)) is close to ↓𝜆(𝐿) for all possible 𝜆.
+
+Lemma 6.3 (𝜖-Sketch [2]). For a multiset 𝐿 ∈ NR and 𝜖 ∈ (0, 1),
+we can construct a sketch S𝜖 (𝐿) with O (log1+𝜖 |𝐿|) distinct elements
+such that for all 𝜆 ∈ R, we have (1 − 𝜖) ↓𝜆(𝐿) ≤↓𝜆(S𝜖 (𝐿)) ≤↓𝜆(𝐿).
+
+ApxCnt sketches all messages and bounds the error incurred by
+
+the two message-passing operations (⊕, ⊗).
+
+Relational representation. Our goal is to construct a relational
+representation of the JQ answers which satisfy the inequality that
+we want to trim. The key idea is to embed the sums contained in the
+messages of ApxCnt into the database relations so that each tuple
+stores a unique sum and all answers in its subtree approximately
+have that sum. The reasoning behind this is that we can then remove
+from the database the root tuples whose associated sum does not
+satisfy the inequality. However, in ApxCnt a message is a multiset
+of sums, and hence the main technical challenge we address below
+is how to achieve a unique sum per tuple (and its subtree).
+
+Separating sums. Let 𝜎 (𝑡 ′) be the message sent by a tuple 𝑡 ′ in
+a child relation 𝑆. Then, according to ApxCnt, a tuple 𝑡 in the parent
+relation 𝑅 receives a message 𝜎 (𝑏) = S𝜖 ′ (⊎𝑡 ′ ∈𝑏𝜎 (𝑡 ′)) for some 𝜖′
+and join group 𝑏. We separate the sums in this multiset by creating
+a number of copies of 𝑡, equal to the number of distinct sums in
+𝜎 (𝑏). Each 𝑡-copy is associated with a unique bucket 𝑒, described
+by a sum value 𝑒𝑠 and a multiplicity 𝑒𝑚. To avoid duplicating query
+answers, we restrict each 𝑡-copy to join only with the source tuples
+of its associated bucket 𝑒, i.e., the child tuples 𝑡 ′ ∈ 𝑆 whose messages
+were assigned to bucket 𝑒 during sketching.
+
+Example 6.4. Figure 4 illustrates how we embed messages into
+the database relations for a leaf relation 𝑆 and a parent relation 𝑅
+with no other children, and assuming weights equal to attribute
+values. The messages from 𝑆 (𝑥, 𝑦) to 𝑅(𝑦, 𝑧) are the sums 𝑥 + 𝑦
+(because 𝑦-weights are assigned to 𝑆). After sketching their union
+using two buckets, sums 4 and 5 are both mapped to 5; we keep
+track of this with a multiplicity counter (shown as ×2), reflecting
+the number of answers in the subtree. Upon reaching relation 𝑅,
+the weight of the 𝑅-tuple (which is the 𝑧-value) is added to all sums.
+For our relational representation, we duplicate the 𝑅-tuple and
+
+2,13,14,11,6Sketch{3×1}𝑅(𝑦,𝒛)𝑆(𝒙,𝒚){9×1, 11×2}2,1,3×13,1,5×24,1,5×21,6,3×1𝑅′(𝑦,𝑧,𝑣𝑅𝑆)𝑆′(𝑥,𝑦,𝑣𝑅𝑆)1,6,5×2Message PassingRelational Representationx+y+zx+y{9×1}{11×2}{3×1}{4×1}{5×1}{5×2}Efficient Computation of Quantiles over Joins
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+associate each copy with a unique sum. A copy corresponds to a
+bucket in the sketch, so we can trace its “source” 𝑆-tuples, i.e., those
+that belong to that bucket. Instead of joining with all 𝑆-tuples like
+before, a copy now only joins with the source 𝑆-tuples of the bucket
+via a new variable 𝑣𝑅𝑆 that stores the sum and the multiplicity.
+
+Adjusting the sketch buckets. An issue we run into with
+the approach above is that the sum sent by a single tuple may be
+assigned to more than one bucket during sketching. To see why this
+is problematic, consider a tuple 𝑡 ′ that sends 𝜎 (𝑡 ′) = 5 × 10. For
+simplicity, assume these are the only values to be sketched and that
+the two buckets contain 5 × 3 and 5 × 7. With these buckets, we will
+create two copies of a tuple 𝑡 in the parent and both will join with 𝑡 ′,
+because 𝑡 ′ is the source tuple for both buckets. By doing so, we have
+effectively doubled the number of (partial) query answers since
+there are now 10 answers in the subtree of each copy. To resolve this
+issue, we need to guarantee that all elements in 𝜎 (𝑡 ′) are assigned
+to the same bucket. We adjust the sketching S𝜖 (𝐿) of a multiset 𝐿
+as follows. The 𝑟 buckets are determined by an increasing sequence
+of 𝑟 + 1 indexes on an array that contains 𝐿 sorted. The first index is
+0 and the last index is equal to |𝐿| − 1 (where |𝐿| takes into account
+the multiplicities). Consider three consecutive indexes 𝑖, 𝑗, 𝑘 which
+define two consecutive buckets where the values at the borders
+are the same, i.e., 𝐿[ 𝑗 − 1] = 𝐿[ 𝑗]. Let 𝑗 ′ and 𝑗 ′′ be the smallest
+and largest indexes that contain 𝐿[ 𝑗] in the buckets 𝑖 − 𝑗 and 𝑗 − 𝑘,
+respectively. We replace the indexes 𝑖, 𝑗, 𝑘 with 𝑖, 𝑗 ′, 𝑗 ′′ + 1, 𝑘 (and
+if 2 consecutive indexes are the same, then we remove that bucket).
+As a result, all values 𝐿[ 𝑗] from these two buckets now fall into
+the same bucket. We repeat this process for every two consecutive
+buckets. This can at most double the number of buckets, which, as
+we show, does not affect the guarantee of Lemma 6.3.
+
+Binary join tree. The running time of our algorithm (in par-
+ticular the logarithmic-factor exponent) depends on the maximum
+number of children of a join-tree node. This is because we handle
+each parent-child node pair separately, and each child results in
+the parent relation growing by the size of the messages, which is
+logarithmic. To achieve the time bound stated in Lemma 6.1, we
+impose a binary join tree, i.e., every node has at most two children.
+Such a join tree can be constructed by creating copies of a node
+that has multiple children, connecting these copies in a chain, and
+distributing the original children among them. In the worst case,
+this doubles the number of nodes in the join tree (hence the num-
+ber of relations that we materialize), but it does not affect the data
+complexity.
+
+7 CONCLUSIONS
+We can often answer quantile queries over joins of multiple relations
+much more efficiently than it takes to materialize the result of
+the join. Here, we adopted quasilinear time as our yardstick of
+efficiency. With our divide-and-conquer technique, we recovered
+known results (for lexicographic orders) and established new ones
+(for partial sums, minimum, and maximum). We also showed how
+the approach can be adapted for deterministic approximations.
+
+We restricted the discussion to JQs, that is, full Conjunctive
+Queries (CQs), and left open the treatment of non-full CQs (i.e.,
+joins with projection). Most of our algorithms apply to CQs that
+are acyclic and free-connex, but it is not yet clear to us whether our
+
+9
+
+results cover all tractable cases (under complexity assumptions).
+More general open directions are the generalization of the challenge
+to unions of CQs, and the establishment of nontrivial algorithms
+for general CQs beyond the acyclic ones.
+
+ACKNOWLEDGMENTS
+This work was supported in part by NSF under award numbers
+IIS-1762268 and IIS-1956096. Benny Kimelfeld was supported by the
+German Research Foundation (DFG) Project 412400621. Nikolaos
+Tziavelis was supported by a Google PhD fellowship.
+
+REFERENCES
+[1] Amir Abboud and Virginia Vassilevska Williams. 2014. Popular Conjectures
+Imply Strong Lower Bounds for Dynamic Problems. In FOCS. 434–443. https:
+//doi.org/10.1109/FOCS.2014.53
+
+[2] Mahmoud Abo-Khamis, Sungjin Im, Benjamin Moseley, Kirk Pruhs, and Alireza
+Samadian. 2021. Approximate Aggregate Queries Under Additive Inequalities. In
+APOCS. SIAM, 85–99. https://doi.org/10.1137/1.9781611976489.7
+
+[3] Mahmoud Abo Khamis, Hung Q. Ngo, and Atri Rudra. 2016. FAQ: Questions
+Asked Frequently. In PODS. 13–28. https://doi.org/10.1145/2902251.2902280
+[4] Ilya Baran, Erik D. Demaine, and Mihai Pˇatraşcu. 2005. Subquadratic Algorithms
+for 3SUM. In Algorithms and Data Structures. 409–421. https://doi.org/10.1007/
+11534273_36
+
+[5] Manuel Blum, Robert W. Floyd, Vaughan Pratt, Ronald L. Rivest, and Robert E.
+Tarjan. 1973. Time bounds for selection. JCSS 7, 4 (1973), 448 – 461. https:
+//doi.org/10.1016/S0022-0000(73)80033-9
+
+[6] Johann Brault-Baron. 2013. De la pertinence de l’énumération: complexité en
+logiques propositionnelle et du premier ordre. Ph. D. Dissertation. U. de Caen.
+https://hal.archives-ouvertes.fr/tel-01081392
+
+[7] Nofar Carmeli, Nikolaos Tziavelis, Wolfgang Gatterbauer, Benny Kimelfeld, and
+Mirek Riedewald. 2023. Tractable Orders for Direct Access to Ranked Answers
+of Conjunctive Queries. TODS 48, 1, Article 1 (2023), 45 pages. https://doi.org/
+10.1145/3578517
+
+[8] Nofar Carmeli, Shai Zeevi, Christoph Berkholz, Alessio Conte, Benny Kimelfeld,
+and Nicole Schweikardt. 2022. Answering (Unions of) Conjunctive Queries Using
+Random Access and Random-Order Enumeration. TODS 47, 3, Article 9 (2022),
+49 pages. https://doi.org/10.1145/3531055
+
+[9] Johannes Doleschal, Noa Bratman, Benny Kimelfeld, and Wim Martens. 2021.
+The Complexity of Aggregates over Extractions by Regular Expressions. In ICDT,
+Vol. 186. 10:1–10:20. https://doi.org/10.4230/LIPIcs.ICDT.2021.10
+
+[10] Ronald Fagin, Amnon Lotem, and Moni Naor. 2003. Optimal aggregation algo-
+rithms for middleware. JCSS 66, 4 (2003), 614–656. https://doi.org/10.1016/S0022-
+0000(03)00026-6
+
+[11] Jim Gray, Surajit Chaudhuri, Adam Bosworth, Andrew Layman, Don Reichart,
+Murali Venkatrao, Frank Pellow, and Hamid Pirahesh. 1997. Data Cube: A Re-
+lational Aggregation Operator Generalizing Group-by, Cross-Tab, and Sub To-
+tals. Data Min. Knowl. Discov. 1, 1 (1997), 29–53. https://doi.org/10.1023/A:
+1009726021843
+
+[12] Paulo Jesus, Carlos Baquero, and Paulo Sergio Almeida. 2015. A Survey of
+IEEE Communications Surveys &
+
+Distributed Data Aggregation Algorithms.
+Tutorials 17, 1 (2015), 381–404. https://doi.org/10.1109/COMST.2014.2354398
+
+[13] Donald B Johnson and Tetsuo Mizoguchi. 1978. Selecting the Kth element in
+𝑋 + 𝑌 and 𝑋1 + 𝑋2 + · · · + 𝑋𝑚 . SIAM J. Comput. 7, 2 (1978), 147–153. https:
+//doi.org/10.1137/0207013
+
+[14] Mahmoud Abo Khamis, Hung Q. Ngo, Dan Olteanu, and Dan Suciu. 2019. Boolean
+Tensor Decomposition for Conjunctive Queries with Negation. In ICDT, Vol. 127.
+21:1–21:19. https://doi.org/10.4230/LIPIcs.ICDT.2019.21
+
+[15] Benny Kimelfeld and Yehoshua Sagiv. 2006. Incrementally Computing Ordered
+Answers of Acyclic Conjunctive Queries. In International Workshop on Next
+Generation Information Technologies and Systems (NGITS). 141–152. https://doi.
+org/10.1007/11780991_13
+
+[16] Andrea Lincoln, Virginia Vassilevska Williams, and R. Ryan Williams. 2018. Tight
+Hardness for Shortest Cycles and Paths in Sparse Graphs. In SODA. 1236–1252.
+https://doi.org/10.1137/1.9781611975031.80
+
+[17] Gurmeet Singh Manku, Sridhar Rajagopalan, and Bruce G. Lindsay. 1998. Ap-
+proximate Medians and other Quantiles in One Pass and with Limited Memory.
+In SIGMOD. 426–435. https://doi.org/10.1145/276305.276342
+
+[18] Wendy J. Myrvold and Frank Ruskey. 2001. Ranking and unranking permutations
+in linear time. Inf. Process. Lett. 79, 6 (2001), 281–284. https://doi.org/10.1016/
+S0020-0190(01)00141-7
+
+[19] Mihai Patrascu. 2010. Towards polynomial lower bounds for dynamic problems.
+
+In STOC. 603–610. https://doi.org/10.1145/1806689.1806772
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld, & Mirek Riedewald
+
+[20] Reinhard Pichler and Sebastian Skritek. 2013. Tractable counting of the answers
+to conjunctive queries. JCSS 79, 6 (2013), 984–1001. https://doi.org/10.1016/j.
+jcss.2013.01.012
+
+[21] John A. Rice. 2007. Mathematical Statistics and Data Analysis (3rd ed.). Duxbury
+
+Press, Belmont, CA.
+
+[22] Nikolaos Tziavelis, Wolfgang Gatterbauer, and Mirek Riedewald. 2021. Beyond
+Equi-joins: Ranking, Enumeration and Factorization. PVLDB 14, 11 (2021), 2599–
+2612. https://doi.org/10.14778/3476249.3476306
+
+[23] Nikolaos Tziavelis, Wolfgang Gatterbauer, and Mirek Riedewald. 2022. Any-k
+Algorithms for Enumerating Ranked Answers to Conjunctive Queries. CoRR
+abs/2205.05649 (2022). https://doi.org/10.48550/arXiv.2205.05649
+
+[24] Mihalis Yannakakis. 1981. Algorithms for Acyclic Database Schemes. In VLDB.
+
+82–94. https://dl.acm.org/doi/10.5555/1286831.1286840
+
+A NOMENCLATURE
+
+Definition
+generic set
+generic multiset
+relation
+atom/hyperedge/node of join tree
+schema
+database (instance)
+size of 𝐷 (number of tuples)
+database domain
+tuple
+variable
+Join Query (JQ)
+number of atoms in a JQ
+variables contained in 𝑄
+set of answers of 𝑄 over 𝐷
+subset of 𝑄 (𝐷 ) answers that satisfy a predicate 𝑃
+query answer
+
+Symbol
+𝑍
+𝐿
+𝑅, 𝑆,𝑇 , 𝑅1, 𝑅2
+𝑉 , 𝑉1, 𝑉2
+S
+𝐷
+𝑛
+dom
+𝑡
+𝑥, 𝑦, 𝑧, 𝑢, 𝑣
+𝑄
+ℓ
+var(𝑄 )
+𝑄 (𝐷 )
+(𝑄 ∧ 𝑃 ) (𝐷 )
+𝑞 ∈ 𝑄 (𝐷 )
+H (𝑄 ) = (𝑉 , 𝐸 ) hypergraph associated with query 𝑄
+𝑇
+𝜙
+𝑤
+dom𝑤
+𝑈𝑤
+𝑤𝑥
+𝑤𝑅
+
+join tree
+fraction in [0, 1] used to ask for a quantile
+weight function for query answers
+domain of weights
+subset of variables that participate in the ranking
+input weight function for variable 𝑥: dom → dom𝑤
+input weight function for tuples of relation 𝑅: domar(𝑅) →
+dom𝑤 where ar(𝑅) is the arity of 𝑅
+aggregate function that combines input weights to derive
+weights for query answers
+aggregate function applied on the weighted variables, i.e.,
+agg𝑤 ( {𝑤𝑥 (𝑥 ) |𝑥 ∈ 𝑈𝑤 } )
+a weight from dom𝑤
+
+agg𝑤
+
+𝑤 (𝑈𝑤 )
+
+𝜆
+
+B DETAILS OF DIVIDE-AND-CONQUER
+
+FRAMEWORK
+
+Algorithm 1 returns the desired (approximate) quantile for a given
+JQ, database, and ranking function, as presented in Section 3. The
+exact version is obtained by simply setting 𝜖 = 0.
+
+B.1 Proof of Lemma 3.6
+Let 𝑄𝑖 and 𝐷𝑖 be the JQ and database at the start of iteration 𝑖,
+with 𝑖 ≥ 0 (these are the variables 𝑄 ′ and 𝐷′ in Algorithm 1). Even
+though trimmings may increase the size of our queries by a constant
+factor (by the definition of trimming), all queries 𝑄𝑖 have constant
+size. This is because we start every iteration with the original query
+
+𝑄 and every other query we construct is the result of applying at
+most two consecutive trimmings.
+
+First, we bound the number of iterations. Iteration 𝑖 is guaranteed
+to eliminate at least 𝑐 |𝑄𝑖 (𝐷𝑖 )| query answers because (i) we select
+a 𝑐-pivot to partition and (ii) the lossy trimmings may result in
+more query answers being eliminated than they should, but never
+less. Consequently, at the beginning of iteration 𝑖, we have at most
+(1 − 𝑐)𝑖 |𝑄 (𝐷)| query answers remaining. The number of query
+answers is bounded by 𝑛ℓ where ℓ is the number of atoms in 𝑄. If
+𝐼 is the total number of iterations, then 𝐼 ≤ ⌈log1/(1−𝑐 ) |𝑄 (𝐷)|⌉ ≤
+⌈ℓ log1/(1−𝑐 ) 𝑛⌉ = O (log 𝑛) since 𝑐 and ℓ are constants.
+
+Second, we show that the returned answer is an 𝜖-approximate
+quantile. The less-than partition 𝑄lt (𝐷lt) is constructed by trim-
+ming the inequalities 𝑤 (𝑈𝑤) ≺ 𝑤 (𝑝) and 𝑤 (𝑈𝑤) ≻ low with some
+error 𝜖′, where low lower-bounds the weights of the candidate
+query answers. Because these two trimmings are lossy, we “lose”
+a number of query answers which are at most 2𝜖′|𝑄 (𝐷)|. These
+are the answers that satisfy the inequalities, but do not appear in
+𝑄lt (𝐷lt). As Figure 5 illustrates, all answers not contained in the
+less-than or greater-than partition, including these lost query an-
+swers, are assumed to be contained in the equal-to partition which
+we do not explicitly count. We now bound the distance between the
+desired index and the index of the answer that our algorithm returns.
+Each iteration 𝑖 starts with an index 𝑘𝑖 and results in a new index
+𝑘′
+𝑖 , which the following iteration is asked to retrieve (or, in case this
+is the last iteration, the index that is returned). Note that in Algo-
+rithm 1 the variable 𝑘 indexes the subarray of query answers that
+are currently candidates; thus it is offset by the index of the answer
+with weight low. Here, the indexes 𝑘𝑖 and 𝑘′
+𝑖 refer to the original
+array that contains all the query answers. Suppose that 𝑘𝑖 falls into
+the less-than partition at the beginning of the iteration. Then, if 𝑘′
+𝑖
+is different than 𝑘𝑖 , it has to be a higher index because of lost query
+answers that precede it and which are moved to the middle equal-to
+partition (see Figure 5). Thus, |𝑘𝑖 − 𝑘′
+𝑖 | ≤ 2𝜖′|𝑄 (𝐷)|. If 𝑘𝑖 falls into
+the equal-to partition, then we still choose that partition and return
+the pivot because the size of the partition can only increase from the
+lossy trimmings. For the greater-than partition, the analysis is sym-
+metric to lower-than since the lossy trimmings of the latter do not
+affect the indexes of the former. To conclude, the accumulated ab-
+solute error is 𝐼 · 2𝜖′|𝑄 (𝐷)| ≤ 2⌈ℓ log1/(1−𝑐 ) 𝑛⌉𝜖′|𝑄 (𝐷)|. To obtain
+an 𝜖-approximate quantile of 𝑄 (𝐷), we set 𝜖′ =
+
+.
+
+𝜖
+2⌈ℓ log1/(1−𝑐 )
+
+𝑛⌉
+
+Finally, we prove the running time. Since our trimmings return
+acyclic JQs, the answers of all queries we construct can be counted
+in linear time. Thus, the running time per iteration is O (𝑔𝑝 (𝑛) +
+4𝑔𝑡 (𝑛, 𝜖′) + 𝑛) which is O (max{𝑔𝑝 (𝑛), 𝑔𝑡 (𝑛, 𝜖′)} since 𝑔𝑝 (𝑛) and
+𝑔𝑡 (𝑛, 𝜖′) are necessarily Ω(𝑛).
+
+We note that this proof also covers Lemma 3.3 since Lemma 3.6
+
+is a stronger version of it.
+
+C DETAILS OF CHOOSING A PIVOT
+Algorithm 2 shows the algorithm that returns a 𝑐-pivot for a given
+JQ, database, and ranking function, as presented in Section 4.
+
+C.1 Proof of Lemma 4.4
+Let 𝑏1, . . . , 𝑏𝑟 be the joining groups from the children 𝑉1, . . . , 𝑉𝑟 of 𝑉 ,
+We show by induction on the join tree that pivot(𝑏1), . . . , pivot(𝑏𝑟 ),
+
+10
+
+Efficient Computation of Quantiles over Joins
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Algorithm 1: Pivoting Algorithm
+
+1 Input: acyclic JQ 𝑄, database 𝐷, ranking function (𝑤, ⪯ ), quantile 𝜙,
+
+approximation bound 𝜖
+
+2 Output: the 𝜙-th quantile of 𝑄 (𝐷 )
+3 //Calculate desired index
+4 Determine |𝑄 (𝐷 ) | and set 𝑘 = ⌊𝜙 · |𝑄 (𝐷 ) | ⌋ (with zero-indexing)
+5 //Calculate parameter for trimming (𝜖 = 𝜖 ′ = 0 for exact)
+6 𝜖 ′ =
+7 //Each iteration modifies 𝑄 ′ (𝐷 ′ ) by bringing low and high closer
+8
+9 while |𝑄 ′ (𝐷 ′ ) | > |𝐷 | do
+10
+
+(𝑄 ′, 𝐷 ′, low, high) = (𝑄, 𝐷, ⊥, ⊤)
+
+𝜖
+2⌈ℓ log1/(1−𝑐 ) 𝑛⌉
+
+//Select a 𝑐-pivot 𝑝
+(𝑝, 𝑐 ) = pivot(𝑄 ′, 𝐷 ′, (𝑤, ⪯ ) )
+//Partition
+(𝑄lt, 𝐷lt ) = trim(𝑄, 𝐷, 𝑤 (𝑈𝑤 ) ≺ 𝑤 (𝑝 ), 𝜖 ′ )
+(𝑄lt, 𝐷lt ) = trim(𝑄lt, 𝐷lt, 𝑤 (𝑈𝑤 ) ≻ low, 𝜖 ′ )
+(𝑄gt, 𝐷gt ) = trim(𝑄, 𝐷, 𝑤 (𝑈𝑤 ) ≻ 𝑤 (𝑝 ), 𝜖 ′ )
+(𝑄gt, 𝐷gt ) = trim(𝑄gt, 𝐷gt, 𝑤 (𝑈𝑤 ) ≺ high, 𝜖 ′ )
+//Choose partition
+Set |𝑄eq (𝐷eq ) | to |𝑄 ′ (𝐷 ′ ) | − |𝑄lt (𝐷lt ) | − |𝑄gt (𝐷gt ) |
+if 𝑘 < |𝑄lt (𝐷lt ) | then
+
+(𝑄 ′, 𝐷 ′, high) = (𝑄lt, 𝐷lt, 𝑤 (𝑝 ) )
+else if 𝑘 < |𝑄lt (𝐷lt ) | + |𝑄eq (𝐷eq ) | then
+
+return 𝑝
+
+else
+
+(𝑄 ′, 𝐷 ′, lt) = (𝑄gt, 𝐷gt, 𝑤 (𝑝 ) )
+𝑘 = 𝑘 − |𝑄lt (𝐷lt ) | − |𝑄eq (𝐷eq ) |
+
+25
+26 Materialize and sort 𝑄 ′ (𝐷 ′ )
+27 return answer at index 𝑘 in 𝑄 ′ (𝐷 ′ )
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+24
+
+Figure 5: Proof of Lemma 3.6: Query answers that are “lost”
+due to lossy trimmings are implicitly moved to the equal-to
+partition (middle). Consequently, index 𝑘𝑖 in the less-than
+partition contains an element that was previously at a higher
+index 𝑘′
+𝑖 −𝑘𝑖 is bounded by the number of lost answers.
+
+𝑖 , but 𝑘′
+
+and 𝑡 all agree on their common variables. For the leaf relations, we
+have no children and pivot(𝑡) is initialized to 𝑡. For the inductive
+step, let 𝑥 be a common variable between two children 𝑉𝑖 and 𝑉𝑗 of
+𝑉 , 𝑖, 𝑗 ∈ [𝑟 ]. Because of the running intersection property of the join
+tree, 𝑥 also needs to appear in the parent 𝑉 . Since the groups 𝑏𝑖, 𝑏 𝑗
+join with 𝑡, all their tuples necessarily assign value 𝑡 [𝑥] to variable
+𝑥. We show that pivot(𝑏𝑖 ) also assigns 𝑡 [𝑥] to 𝑥 and the case of
+pivot(𝑏 𝑗 ) is similar. We have that pivot(𝑏𝑖 ) = pivot(𝑡𝑖 ) for some
+tuple 𝑡𝑖 ∈ 𝑏𝑖 where pivot(𝑡𝑖 ) is picked as the weighted median of
+the group. From the inductive hypothesis, pivot(𝑡𝑖 ) needs to agree
+with 𝑡𝑖 on the value of 𝑥 which we argued is equal to 𝑡 [𝑥].
+
+C.2 Proof of Lemma 4.5
+Without loss of generality, let the indexing of the 𝑟 sets be consistent
+with the ordering of their 𝑐-pivots, i.e., 𝑝𝑖 ⪯ 𝑝 𝑗 for 𝑍𝑖, 𝑍 𝑗 , 1 ≤
+𝑖 ≤ 𝑗 ≤ 𝑟 . Let 𝑝𝑚 be the weighted median, selected from set 𝑍𝑚
+
+11
+
+for some 𝑚 ∈ [𝑟 ]. We prove that 𝑝𝑚 is greater than or equal to
+(according to ⪯) at least 𝑐
+2 |𝑍1 ∪ 𝑍2 ∪ . . . ∪ 𝑍𝑟 | elements, and the
+case of less than or equal to is symmetric. Because of the indexing
+we enforced, we know that 𝑝𝑖 ⪯ 𝑝𝑚 for all 𝑖 ∈ [𝑚]. Combining that
+with the definition of a 𝑐-pivot (for 𝑝𝑖 ), we obtain that 𝑝𝑚 is greater
+than or equal to at least 𝑐 |𝑍𝑖 | elements of |𝑍𝑖 |, or 𝑐 (cid:205)𝑖 ∈ [1,𝑚] |𝑍𝑖 |
+in total. Now, because the median is weighted by the set sizes
+and there is no overlap between their elements, (cid:205)𝑖 ∈ [1,𝑚] |𝑍𝑖 | ≥
+|𝑍1 ∪ 𝑍2 ∪ . . . ∪ 𝑍𝑟 |/2. Thus, 𝑝𝑚 is greater than or equal to at least
+𝑐 |𝑍1 ∪ 𝑍2 ∪ . . . ∪ 𝑍𝑟 |/2 elements of 𝑍1 ∪ 𝑍2 ∪ . . . ∪ 𝑍𝑟 .
+
+C.3 Proof of Lemma 4.6
+Let 𝑀 be the partial answers rooted at 𝑡, and let 𝑀𝑖 be the partial
+answers rooted at 𝑉𝑖 and restricted to those that agree with 𝑡 for all
+𝑖 ∈ [𝑟 ]. We only show that 𝑡 ∪ 𝑝1 ∪ . . . ∪ 𝑝𝑟 is greater than or equal
+to at least 𝑐𝑟 |𝑀 | partial answers, since the case of less than or equal
+to is symmetric. For 𝑖 ∈ [𝑟 ], let 𝐿𝑖 be the subset of 𝑀𝑖 answers that
+are less than or equal to 𝑝𝑖 .
+
+We first show that 𝑤 (𝑡 ∪ 𝑞1 ∪ . . . ∪ 𝑞𝑟 ) ⪯ 𝑤 (𝑡 ∪ 𝑝1 ∪ . . . ∪ 𝑝𝑟 )
+whenever 𝑞𝑖 ∈ 𝐿𝑖, 𝑖 ∈ [𝑟 ]. We know that 𝑤 (𝑞𝑖 ) ⪯ 𝑤 (𝑝𝑖 ) for all
+𝑖 ∈ [𝑟 ]. We proceed inductively in 𝑖, showing that 𝑤 (𝑞1 ∪ . . . ∪𝑞𝑖 ) ⪯
+𝑤 (𝑝1∪. . .∪𝑝𝑖 ). The inductive hypothesis is that 𝑤 (𝑞1∪. . .∪𝑞𝑖 −1) ⪯
+𝑤 (𝑝1 ∪ . . . ∪ 𝑝𝑖 −1). Each of these two terms is an aggregate over
+the values of variables 𝑈1 ∪ . . . ∪ 𝑈𝑖 −1 mapped to their weights,
+where 𝑈𝑖 is the subset of weighted variables 𝑈𝑤 that appear in
+the subtree rooteed at node 𝑉𝑖 . For example, 𝑤 (𝑞1 ∪ . . . ∪ 𝑞𝑖 −1)
+is agg𝑤 ({𝑤𝑥 ((𝑞1 ∪ . . . ∪ 𝑞𝑖 −1) [𝑥]) | 𝑥 ∈ 𝑈1 ∪ . . . ∪ 𝑈𝑖 −1}). By
+subset-monotonicity, we can add to both aggregates the weighted
+values of 𝑝𝑖 without changing the inequality, i.e., we obtain 𝑤 (𝑞1 ∪
+. . . ∪ 𝑞𝑖 −1 ∪ 𝑝𝑖 ) ⪯ 𝑤 (𝑝1 ∪ . . . ∪ 𝑝𝑖 −1 ∪ 𝑝𝑖 ) (A). With a similar
+argument of subset-monotonicity, we start from 𝑤 (𝑞𝑖 ) ⪯ 𝑤 (𝑝𝑖 )
+and add to both sides the weighted values of 𝑞1 ∪ . . . ∪ 𝑞𝑖 −1 to
+obtain 𝑤 (𝑞1 ∪ . . . ∪ 𝑞𝑖 −1 ∪ 𝑞𝑖 ) ⪯ 𝑤 (𝑞1 ∪ . . . ∪ 𝑞𝑖 −1 ∪ 𝑝𝑖 ) (B). (A)
+and (B) together prove the inductive step. To complete the first part
+of the proof, we add to both aggregates the weighted values of 𝑡
+(that do not appear in any child) to obtain 𝑤 (𝑡 ∪ 𝑞1 ∪ . . . ∪ 𝑞𝑟 ) ⪯
+𝑤 (𝑡 ∪ 𝑝1 ∪ . . . ∪ 𝑝𝑟 ), again by subset-monotonicity.
+
+Next, notice that there are |𝐿1 × . . . × 𝐿𝑟 | partial answers of the
+form 𝑡 ∪ 𝑞1 ∪ . . . ∪ 𝑞𝑟 with 𝑞𝑖 ∈ 𝐿𝑖, 𝑖 ∈ [𝑟 ]. Since every 𝐿𝑖 comprises
+of elements that are less than or equal to a 𝑐-pivot, we have |𝐿𝑖 | ≥
+𝑐 |𝑀𝑖 |. Also notice that |𝑀 | = (cid:206)𝑖 ∈ [𝑟 ] |𝑀𝑖 |. Overall, we have that
+|𝐿1 × . . . × 𝐿𝑟 | ≥ (cid:206)𝑖 ∈ [𝑟 ] 𝑐 |𝑀𝑖 | = 𝑐𝑟 |𝑀 |, and so 𝑡 ∪ 𝑝1 ∪ . . . ∪ 𝑝𝑟 is
+greater than or equal to at least 𝑐𝑟 |𝑀 | partial answers.
+
+D DETAILS OF EXACT TRIMMINGS
+D.1 Proof of Lemma 5.2
+We always start by creating fresh copies of relations to eliminate self-
+joins from 𝑄. This ensures that every column in the database corre-
+sponds to a unique variable, avoiding situations like 𝑅(𝑥, 𝑦), 𝑅(𝑦, 𝑥).
+First, consider max𝑥 ∈𝑈𝑤 𝑤𝑥 (𝑥) < 𝜆. We scan the given database
+𝐷 once and if a tuple 𝑡 contains a value 𝑡 [𝑥] with 𝑤𝑥 (𝑡 [𝑥]) ≥ 𝜆
+for a variable 𝑥 ∈ 𝑈𝑤, then we remove 𝑡 from the database. This
+process removes precisely the answers 𝑞 ∈ 𝑄 (𝐷) that do not satisfy
+the predicate, since, for the maximum to be greater than or equal
+to 𝜆, at least one variable needs to map to such a weight. The JQ
+we return is 𝑄 itself. The case of min𝑥 ∈𝑈 𝑤𝑥 (𝑥) > 𝜆 is symmetric.
+
+𝑘𝑖𝑘𝑖′“Lost” query answersLess-thanEqual-toGreater-thanPODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld, & Mirek Riedewald
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+11
+
+12
+
+13
+
+Algorithm 2: pivot
+
+1 Input: acyclic JQ 𝑄, database 𝐷, ranking function (𝑤, ⪯ )
+2 Output: a 𝑐-pivot of 𝑄 (𝐷 ) ordered by ⪯, and the value of 𝑐
+3 Convert attribute weights to tuple weights
+4 Construct a join tree 𝑇 of 𝑄 with artificial root 𝑉0 = {𝑡0 }
+5 Materialize a relation for every 𝑇 -node and group it by the variables it has in
+
+common with its parent node
+
+6 Initialize pivot(𝑡 ) = 𝑡, cnt(𝑡 ) = 1 for all tuples 𝑡 of all relations
+7 Initialize 𝑐 (𝑅) = 1 for leaf relations 𝑅
+8 for relation 𝑅 in bottom-up order of 𝑇 do
+9
+
+if 𝑅 is not leaf then
+
+𝑆1, . . . , 𝑆𝑟 = children of 𝑅
+𝑐 (𝑅) =
+
+𝑐 (𝑆𝑟 )
+2
+for tuple 𝑡 ∈ 𝑅, child 𝑆 of 𝑅 do
+
+2 × . . . ×
+
+𝑐 (𝑆1 )
+
+𝑏 = join group of 𝑆 that agrees with the values of 𝑡
+//Compute the weighted median (and the count of subtree answers)
+
+the first time we visit this group
+
+if pivot(𝑏 ) not already computed then
+
+pivot(𝑏 ) = wmed⪯ ( {pivot(𝑡 ′ ) | 𝑡 ′ ∈ 𝑏 }, 𝛽 ) with
+𝛽 (pivot(𝑡 ′ ) ) = cnt(𝑡 ′ )
+cnt(𝑏 ) = (cid:205)𝑡 ′ ∈𝑏 cnt(𝑡 ′ )
+
+//Combine results from different branches of the join tree
+pivot(𝑡 ) = pivot(𝑡 ) ∪ pivot(𝑏 )
+cnt(𝑡 ) = cnt(𝑡 ) × cnt(𝑏 )
+
+20
+21 return pivot(𝑡0 ), 𝑐 (𝑉0 )
+
+Algorithm 3: trim for MAX
+
+1 Input: acyclic JQ 𝑄, database 𝐷, predicate max(𝑈𝑤 ) > 𝜆
+2 Output: acyclic JQ 𝑄 ′, database 𝐷 ′
+3 𝑥1, . . . , 𝑥𝑟 = 𝑈𝑤
+(𝑄 ′, 𝐷 ′ ) = (𝑄, ∅)
+4
+5 //Construct the new JQ
+6 Eliminate self-joins from 𝑄 ′ by materializing new relations in 𝐷
+7 Add the same variable 𝑥𝑝 to all the atoms and the head of 𝑄 ′
+8 //Create 𝑟 databases
+9 for 𝑖 from 1 to 𝑟 do
+10
+
+//Each 𝑃𝑖 is a conjuntion of unary predicates
+𝑃𝑖 = {𝑤𝑥1 (𝑥1 ) ≤ 𝜆, . . . , 𝑤𝑥𝑖 −1 (𝑥𝑖 −1 ) ≤ 𝜆, 𝑤𝑥𝑖 (𝑥𝑖 ) > 𝜆}
+𝐷𝑖 = copy of 𝐷 with conditions 𝑃𝑖 applied
+//An identifier separates the answers from different 𝐷𝑖 after the union
+Add the column 𝑥𝑝 with value 𝑖 to all relations of 𝐷𝑖
+
+14
+15 //Union the databases into one
+16 for relation 𝑅𝐷 in 𝐷 do
+
+Add to 𝐷 ′ relation 𝑅𝐷′
+
+17
+18 return (𝑄 ′, 𝐷 ′ )
+
+= (cid:208)𝑖 ∈ [𝑟 ] 𝑅𝐷𝑖 of database 𝐷𝑖
+
+Second, consider max𝑥 ∈𝑈𝑤 𝑤𝑥 (𝑥) > 𝜆. Algorithm 3 shows the
+pseudocode of trim for this case. If there are 𝑟 variables in 𝑈𝑤,
+then we create 𝑟 databases, each enforcing condition 𝑃𝑖 , which
+is a conjunction of unary predicates. The conditions 𝑃𝑖 partition
+the space of possible 𝑈𝑤 values that satisfy max𝑥 ∈𝑈𝑤 𝑤𝑥 (𝑥) > 𝜆.
+To return a single database 𝐷′, we union together the copies of
+each relation and separate the different databases with a partition
+identifier 𝑖 ∈ [𝑟 ]. This identifier is added as a variable 𝑥𝑝 to all
+atoms of the returned JQ 𝑄 ′. As a consequence, each query answer
+of the returned 𝑄 ′ can only draw values from database tuples that
+belong to the same partition. The bijection from 𝑄 ′ (𝐷′) to 𝑄 (𝐷)
+simply removes the variable 𝑥𝑝 . Since 𝑟 does not depend on 𝐷, the
+entire process can be done in linear time. Furthermore, 𝑄 ′ remains
+acyclic because every join tree of 𝑄 is also a join tree of 𝑄 ′ by adding
+𝑥𝑝 to all nodes. The case of min𝑥 ∈𝑈𝑤 𝑤𝑥 (𝑥) < 𝜆 is symmetric.
+
+12
+
+D.2 Proof of Lemma 5.4
+Let 𝜆 = (𝜆1, . . . , 𝜆𝑟 ). The proof is the same as in the case of
+MIN/MAX (Appendix D.1), except that the conditions we enforce
+in the 𝑖th of the 𝑟 copies of the database 𝐷 are 𝑃𝑖 = {𝑤 ′
+𝑥1 (𝑥1) =
+𝜆1, . . . , 𝑤 ′
+𝑥𝑖 (𝑥𝑖 ) < 𝜆𝑖 } for ≤LEX and 𝑃𝑖 =
+{𝑤 ′
+
+𝑥𝑖 −1 (𝑥𝑖 −1) = 𝜆𝑖 −1, 𝑤 ′
+
+𝑥𝑖 (𝑥𝑖 ) > 𝜆𝑖 } for ≥LEX.
+
+𝑥1 (𝑥1) = 𝜆1, . . . , 𝑤 ′
+
+𝑥𝑖 −1 (𝑥𝑖 −1) = 𝜆𝑖 −1, 𝑤 ′
+
+D.3 Proof of Theorem 5.6
+First, we prove that the condition in our dichotomy is equivalent to
+having the SUM variables on one or two adjacent join tree nodes.
+Lemma D.1. Consider the hypergraph H (𝑄) of a JQ 𝑄 and a set
+of variables 𝑈𝑤. If H (𝑄) is acyclic, any set of independent variables
+of 𝑈𝑤 is of size at most 2, and any chordless path between two 𝑈𝑤
+variables is of length at most 3, then there exists a join tree for 𝑄
+where 𝑈 appears on one or two adjacent nodes.
+
+Proof. If there is one query atom that contains all 𝑈𝑤 variables,
+then we are done. Otherwise, since any set of independent variables
+of 𝑈𝑤 is of size at most 2, then there are 2 atoms that together
+contain all 𝑈𝑤 variables. Indeed, consider any 3 atoms. If each
+of them has a 𝑈𝑤 variable that does not appear in the other two,
+then these three variables are an independent set of size 3, which
+contradicts our condition. Thus, 2 of these atoms contain all 𝑈𝑤
+variables that appear in the 3 atoms. By applying this repeatedly
+to the selected 2 atoms and an untreated atom until all atoms are
+treated, we get 2 atoms that contain all of 𝑈𝑤 variables.
+
+Since 𝑄 is acyclic, it has a join tree. Let 𝑅′ and 𝑆 ′ be two join-tree
+nodes that together contain all of 𝑈𝑤. Consider the path 𝑃 ′ from
+𝑅′ to 𝑆 ′ in the join tree. Let 𝑅 be the last node on 𝑃 ′ that contains
+all 𝑈𝑤 variables that are in 𝑅′, and let 𝑆 be the first node on 𝑃 ′ that
+contains all 𝑈𝑤 variables that are in 𝑆 ′. If 𝑅 and 𝑆 are neighbors,
+we are done. Otherwise, we show we can find an alternative join
+tree where they are neighbors. Consider the path 𝑃 from 𝑅 to 𝑆
+in the join tree. Let 𝑉 be all the variables that appear on the path
+between 𝑅 and 𝑆 (not including 𝑅 and 𝑆), such that each variable in
+𝑉 appears in either 𝑅 or 𝑆 (or both). We consider three cases. The
+first case is 𝑉 ⊆ 𝑅. We directly connect 𝑅 and 𝑆 and remove the
+edge connecting 𝑆 to the node preceding it on the path from 𝑅. The
+running intersection property is maintained as for each variable,
+the nodes containing this variable remain connected. The second
+case is 𝑉 ⊆ 𝑆. It is handled similarly by directly connecting 𝑅 to 𝑆
+and removing the edge from 𝑅 to its succeeding node on the path
+to 𝑆. The third case is that a variable 𝑢 ∈ 𝑉 appears in 𝑅 but not
+in 𝑆 and another variable 𝑣 ∈ 𝑉 appears in 𝑆 but not in 𝑅. Since 𝑅
+is the last in 𝑃 to contain all 𝑈𝑤 variables of 𝑅′, there is a variable
+𝑥 ∈ 𝑈𝑤 that appears in 𝑅 but nowhere else in 𝑃. Similarly, there
+is a variable 𝑦 ∈ 𝑈𝑤 that appears in 𝑆 and nowhere else in 𝑃. If
+every two consecutive nodes on 𝑃 share a variable, then we have a
+chordless path 𝑥 − 𝑢 − . . . − 𝑣 − 𝑦 of length at least 4, contradicting
+our condition. Otherwise, we remove the edge between the two
+nodes that do not share a variable, and add an edge between 𝑅 and
+□
+𝑆, which preserves the running intersection property.
+
+We now show the dichotomy of Theorem 5.6.
+For the positive side, we apply Lemma D.1. When all 𝑈𝑤 vari-
+ables are contained in a single join-tree node, trimming can be
+done in linear time by filtering the corresponding relation. When
+
+Efficient Computation of Quantiles over Joins
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Algorithm 4: Approximate trim for SUM
+1 Input: acyclic JQ 𝑄 with ℓ atoms, database 𝐷, predicate
+
+(cid:205)𝑥 ∈𝑈𝑤 𝑤𝑥 (𝑥 ) < 𝜆, approximation bound 𝜖
+
+2 Output: acyclic JQ 𝑄 ′, database 𝐷 ′
+3 Convert attribute weights to tuple weights
+4 Construct a binary join tree 𝑇 of 𝑄, set an arbitrary root
+5 Materialize a relation for every 𝑇 -node and group it by the variables it has in
+
+common with its parent node
+
+6 Initialize 𝜎 (𝑡 ) = (𝜎𝑠 (𝑡 ), 𝜎𝑚 (𝑡 ) ) = (𝑤 (𝑡 ), 1) for all tuples 𝑡 of all relations
+7 𝜖 ′ = 1
+8 for relation 𝑅 in bottom-up order of 𝑇 do
+9
+
+for child 𝑆 of 𝑅 do
+
+4ℓ 𝜖
+
+Add variable 𝑣𝑅𝑆 to 𝑅 and 𝑆 in 𝑄, and corresponding columns in 𝐷
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+for tuple 𝑡 ∈ 𝑅, child 𝑆 of 𝑅 do
+
+𝑏 = join group of 𝑆 that agrees with the values of 𝑡
+//Sketch messages the first time we visit this group
+if 𝜎 (𝑏 ) not already computed then
+
+𝜎 (𝑏 ) = S𝜖′ (∪𝑡 ′ ∈𝑏𝜎 (𝑡 ′ ) ) such that each value falls into a
+single bucket
+
+//A bucket 𝑒 in the sketch is described by a sum 𝑒𝑠 ,
+multiplicity 𝑒𝑚 , and a set of source tuples from 𝑆
+for bucket 𝑒 ∈ 𝜎 (𝑏 ) with source tuples 𝑆𝑒 ⊆ 𝑆 do
+//Add the bucket values to the child column
+𝑡𝑒 [𝑣𝑅𝑆 ] = (𝑒𝑠, 𝑒𝑚 ) for all 𝑡𝑒 ∈ 𝑆𝑒
+
+for bucket 𝑒 ∈ 𝜎 (𝑏 ) do
+
+//Add the bucket values to the parent column
+Create a copy 𝑡𝑒 of 𝑡 in 𝑅 with 𝑡𝑒 [𝑣𝑅𝑆 ] = (𝑒𝑠, 𝑒𝑚 )
+𝜎 (𝑡𝑒 ) = (𝜎𝑠 (𝑡 ) + 𝑒𝑠, 𝜎𝑚 (𝑡 ) × 𝑒𝑚 )
+
+Remove 𝑡 from 𝑅
+
+24
+25 Remove all tuples 𝑡 from the root relation with 𝜎𝑠 (𝑡 ) ≥ 𝜆
+26 return 𝑄, 𝐷
+
+they are contained in two adjacent join-tree nodes, O (𝑛 log 𝑛) trim-
+ming follows from Lemma 5.5. Combining these two cases with
+Lemmas 3.3 and 4.1 completes the proof of the positive side.
+
+For the negative side, there are 3 cases. 1) If 𝑄 is cyclic, an an-
+swer to %JQ would also answer the decision problem of whether
+𝑄 has any answer, which precludes time O (𝑛 polylog 𝑛) assuming
+Hypercliqe [6]. Assume 𝑄 is acyclic. 2) If there exists a set of
+independent variables of 𝑈𝑤 of size 3, selection by SUM is not
+possible in O (𝑛2−𝜀 ) for all 𝜀 > 0 assuming 3sum [7, Corollary 7.11].
+Since we can count the answers to an acyclic JQ in linear time, the
+selection problem and %JQ are equivalent. 3) If there is a chordless
+path between two 𝑈𝑤 variables of length 4 or more, we apply a
+known reduction [7, Lemma 7.13] to show that solving %JQ in quasi-
+linear time can be used to detect a triangle in a graph in quasilinear
+time, which is not possible assuming Hypercliqe. There are two
+ways in which the statement of that lemma differs from our needs:
+first, all variables there were allowed to participate in the ranking.
+However, the reduction only assigns non-zero weights to the first
+and last variables in the path, so this difference is non-essential.
+Second, the path there contains exactly 3 atoms (i.e., 4 variables);
+if our path is longer, we simply make the the remaining relations
+equality, and the rest of the proof is the same.
+
+E DETAILS OF APPROXIMATE TRIMMING
+
+FOR SUM
+
+Algorithm 4 shows the pseudocode of our lossy trimming for SUM.
+
+13
+
+E.1 Proof of Lemma 6.1
+Preservation of JQ answers. Let 𝑄 ′ and 𝐷′ be the returned JQ
+and database. We argue that, before removing the root tuples that
+violate the inequality (Line 25), the JQ answers are preserved in
+the sense that there exists a bijection from 𝑄 ′ (𝐷′) to 𝑄 (𝐷) which
+simply removes the new variables. Consider the step where we
+introduce variable 𝑣𝑅𝑆 between parent 𝑅 and child 𝑆. Let 𝑡 ∈ 𝑅 be
+a tuple in the original database 𝐷 and 𝑏 the join group in 𝑆 that
+agrees with 𝑡. Then, every tuple 𝑡 ′ ∈ 𝑏 joins with exactly one copy
+of 𝑡 after the introduction of 𝑣𝑅𝑆 . This is because there is a copy of
+𝑡 for each bucket (with the bucket identifier in 𝑣𝑅𝑆 ) and our bucket
+adjustment guarantees that the weight of 𝑡 ′ is assigned to precisely
+one bucket.
+
+Error from sketch adjustment. Recall that in our sketch S𝜖 (𝐿)
+of a multiset 𝐿 we made the adjustment that if 𝑖, 𝑗, 𝑘 are three
+consecutive indexes in the bucketization, 𝐿[ 𝑗 − 1] = 𝐿[ 𝑗], and
+𝑗 ′, 𝑗 ′′ are the smallest and largest indexes that contain 𝐿[ 𝑗] in the
+two consecutive buckets, then we replace 𝑖, 𝑗, 𝑘 with 𝑖, 𝑗 ′, 𝑗 ′′ + 1, 𝑘.
+We say that a multiset is an 𝜖-sketch of another multiset if it satisfies
+the guarantee of Lemma 6.3. Also, let S be the original sketch with
+approximation error 𝜖 (see Lemma 6.3) and S′ be the resulting
+sketch. What we will show is that S′ is an 𝜖-sketch of 𝐿. In particular,
+we claim that ↓𝜆 (S) ≤↓𝜆 (S′) ≤↓𝜆 (𝐿) for all values of 𝜆. Our
+adjustment can only change elements in the index ranges [𝑖, 𝑗 ′)
+and [ 𝑗, 𝑗 ′′), while all other elements stay the same since the largest
+element in their bucket continues to be the same. The elements
+that can potentially change may only decrease in value because
+the upper index of their bucket is now smaller (but they may not
+decrease beyond 𝐿[𝑖] and 𝐿[ 𝑗] respectively). Consequently, if 𝜆 <
+𝐿[𝑖] or 𝜆 ≥ 𝐿[ 𝑗 ′′] then ↓𝜆 (S) =↓𝜆 (S′). If 𝐿[𝑖] ≤ 𝜆 < 𝐿[ 𝑗], then
+↓𝜆(S) ≤↓𝜆(S′) because all elements in this bucket were mapped to
+𝑍 [ 𝑗] in S but now they are mapped to a number that can only be
+smaller, and thus closer to their original value. If 𝐿[ 𝑗] ≤ 𝜆 < 𝐿[ 𝑗 ′],
+all elements in that bucket are equal to 𝐿[ 𝑗], thus ↓𝜆(S′) =↓𝜆(𝐿).
+Approximation guarantee. Let us introduce the notation and
+tools we need. Recall that each tuple 𝑡 computes 𝜎 (𝑡) that represents
+the approximate sum of partial query answers in its subtree. Let
+cp(𝑡) = {𝑡1, . . . , 𝑡𝑟 } be the copies of 𝑡 that we create in our algorithm,
+𝑊𝑡 be the partial query answers in the subtree of 𝑡 mapped to their
+weights, jg𝑆 (𝑡) be the join group of relation 𝑆 that joins with a
+tuple 𝑡 of the parent relation, and ⊗ be the pairwise summation
+operator for multisets. Abo-Khamis et al. [2] have shown that if 𝐿′
+1
+is an 𝜖1-sketch of 𝐿1 and 𝐿′
+2 is a
+max{𝜖1, 𝜖2}-sketch of 𝐿1⊎𝐿2 and 𝐿′
+2 is an (𝜖1+𝜖2)-sketch of 𝐿1 ⊗
+𝐿2. Additionally, an 𝜖1-sketch of an 𝜖2-sketch is a (2 max{𝜖1, 𝜖2})-
+sketch (using the definition and that (1 − 𝜖)2 ≥ 1 − 2𝜖). With these,
+we will show that the removal of root-node tuples (Line 25) removes
+the JQ answers that fall into buckets with values greater than or
+equal to 𝜆 in an 𝜖-sketch of the multiset {𝑤 (𝑞)|𝑞 ∈ 𝑄 (𝐷)}. Note
+that in the algorithm, we apply sketching with 𝜖′ ≤ 𝜖 (Line 15).
+
+2 is an 𝜖2-sketch of 𝐿2, then 𝐿′
+
+1 ⊎ 𝐿′
+
+1 ⊗𝐿′
+
+First, we prove inductively that for a tuple 𝑡 ∈ 𝑅 where 𝑅 is a
+relation at level 𝑑 (i.e., the maximum-length path from 𝑅 to a leaf
+node is 𝑑), ⊎𝑡𝑖 ∈cp(𝑡 )𝜎 (𝑡𝑖 ) is a (4𝑑𝜖′)-sketch of 𝑊𝑡 . Each weight in
+𝑊𝑡 is the sum of the weight of 𝑡 and the weights of the joining
+partial answers (in the original database 𝐷) from the child relations,
+i.e., 𝑊𝑡 = {𝑤 (𝑡)} ⊗ ((cid:203)
+(cid:208)𝑡 ′ ∈jg𝑆 (𝑡 ) 𝑊𝑡 ′ )). If 𝑡 joins with a tuple 𝑡 ′
+𝑆
+
+PODS ’23, June 18–23, 2023, Seattle, WA, USA
+
+Nikolaos Tziavelis, Nofar Carmeli, Wolfgang Gatterbauer, Benny Kimelfeld, & Mirek Riedewald
+
+we introduce appears in two adjacent nodes of the join tree of 𝑄.
+Therefore, 𝑄 ′ also has a join tree.
+
+Running time. The size of any relation is initially bounded by 𝑛.
+Consider the step where we handle a relation and increase its size by
+creating copies of its tuples. The sizes of the child relations (which
+have already been handled) have size bounded by 𝑛′ ≥ 𝑛. The
+total size of the messages sent from the children is O (log1+𝜖 ′ 𝑛′)
+because the messages are sketched. The parent relation receives the
+messages of a child and creates copies of its tuples whose number is
+equal to the message size. Since we have at most 2 children, the size
+of the parent relation becomes O (𝑛(log1+𝜖 ′ 𝑛′)2). Applying this for
+every relation bottom-up, we can conclude that all relations after
+the algorithm terminates have size O (𝑛(log1+𝜖 ′ 𝑛)2) (because the
+double-logarithmic terms are dominated). Changing base, this is
+O (𝑛 log2 𝑛
+𝜖 2 𝑛 log2 𝑛) since 𝜖′ = Θ(𝜖) and also log(1 +𝜖)
+log2 (1+𝜖 ′ )
+is very close to 𝜖 for small 𝜖. All other operations of the algorithm
+are linear in this size, except for sketching, which is only done
+once for each join group. A sketch of a multiset 𝐿 = (𝑍, 𝛽) can be
+computed in O (|𝑍 | log |𝑍 |) by sorting. Since O (log( 1
+𝜖 2 𝑛 log2 𝑛)) =
+𝜖 ), we get the desired time bound O ( 1
+𝜖 2 𝑛 log2 𝑛 log 𝑛
+O (log 𝑛
+𝜖 ).
+
+) or O ( 1
+
+of a child relation 𝑆, then it needs to join with all copies cp(𝑡 ′) that
+were created when we handled 𝑆 and its children. The algorithm
+computes the values 𝜎 (𝑡𝑖 ) as follows: ⊎𝑡𝑖 ∈cp(𝑡 )𝜎 (𝑡𝑖 ) = {𝑤 (𝑡)} ⊗
+((cid:203)
+𝑗 ))). We know inductively that
+𝑗 ) is a (4𝑑 −1𝜖′)-sketch of 𝑊𝑡 ′ . The error bound of
+(cid:210)𝑡 ′
+the sketch remains 4𝑑 −1𝜖′ after the union, then becomes 2 · 4𝑑 −1𝜖′
+after applying the 𝜖′-sketch, and finally 2 · 2 · 4𝑑 −1𝜖′ = 4𝑑𝜖′ after
+taking the pairwise sums between the two children.
+
+𝑆 S𝜖 ′ ((cid:210)𝑡 ′ ∈jg𝑆 (𝑡 )
+𝑗 ∈cp(𝑡 ′ ) 𝜎 (𝑡 ′
+
+𝑗 ∈cp(𝑡 ′ ) 𝜎 (𝑡 ′
+
+(cid:210)𝑡 ′
+
+Second, we claim that the height of the binary join tree we
+construct is no more than ℓ, where ℓ is the number of atoms of 𝑄.
+To see why, note that the new nodes we introduce in order to make
+the tree binary cannot be leaves and will always have 2 children.
+Suppose that there exists a root-to-leaf path of length greater than
+ℓ. For every new node on the path, there must be an original node
+that is a descendant of it, but not on this path. This implies that
+the number of original nodes would be greater than ℓ, which is a
+contradiction. To conclude, we get 𝜖-sketches of 𝑊𝑡 for tuples 𝑡
+at the root level if we set 𝜖′ = 1
+4ℓ 𝜖. Their union is an 𝜖-sketch of
+{𝑤 (𝑞)|𝑞 ∈ 𝑄 (𝐷)}.
+
+Returned JQ properties. The fact that the JQ 𝑄 ′ that we re-
+turn is acyclic is evident from the fact that every variable 𝑣𝑅𝑆 that
+
+14
+
+

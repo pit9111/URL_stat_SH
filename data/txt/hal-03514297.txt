@@ -1,0 +1,2650 @@
+Computing the Shapley Value of Facts in Query
+Answering
+Daniel Deutch, Nave Frost, Benny Kimelfeld, Mikaël Monet
+
+To cite this version:
+
+Daniel Deutch, Nave Frost, Benny Kimelfeld, Mikaël Monet. Computing the Shapley Value of Facts in
+Query Answering. SIGMOD Conference 2022, Jun 2022, Philadelphia, United States. ￿hal-03514297￿
+
+HAL Id: hal-03514297
+
+https://inria.hal.science/hal-03514297
+
+Submitted on 6 Jan 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+2
+2
+0
+2
+
+n
+a
+J
+
+2
+
+]
+
+B
+D
+.
+s
+c
+[
+
+2
+v
+4
+7
+8
+8
+0
+.
+2
+1
+1
+2
+:
+v
+i
+X
+r
+a
+
+Computing the Shapley Value of Facts in Query Answering
+
+Daniel Deutch
+Tel Aviv University
+Blavatnik School of
+Computer Science, Tel Aviv,
+Israel
+danielde@post.tau.ac.il
+
+Nave Frost
+Tel Aviv University
+Blavatnik School of
+Computer Science, Tel Aviv,
+Israel
+navefrost@mail.tau.ac.il
+
+Benny Kimelfeld
+Technion - Israel Institute
+of Technology
+Faculty of Computer
+Science, Haifa, Israel
+bennyk@cs.technion.ac.il
+
+Mikaël Monet
+Univ. Lille, Inria, CNRS,
+Centrale Lille, UMR 9189
+CRIStAL, F-59000 Lille,
+France
+mikael.monet@inria.fr
+
+ABSTRACT
+The Shapley value is a game-theoretic notion for wealth distribution
+that is nowadays extensively used to explain complex data-intensive
+computation, for instance, in network analysis or machine learning.
+Recent theoretical works show that query evaluation over rela-
+tional databases fits well in this explanation paradigm. Yet, these
+works fall short of providing practical solutions to the computa-
+tional challenge inherent to the Shapley computation. We present
+in this paper two practically effective solutions for computing Shap-
+ley values in query answering. We start by establishing a tight
+theoretical connection to the extensively studied problem of query
+evaluation over probabilistic databases, which allows us to obtain a
+polynomial-time algorithm for the class of queries for which prob-
+ability computation is tractable. We then propose a first practical
+solution for computing Shapley values that adopts tools from prob-
+abilistic query evaluation. In particular, we capture the dependence
+of query answers on input database facts using Boolean expressions
+(data provenance), and then transform it, via Knowledge Compila-
+tion, into a particular circuit form for which we devise an algorithm
+for computing the Shapley values. Our second practical solution
+is a faster yet inexact approach that transforms the provenance to
+a Conjunctive Normal Form and uses a heuristic to compute the
+Shapley values. Our experiments on TPC-H and IMDB demonstrate
+the practical effectiveness of our solutions.
+
+1 INTRODUCTION
+Explaining query answers has been the objective of extensive re-
+search in recent years [12, 15, 20, 29, 30]. A prominent approach
+is to devise an explanation based on the facts that were used for
+deriving the answers; these facts are often termed provenance or
+lineage of the query answer. For illustration, consider a query ask-
+ing whether there exists a route from the USA to France with at
+most one connection over a database of airports and flights. The
+answer is Boolean, and upon receiving a positive answer one may
+seek explanations of why it is so. The basis for such explanations
+would include all details of qualifying routes that are used in the
+derivation of the answer. Unfortunately, the number of relevant
+routes might be huge (specifically, quadratic in the database size).
+Moreover, it is conceivable that different facts differ considerably in
+their importance to the answer at hand; for instance, some flights
+may be crucial to enabling the USA-France connection, while others
+may be easily replaced by alternatives.
+
+To address these issues, there have been several proposals for
+principled ways of quantifying the contribution of input facts to
+query answers [20, 24, 25, 30]. We focus here on the recent approach
+of Livshits et al. [20] that applies to this setting the notion of Shapley
+
+values [32]—a game-theoretic function for distributing the wealth of
+a team in a cooperative game. This function has strong theoretical
+justifications [28], and indeed, it has been applied across various
+fields such as economics, law, environmental science, and network
+analysis. It has also been used for explanations in data-centric
+paradigms such as knowledge representation [16, 39] and machine
+learning [21, 22]. In the context of relational databases, given a
+query 𝑞( ¯𝑥), a database 𝐷, an input fact 𝑓 ∈ 𝐷 and a tuple ¯𝑡 of
+same arity as ¯𝑥, the Shapley value of 𝑓 in 𝐷 for query 𝑞( ¯𝑥) and
+tuple ¯𝑡 intuitively represents the contribution of 𝑓 to the presence
+(or absence) of ¯𝑡 in the query result.
+
+Livshits et al. [20, 27] initiated the study of the computational
+complexity of calculating Shapley values in query answering. They
+showed mainly lower bounds on the complexity of the problem,
+with the exception of the sub-class of self-join free SPJ queries called
+hierarchical, where they gave a polynomial-time algorithm. The
+results are more positive if imprecision is allowed, as they showed
+that the problem admits a tractable approximation scheme (FPRAS,
+to be precise) via Monte Carlo sampling. The state of affairs is that
+the class of known tractable cases (namely the hierarchical conjunc-
+tive queries) is highly restricted, and the approximation algorithms
+with theoretical guarantees are impractical in the sense that they
+require a large number of executions of the query over database
+subsets (the samples). Hence, the theoretical analysis of Livshits et
+al. [20, 27] does not provide sufficient evidence of practical feasibil-
+ity for adopting the Shapley value as a measure of responsibility
+in query answering. Moreover, the results of Livshits et al. [20] im-
+ply that, for self-join free SPJ queries the class of tractable queries
+for computing Shapley values coincides with the class of tractable
+queries in probabilistic tuple-independent databases [7]. Yet, no
+direct connection has been made between these two problems and,
+theoretically speaking, it has been left unknown whether algorithms
+for probabilistic databases can be used for Shapley computation.
+
+Recently, Van den Broeck et al. [36] and Arenas et al. [2, 3] in-
+vestigated the computational complexity of the SHAP-score [22], a
+notion used in machine learning for explaining the predictions of
+a model. While both are based on the general notion of Shapley
+value, the SHAP-score for machine learning and Shapley values for
+databases are different. In the latter case, the players are the tuples
+of the database and the game function that is used is simply the
+value of the query on a subset of the database, while in the former
+case, the players are the features of the model and the game function
+is a conditional expectation of the model’s output (see Section 6.2
+for a more formal definition of the SHAP-score). Remarkably, Van
+den Broeck et al. [36] have shown that computing the SHAP-score
+is equivalent (in terms of polynomial-time reductions) to the prob-
+lem of computing the expected value of the model. One of our
+
+ 
+ 
+ 
+ 
+ 
+ 
+contributions is to show that the techniques developed by [2, 3, 36]
+can be adapted to the context of Shapley values for databases. For
+instance, by adapting to our context the proof of Van den Broeck
+et al. [36] that computing the SHAP-score reduces to computing
+the expected value of the model, we resolve the aforementioned
+open question affirmatively: we prove that Shapley computation
+can be efficiently (polynomial-time) reduced to probabilistic query
+answering. Importantly, this applies not only to the restricted class
+of SPJ queries without self-joins, but to every database query. Hence,
+extending theory to practice, one can compute the Shapley values
+using a query engine for probabilistic databases.
+
+In turn, a common approach that was shown to be practically
+effective for probabilistic databases is based on Knowledge Compila-
+tion [11, 18]. In a nutshell, the idea is to first compute the Boolean
+provenance of a given output tuple in the sense of Imielinski and
+Lipski [17], and then to “compile” the provenance into a particular
+circuit form that is more favorable for probability computation.
+Specifically, the target class of this compilation is that of deter-
+ministic and decomposable circuits (d-D). In our case, rather than
+going through probabilistic databases, we devise a more efficient
+approach that computes the Shapley values directly from the d-D
+circuit. This is similar to how Arenas at al. [2, 3] directly prove
+that the SHAP-score can be computed efficiently over such circuits,
+without using the more general results of [36]. By adapting the
+proof of [2, 3], we show how, given a d-D circuit representing the
+provenance of an output tuple, we can efficiently compute the Shap-
+ley value of every input fact. While the aforementioned properties
+of the circuit are not guaranteed in general (beyond the class of
+hierarchical queries), we empirically show the applicability and
+usefulness of the approach even for non-hierarchical queries.
+
+Our experimental results (see below) indicate that our exact com-
+putation algorithm is fast in most cases, but is too costly in others.
+For the latter cases, we propose a heuristic approach to retrieve the
+relative order of the facts by their Shapley values, without actually
+computing these values. Indeed, determining the most influential
+facts is in many cases already highly useful, even if their precise
+contribution remains unknown. The solution that we propose to
+this end is termed CNF Proxy; it is based on a transformation of
+the provenance to Conjunctive Normal Form (CNF) and using it
+to compute proxy values intuitively based on (1) the number of
+clauses in which a variable occur and (2) its alternatives in each
+clause. These are two aspects that are correlated with Shapley val-
+ues. The proxy values may be very different from the real Shapley
+values, and yet, when we order facts according to their proxy values
+we may intuitively get an ordering that is similar to the order via
+Shapley. Our experiments validate that this intuition indeed holds
+for examined benchmarks.
+
+We have experimented with multiple queries from the two stan-
+dard benchmarks TPC-H and IMDB. Our main findings are as fol-
+lows. In most cases (98.67% of the IMDB output tuples and 83.83%
+for TPC-H), our exact computation algorithm terminates in 2.5 sec-
+onds or less, given the provenance expression. In the vast majority
+of remaining cases the execution is very costly, typically running
+out of memory already in the Knowledge Compilation step. By
+contrast, our inexact solution CNF Proxy is extremely fast even for
+these hard cases – it typically terminates in a few milliseconds with
+the worst observed case (an outlier) being 4 seconds. In fact, it is
+
+faster by several orders of magnitude than sampling-based approx-
+imation techniques (the Monte Carlo sampling proposed in [20]
+as well as a popular sampling-based solution for Shapley values
+in Machine Learning (Kernel SHAP [22]). To measure quality, we
+use CNF Proxy to rank the input tuples, and compared the obtained
+ranked lists to ranking by actual Shapley values (in cases where
+exact computation has succeeded), using the standard measures of
+nDCG and Precision@k. Our solution outperforms the competitors
+in terms of quality as well.
+
+We then propose a simple hybrid approach: execute the exact
+algorithm until it either terminates or a timeout elapses. If we have
+reached the timeout, resort to executing CNF Proxy and rank the
+facts based on the obtained values. We show experiments with
+different timeout values, justifying our choice of 2.5 seconds.
+
+Hence, our contributions are both of a theoretical and practical
+
+nature and can be summarized as follows.
+
+• By adapting the proof technique of [36], we establish a fun-
+damental result about the complexity of computing Shapley
+values over relational queries: Shapley values can be com-
+puted in polynomial time–in data complexity–whenever
+the query can be evaluated in polynomial time over tuple-
+independent probabilistic databases (Proposition 3.1). This
+holds for every query.
+
+• By adapting the proof technique of [2, 3], we devise a novel
+algorithm for computing Shapley values for query evaluation
+via compilation to a deterministic and decomposable circuit
+(Proposition 4.4). We show that this algorithm is practical
+and has the theoretical guarantee of running in polynomial
+time in the size of the circuit.
+
+• We present a novel heuristic, CNF Proxy, that is fast yet inex-
+act, and is practically effective if we are interested in ranking
+input facts by their contribution rather than computing exact
+Shapley values (Section 5).
+
+• We describe a thorough experimental study of our algorithms
+over realistic data and show their efficiency (Section 6).
+
+Related work. Existing models for explaining database query re-
+sults may roughly be divided in two categories: (1) models that are
+geared for tracking/presenting provenance of output tuples, e.g., the
+set of all input facts participating in their computation [6], possibly
+alongside a description of the ways they were used, in different
+granularity levels (e.g., [4, 5, 14]); (2) models that quantify contri-
+butions of input facts [20, 24, 25, 30], which is the approach that
+we follow here. Works in the latter context often have connections
+with the influential line of work on probabilistic databases [33], and
+we show that this is the case for Shapley computation as well.
+
+As already mentioned, an important point of comparison is the
+work of Van den Broeck et al. [36] and that of Arenas et al. [2, 3] on
+the SHAP-score. While we show that the proof techniques developed
+in this area can be adapted to the context of relational databases,
+we point out that the two sets of results obtained (for SHAP-score
+and for Shapley values for databases) seem incomparable, as we
+do not see a way of proving results for Shapley value for query
+answering using the results on the SHAP-score, or vice-versa. In
+fact, this adaptation only works up to a certain point. For instance,
+the efficiency axiom of the Shapley value immediately implies that
+
+2
+
+computing the expected value of a model can be reduced in polyno-
+mial time to computing the SHAP-score of its features; in contrast,
+this axiom does not seem to yield any clear such implication in our
+context (see our Open Problem 1 and the discussion around it).
+
+Paper organization. We formalize the notion of Shapley values for
+query answering in Section 2. In Section 3 we present the theoretical
+connection to probabilistic databases and its implications. Our exact
+computation algorithm is presented in Section 4 and our heuristic
+in Section 5. Experimental results are presented in Section 6 and
+we conclude in Section 7.
+
+2 THE SHAPLEY VALUE OF FACTS
+We define here the main notion and illustrate it with an example.
+
+Relational databases and queries. Let Σ = {𝑅1, . . . , 𝑅𝑛 } be a
+signature, consisting of relation names 𝑅𝑖 each with its associated
+arity ar(𝑅𝑖 ) ∈ N, and Const be a set of constants. A fact over
+(Σ, Const) is simply a term of the form 𝑅(𝑎1, . . . , 𝑎ar(𝑅) ), for 𝑅 ∈ Σ
+and 𝑎𝑖 ∈ Const. A (Σ, Const)-database 𝐷, or simply a database 𝐷,
+is a finite set of facts over (Σ, Const). We assume familiarity with
+the most common classes of query languages and refer the reader
+to [1] for the basic definitions. In particular, we recall the equiva-
+lence between relational algebra and relational calculus [1], and the
+fact that Select-Project-Join-Union (SPJU) queries are equivalent
+to unions of conjunctive queries (UCQs). Depending of the con-
+text and for consistency with relevant past publications, we will
+use terminology of either relational calculus or relational algebra.
+What we call a Boolean query is a query 𝑞 that takes as input a
+database 𝐷 and outputs 𝑞(𝐷) ∈ {0, 1}. If 𝑞( ¯𝑥) is a query with free
+variables ¯𝑥 and ¯𝑡 is a tuple of constants of same length as ¯𝑥, we
+denote by 𝑞[ ¯𝑥/¯𝑡] the Boolean query defined by: 𝑞[ ¯𝑥/¯𝑡] (𝐷) = 1 if
+and only if ¯𝑡 is in the output of 𝑞( ¯𝑥) on 𝐷.
+
+Shapley values of facts. Following [20, 27], we use the notion of
+Shapley values [32] to attribute a contribution to facts of an input
+database. In this context, the database 𝐷 is traditionally partitioned
+into two sets of facts: a set 𝐷x of so-called exogenous facts, and a
+set 𝐷n of endogenous facts. The idea is that exogenous facts are
+considered as given, while endogenous facts are those to which
+we would like to attribute contributions. Let 𝑞 be a Boolean query
+and 𝑓 ∈ 𝐷n be an endogenous fact. The Shapley value of 𝑓 in 𝐷 for
+query 𝑞, denoted Shapley(𝑞, 𝐷n, 𝐷x, 𝑓 ), is defined as
+
+Shapley(𝑞, 𝐷n, 𝐷x, 𝑓 )
+
+def
+=
+
+∑︁
+
+𝐸 ⊆𝐷n\{𝑓 }
+
+|𝐸|!(|𝐷n| − |𝐸| − 1)!
+|𝐷n|!
+
+(1)
+
+(cid:0)𝑞(𝐷x ∪ 𝐸 ∪ {𝑓 }) − 𝑞(𝐷x ∪ 𝐸)(cid:1).
+
+Notice that here, |𝐸|!(|𝐷n| − |𝐸| − 1)! is the number of permutations
+of 𝐷n with all endogenous facts in 𝐸 appearing first, then 𝑓 , and
+finally, all the other endogenous facts. Intuitively then, the value
+Shapley(𝑞, 𝐷n, 𝐷x, 𝑓 ) represents the contribution of 𝑓 to the query’s
+output: the higher this value is, the more 𝑓 helps in satisfying 𝑞.
+
+For non-Boolean queries 𝑞( ¯𝑥), we are interested in the Shapley
+value of the fact 𝑓 for every individual tuple ¯𝑡 in the output [20].
+The extension to non-Boolean 𝑞( ¯𝑥) is then straightforward: the
+
+Shapley value of the fact 𝑓 for the answer ¯𝑡 to 𝑞( ¯𝑥) is the value
+Shapley(𝑞[ ¯𝑥/¯𝑡], 𝐷n, 𝐷x, 𝑓 ). Therefore, the computational challenge
+reduces to that of the Boolean query 𝑞 [ ¯𝑥/¯𝑡]. Hence, in the theo-
+retical analysis we focus on Boolean queries, and we go back to
+considering non-Boolean queries when we study the implementa-
+tion aspects (starting in Section 4.2).
+
+Example 2.1. Consider the database 𝐷 and the Boolean query 𝑞
+from Figures 1a and 1c. All facts in table Flights are endogenous,
+while facts in Airports are exogenous. To alleviate the notation
+we write, e.g., 𝑎1 for Flights(JFK, CDG). The query 𝑞 checks if
+there are routes from “USA” to “FR” with one or less connect-
+ing flights. Let us compute the Shapley value of all endogenous
+facts. First, we notice that fact 𝑎8 is not part of any valid route,
+so Shapley(𝑞, 𝐷n, 𝐷x, 𝑎8) = 0 by Equation (1). Next, let us focus
+on 𝑎1. Since 𝑎1 is a valid route on its own, adding it to any subset
+of (endogenous) facts 𝐸 such that 𝐸 does not contain a valid route
+results in 𝑞(𝐷x ∪ 𝐸 ∪ {𝑎1}) −𝑞(𝐷x ∪ 𝐸) = 1 (for all other subsets the
+difference will be 0). The relevant subsets are the empty set, all sin-
+gletons {𝑎𝑖 } for 2 ≤ 𝑖 ≤ 8 (7 singletons), all the pairs of tuples from
+𝑎2, . . . , 𝑎8 excluding the pairs {𝑎2, 𝑎4}, {𝑎2, 𝑎5}, {𝑎3, 𝑎4}, {𝑎3, 𝑎5},
+and {𝑎6, 𝑎7} (so (cid:0)7
+(cid:1) − 5 = 16 pairs), the quadruples {𝑎2, 𝑎3, 𝑎6, 𝑎8},
+2
+{𝑎2, 𝑎3, 𝑎7, 𝑎8}, {𝑎4, 𝑎5, 𝑎6, 𝑎8}, and {𝑎4, 𝑎5, 𝑎7, 𝑎8}, and overall 14
+triplets (left to the reader). Summing it all up results in
+
++ 7 ·
+
++ 16 ·
+
+2!5!
+8!
+
+Shapley(𝑞, 𝐷n, 𝐷x, 𝑎1) = 1 ·
+
+0! · 7!
+8!
+3!4!
+8!
+Similarly one can compute the Shapley value of the remaining facts,
+and find that
+that
+Shapley(𝑞, 𝐷n, 𝐷x, 𝑎𝑖 ) = 23
+210 ≈ 0.1095, and that for 𝑎𝑖 ∈ {𝑎6, 𝑎7}
+we have Shapley(𝑞, 𝐷n, 𝐷x, 𝑎𝑖 ) = 8
+
+1! · 6!
+8!
+4!3!
+8!
+
+{𝑎2, 𝑎3, 𝑎4, 𝑎5}
+
+≈ 0.4095.
+
+105 ≈ 0.0762.
+
+it holds
+
+43
+105
+
+for 𝑎𝑖
+
++ 4 ·
+
+14 ·
+
+=
+
++
+
+∈
+
+3 REDUCTION TO PROBABILISTIC
+
+DATABASES
+
+In this section we investigate the complexity of computing Shapley
+values. As explained in the previous section, the non-Boolean set-
+ting of the problem may be reduced to that of Boolean queries, so
+we will study the following problem for a given Boolean query 𝑞.
+
+PROBLEM:
+
+Shapley(𝑞)
+
+INPUT: A database 𝐷 = 𝐷x ∪ 𝐷n and an endogenous
+
+fact 𝑓 ∈ 𝐷n.
+
+OUTPUT: The value Shapley(𝑞, 𝐷n, 𝐷x, 𝑓 ).
+
+Note that for the sake of complexity analysis, the query 𝑞 is
+assumed to be fixed, so that each query gives rise to a different
+computational problem; we are then considering what is called the
+data complexity [37]. This assumption is motivated by the fact that
+in practice, the queries are much smaller than the databases.
+
+The complexity of this problem has been studied in [20, 27],
+where in particular a dichotomy has been obtained for self-join–free
+Boolean conjunctive queries (sjfbcqs). There, the authors show that,
+for every sjfbcq 𝑞, either 𝑞 is hierarchical (we will not need to define
+this notion here) and Shapley(𝑞) can be solved in polynomial time,
+or 𝑞 is not hierarchical and then Shapley(𝑞) is intractable (specif-
+ically, FP#P-hard). It turns out that the tractability criterion that
+
+3
+
+Flights (endo)
+Dest
+Src
+CDG
+JFK
+LHR
+EWR
+LHR
+BOS
+CDG
+LHR
+LHR
+ORY
+LAX MUC
+ORY
+LHR MUC
+
+𝑎1
+𝑎2
+𝑎3
+𝑎4
+𝑎5
+𝑎6
+𝑎7 MUC
+𝑎8
+
+Airports (exo)
+Name Country
+
+JFK
+𝑏1
+EWR
+𝑏2
+BOS
+𝑏3
+LAX
+𝑏4
+LHR
+𝑏5
+𝑏6 MUC
+ORY
+𝑏7
+CDG
+𝑏8
+
+USA
+USA
+USA
+USA
+EN
+GR
+FR
+FR
+
+(a) Database of flights and airports
+
+𝑎6
+
+LAX
+
+MUC
+
+𝑎
+7
+
+𝑎8
+𝑎
+
+5
+
+ORY
+
+BOS
+
+𝑎
+3
+
+LHR
+
+𝑎
+
+2
+
+Routes from “USA” to “FR” with
+one or less connecting flights
+
+𝑞1 = ∃𝑥, 𝑦 : Airports(𝑥, “USA”) ∧
+
+Airports(𝑦, “FR”) ∧
+Flights(𝑥, 𝑦)
+
+𝑎
+
+4
+
+𝑞2 = ∃𝑥, 𝑦, 𝑧 : Airports(𝑥, “USA”) ∧
+
+EWR
+
+JFK
+
+𝑎1
+
+CDG
+
+(b) Flights in graph view. Dark
+and light gray depict “USA”
+and “FR” airports respectively
+
+Airports(𝑧, “FR”) ∧
+Flights(𝑥, 𝑦) ∧ Flights(𝑦, 𝑧)
+
+𝑞 = 𝑞1 ∨ 𝑞2
+
+(c) 𝑞 is a Boolean union of conjunctive queries
+(UCQ)
+
+(𝑎1 ∧ 𝑏1 ∧ 𝑏8)
+(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)
+(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)
+(cid:124)
+(cid:125)
+(cid:123)(cid:122)
+𝑞1 provenance
+
+∨ (𝑎2 ∧ 𝑎4 ∧ 𝑏2 ∧ 𝑏8) ∨ (𝑎2 ∧ 𝑎5 ∧ 𝑏2 ∧ 𝑏7) ∨ (𝑎3 ∧ 𝑎4 ∧ 𝑏3 ∧ 𝑏8) ∨ (𝑎3 ∧ 𝑎5 ∧ 𝑏3 ∧ 𝑏7) ∨ (𝑎6 ∧ 𝑎7 ∧ 𝑏5 ∧ 𝑏7)
+(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)
+(cid:123)(cid:122)
+(cid:125)
+𝑞2 provenance
+
+(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)
+
+(cid:124)
+
+(d) The lineage Lin(𝑞, 𝐷) as a formula in Disjunctive Normal Form (DNF)
+
+Figure 1: The database, query 𝑞 and its lineage used for our running example
+
+is obtained—being hierarchical—is exactly the same as in the con-
+text of probabilistic query evaluation (PQE); see, e.g., [7, 8]. In fact,
+the main result of this section is that this is not a coincidence: we
+prove that, for every Boolean query 𝑞 (not just for sjfbcqs), if PQE
+is tractable for 𝑞 then so is the problem Shapley(𝑞). Since PQE has
+been intensively studied already, our result allows us to vastly ex-
+tend the tractable cases identified in [20, 27]. We now proceed with
+the definitions and proof of this result, and explain its consequences.
+
+Probabilistic query evaluation. A tuple-independent (TID) data-
+base is a pair consisting of a database 𝐷 and a function 𝜋 mapping
+each fact 𝑓 ∈ 𝐷 to a probability value 𝜋 (𝑓 ) ∈ [0, 1]. The TID
+(𝐷, 𝜋) defines a probability distribution Pr𝜋 on 𝐷 ′ ⊆ 𝐷, where
+def
+= (cid:206)𝑓 ∈𝐷′ 𝜋 (𝑓 ) × (cid:206)𝑓 ∈𝐷\𝐷′ (1 − 𝜋 (𝑓 )). Given a Boolean
+Pr𝜋 (𝐷 ′)
+def
+query 𝑞, the probability that 𝑞 is satisfied by (𝐷, 𝜋) is Pr(𝑞, (𝐷, 𝜋))
+=
+(cid:205)𝐷′ ⊆𝐷 s.t. 𝑞 (𝐷′)=1 Pr𝜋 (𝐷 ′). The probabilistic query evaluation prob-
+lem for 𝑞, PQE(𝑞) for short, is then defined as follows.
+
+PROBLEM:
+
+PQE(𝑞)
+
+INPUT: A tuple-independent database (𝐷, 𝜋).
+
+OUTPUT: The value Pr(𝑞, (𝐷, 𝜋)).
+
+For two computational problems 𝐴 and 𝐵, we write 𝐴 ≤
+
+p
+T 𝐵 to
+assert the existence of a polynomial-time Turing reduction from 𝐴
+to 𝐵. We are ready to state the main result of this section.
+
+Proposition 3.1. For every Boolean query 𝑞, we have that
+
+Shapley(𝑞) ≤
+
+p
+T PQE(𝑞).
+
+This result implies that for any query 𝑞 for which PQE(𝑞) is
+tractable then so is Shapley(𝑞). Dalvi and Suciu [8] showed a di-
+chotomy for unions of conjunctive queries: for every such query 𝑞,
+either PQE(𝑞) is solvable in polynomial time, in which case 𝑞 is
+
+4
+
+called safe1, or PQE(𝑞) is FP#P-hard (and 𝑞 is called unsafe). There-
+fore, we obtain as a direct corollary of Proposition 3.1 that Shapley(𝑞)
+can be solved in polynomial time for all safe queries.
+
+Corollary 3.2. If 𝑞 is a safe UCQ then Shapley(𝑞) can be solved
+
+in polynomial time.
+
+In particular, this corollary generalizes the tractability result
+obtained in [20], to account for CQs with self-joins and even unions
+of such queries. We now prove Proposition 3.1.
+
+Proof of Proposition 3.1. For a Boolean query 𝑞, database 𝐷 =
+
+𝐷x ∪ 𝐷n, and integer 𝑘 ∈ {0, . . . , |𝐷n|}, define
+def
+= |{𝐸 ⊆ 𝐷n | |𝐸| = 𝑘 and 𝑞(𝐷x ∪ 𝐸) = 1}|.
+#Slices(𝑞, 𝐷x, 𝐷n, 𝑘)
+Then, by grouping by size the terms 𝐸 from Equation 1 we obtain
+
+Shapley(𝑞, 𝐷n, 𝐷x, 𝑓 ) =
+
+|𝐷n |−1
+∑︁
+
+𝑘=0
+
+𝑘!(|𝐷n| − 𝑘 − 1)
+|𝐷n|
+
+(cid:18)
+
+(2)
+
+#Slices(𝑞, 𝐷x ∪ {𝑓 }, 𝐷n \ {𝑓 }, 𝑘)
+
+− #Slices(𝑞, 𝐷x, 𝐷n \ {𝑓 }, 𝑘)
+
+(cid:19)
+
+.
+
+All arithmetical terms (such as 𝑘! or |𝐷n|!) can be computed in
+p
+T PQE(𝑞),
+polynomial time. Therefore, to prove that Shapley(𝑞) ≤
+it is enough to show that, given an oracle to the problem PQE(𝑞), we
+can compute in polynomial time the quantities #Slices(𝑞, 𝐷x, 𝐷n, 𝑘),
+for some arbitrary 𝐷 = 𝐷x ∪ 𝐷n and 𝑘 ∈ {0, . . . , |𝐷n|}. This is what
+we do next.
+
+The proof is similar to that of [36, Theorem 2] in the context of
+SHAP-score for machine learning (but, as explained in the Intro-
+duction, the two results seem to be incomparable).
+
+We wish to compute #Slices(𝑞, 𝐷x, 𝐷n, 𝑘), for some database 𝐷 =
+𝐷x ∪𝐷n and integer 𝑘 ∈ {0, . . . |𝐷n|}. Let 𝑛 = |𝐷n| be the number of
+endogenous facts of 𝐷. For 𝑧 ∈ Q, we define a TID database (𝐷𝑧, 𝜋𝑧)
+
+1This notion of safety is distinct from the “usual” notion of query safety [1] that
+ensures domain independence.
+
+as follows: 𝐷𝑧 contains all the facts of 𝐷, and for an exogenous
+def
+fact 𝑓 of 𝐷 we define 𝜋𝑧 (𝑓 )
+= 1 while for an endogenous fact 𝑓
+def
+= 𝑧
+of 𝐷 we define 𝜋𝑧 (𝑓 )
+1+𝑧 . It is then routine to show that the
+following relation holds:
+
+(1 + 𝑧)𝑛 Pr(𝑞, (𝐷𝑧, 𝜋𝑧)) =
+
+𝑛
+∑︁
+
+𝑖=0
+
+𝑧𝑖 #Slices(𝑞, 𝐷x, 𝐷n, 𝑖).
+
+This suffices to conclude the proof. Indeed, we now call an ora-
+cle to PQE(𝑞) on 𝑛 + 1 databases 𝐷𝑧0, . . . , 𝐷𝑧𝑛 for 𝑛 + 1 arbitrary
+distinct values 𝑧0, . . . , 𝑧𝑛, forming a system of linear equations as
+given by the relation above. Since the corresponding matrix is a
+Vandermonde with distinct coefficients, it is invertible, so we can
+□
+compute in polynomial time the value #Slices(𝑞, 𝐷x, 𝐷n, 𝑘).
+
+A intriguing natural question is whether the converse of Proposi-
+p
+tion 3.1 is true, that is, whether we also have PQE(𝑞) ≤
+T Shapley(𝑞).
+This is true when 𝑞 is a self-join–free conjunctive query: indeed,
+by the results of [20], either 𝑞 is hierarchical and then both PQE(𝑞)
+p
+and Shapley(𝑞) can be solved in polynomial time (hence PQE(𝑞) ≤
+T
+Shapley(𝑞)), or 𝑞 is not hierarchical and then Shapley(𝑞) is FP#P-
+hard (which, together with the fact that PQE(𝑞) ∈ FP#P, implies
+p
+T Shapley(𝑞)). However, to the best of our knowledge,
+PQE(𝑞) ≤
+the existence of such a reduction in the general case is unknown.
+
+Open problem 1. Do we have PQE(𝑞) ≤
+
+p
+T Shapley(𝑞) for every
+
+Boolean query 𝑞?
+
+Interestingly, we note that this direction is trivial in the setting of
+SHAP-scores. Indeed, this is directly implied by the efficiency axiom
+of the Shapley value; see, e.g., [2, Lemma 4.2] or [36, Equation 5].
+In our case, this axiom only gives us the following equality:
+
+∑︁
+
+𝑓 ∈𝐷n
+
+Shapley(𝑞, 𝐷n, 𝐷x, 𝑓 ) = 𝑞(𝐷n ∪ 𝐷x) − 𝑞(𝐷x),
+
+which does not seem to help in showing PQE(𝑞) ≤
+
+p
+T Shapley(𝑞).
+
+4 EXACT COMPUTATION THROUGH
+
+KNOWLEDGE COMPILATION
+
+Motivated by the connection to PQE that we have seen in Sec-
+tion 3, we now investigate whether an approach using knowledge
+compilation can be used for computing Shapley values. Indeed,
+a common method to compute the probability that a probabilis-
+tic database (𝐷, 𝜋) satisfies a Boolean query 𝑞 is to first compute
+the lineage of 𝑞 on 𝐷 in a formalism from knowledge compilation,
+and then to use the good properties of said formalism to com-
+pute Pr(𝑞, (𝐷, 𝜋)) in linear time [18, 26, 33]. Recently, Arenas and
+others [2, 3] showed that this approach is also viable for the notion
+of SHAP-score used in machine learning, by proving that SHAP-
+scores can be computed in polynomial time when the models are
+given as circuits from knowledge compilation. By reusing some of
+these techniques, we can show that this method can also be used in
+our setting for computing Shapley values of database facts. Again,
+to the best of our knowledge, the two results are incomparable, i.e.,
+we are not aware of a reduction in either direction between the two
+problems. We start by formally defining the notions of lineage and
+the relevant circuit classes from knowledge compilation.
+
+5
+
+∨
+
+∧
+
+¬
+
+∨
+
+𝑎1
+
+¬
+
+∧
+
+𝑎6
+
+𝑎7
+
+∧
+
+¬
+
+∧
+
+¬
+
+∧
+
+¬
+
+𝑎3
+
+¬
+
+𝑎2
+
+¬
+
+𝑎4
+
+¬
+
+𝑎5
+
+2: Deterministic
+
+Figure
+for ELin(𝑞, 𝐷x, 𝐷n) from the running example.
+
+and
+
+decomposable
+
+circuit
+
+Boolean functions and query lineages. Let 𝑋 be a finite set of
+variables. An assignment 𝜈 of 𝑋 is a subset 𝜈 ⊆ 𝑋 of 𝑋 . We denote
+by 2𝑋 the set of all assignments of 𝑋 . A Boolean function 𝜑 over 𝑋
+is a function 𝜑 : 2𝑋 → {0, 1}. An assignment 𝜈 ⊆ 𝑋 is satisfying
+if 𝜑 (𝜈) = 1. We denote by SAT(𝜑) ⊆ 2𝑋 the set of all satisfying
+assignments of 𝜑, and by #SAT(𝜑) the size of this set. For 𝑘 ∈ N, we
+def
+define SAT𝑘 (𝜑)
+= SAT(𝜑) ∩ {𝜈 ⊆ 𝑋 | |𝜈 | = 𝑘 }, that is, the set of
+satisfying assignments of 𝜑 of Hamming weight 𝑘, and let #SAT𝑘 (𝜑)
+be the size of this set.
+
+Let 𝑞 be a Boolean query and 𝐷 be a database. The lineage
+Lin(𝑞, 𝐷) is the (unique) Boolean function whose variables are the
+facts of 𝐷, and that maps each sub-database 𝐷 ′ ⊆ 𝐷 to 𝑞(𝐷 ′). This
+definition extends straightforwardly to queries with free variables
+as follows: if 𝑞( ¯𝑥) is a query with free variables ¯𝑥 and ¯𝑡 is a tuple of
+constants of the appropriate size, then Lin(𝑞[ ¯𝑥/¯𝑡]), 𝐷) is the lineage
+for the tuple ¯𝑡.
+
+Example 4.1. Consider again the database 𝐷 and the Boolean
+query 𝑞 from Figures 1a and 1c. In Figure 1d, the lineage Lin(𝑞, 𝐷)
+is represented as a formula in disjunctive normal form (DNF).
+
+For our purposes, we will use a refinement of this lineage that
+accounts for the nature of exogenous tuples; specifically, these tu-
+ples should be considered as always being part of the database.
+Let 𝐷 = 𝐷n ∪ 𝐷x be a database with endogenous tuples 𝐷n and
+exogenous tuples 𝐷x, and let 𝑞 be a Boolean query. Then the en-
+dogenous lineage ELin(𝑞, 𝐷x, 𝐷n) is the (unique) Boolean function
+whose variables are 𝐷n and that maps every set 𝐸 of endogenous
+facts to 𝑞(𝐷x ∪ 𝐸). In other words, ELin(𝑞, 𝐷x, 𝐷n) can be obtained
+from Lin(𝑞, 𝐷) by fixing all variables in 𝐷x to the value 1. Again,
+we extend this definition to queries with free variables by using the
+function ELin(𝑞[ ¯𝑥/¯𝑡], 𝐷x, 𝐷n).
+
+Example 4.2. Continuing the previous example, the endogenous
+
+lineage ELin(𝑞, 𝐷n, 𝐷x) can be represented as a DNF by
+𝑎1 ∨ (𝑎2 ∧ 𝑎4) ∨ (𝑎2 ∧ 𝑎5) ∨ (𝑎3 ∧ 𝑎4) ∨ (𝑎3 ∧ 𝑎5) ∨ (𝑎6 ∧ 𝑎7) .
+
+In the last two examples, lineages were represented with Boolean
+formulas in DNF. Since a lineage is a Boolean function, it can be
+represented with any formalism that allows to represent Boolean
+functions. We next review some classes of circuits from the field of
+knowledge compilation that will be relevant for our work.
+
+Knowledge compilation classes. Let 𝐶 be a Boolean circuit, fea-
+turing ∧, ∨, ¬, and variable gates, with the usual semantics.2 For a
+gate 𝑔 of 𝐶, we denote by Vars(𝑔) the set of variables that have a
+directed path to 𝑔. An ∧-gate 𝑔 of 𝐶 is decomposable if for every two
+input gates 𝑔1 ≠ 𝑔2 of 𝑔 we have Vars(𝑔1) ∩ Vars(𝑔2) = ∅. We call 𝐶
+decomposable if all ∧-gates are. An ∨-gate 𝑔 of 𝐶 is deterministic
+if the Boolean functions captured by each pair of distinct input
+gates of 𝑔 are pairwise disjoint; i.e., no assignment satisfies both.
+We call 𝐶 deterministic if all ∨-gates in it are. A deterministic and
+decomposable (d-D [26]) Boolean circuit is a Boolean circuit that is
+both deterministic and decomposable. If 𝐶 is a Boolean circuit we
+write Vars(𝐶) to denote the set of variables that appear in it.
+
+Example 4.3. Recall ELin(𝑞, 𝐷n, 𝐷x) from Example (4.2) repre-
+sented as a DNF. Figure 2 depicts a d-D circuit for ELin(𝑞, 𝐷n, 𝐷x).
+The output gate, for instance, is a deterministic ∨-gate: indeed, its
+left child requires 𝑎1 to be 1, whereas its right child requires 𝑎1 to
+be 0. The right child of the output gate is a decomposable ∧-gate:
+indeed, for its left child 𝑔1 we have Vars(𝑔1) = {𝑎1}, whereas for its
+right child 𝑔2 we have Vars(𝑔2) = {𝑎2, 𝑎3, 𝑎4, 𝑎5, 𝑎6, 𝑎7}, and these
+are indeed disjoint. The reader can easily check that all other ∨-
+gates are deterministic, and that all other ∧-gates are decomposable.
+
+4.1 Algorithm
+The main result of this section is then the following.
+
+Proposition 4.4. Given as input a deterministic and decompos-
+able circuit 𝐶 representing ELin(𝑞, 𝐷n, 𝐷x) for a database 𝐷 = 𝐷x ∪
+𝐷n and Boolean query 𝑞, and an endogenous fact 𝑓 ∈ 𝐷n, we can
+compute in polynomial time (in |𝐶 |) the value Shapley(𝑞, 𝐷n, 𝐷x, 𝑓 ).
+
+Next, we prove Proposition 4.4 and present the algorithm, and
+then explain in Section 4.2 the architecture of the implementation.
+
+Proof of Proposition 4.4. Let 𝐶 be a deterministic and decom-
+posable circuit representing ELin(𝑞, 𝐷n, 𝐷x), and let 𝑓 ∈ 𝐷n. First,
+we complete the circuit 𝐶 so that all variables of 𝐷n appear in 𝐶.
+Indeed, it could be the case that Vars(𝐶) ⊊ 𝐷n: this happens for in-
+stance with the deterministic and decomposable circuit in Figure 2,
+where the endogenous fact 𝑎8 does not appear in the circuit. To do
+this, we conjunct 𝐶 with the conjunction (cid:211)𝑓 ′ ∈𝐷n\Vars(𝐶) (𝑓 ′ ∨ ¬𝑓 ′).
+Note that this does not change the semantics of the circuit (as this
+conjunction always evaluates to 1) and that the resulting circuit
+is still deterministic and decomposable. Now, let 𝐶1 (resp., 𝐶2) be
+the Boolean circuit obtained from 𝐶 by replacing all variable gates
+corresponding to the fact 𝑓 by a constant 1-gate (resp., by a con-
+stant 0-gate). Observe then that the variables of 𝐶1 and 𝐶2 are
+exactly 𝐷n \ {𝑓 }, and moreover that 𝐶1 and 𝐶2 are still determinis-
+tic and decomposable. By definition of the endogenous lineage, we
+can rewrite Equation (2) into the following.
+
+2We allow unbounded-fanin ∧- and ∨-gates, and also allow constant 1-gates and
+constant 0-gates as, respectively, ∧-gates with no input and ∨-gates with no inputs.
+
+6
+
+Shapley(𝑞, 𝐷n, 𝐷x, 𝑓 ) =
+
+|𝐷n |−1
+∑︁
+
+𝑘=0
+
+𝑘!(|𝐷n| − 𝑘 − 1)
+|𝐷n|
+
+(cid:0)
+
+#SAT𝑘 (𝐶1) − #SAT𝑘 (𝐶2)(cid:1).
+
+(3)
+
+Proposition 4.4 will thus directly follow from the next lemma.
+
+Lemma 4.5. Given as input a deterministic and decomposable
+Boolean circuit 𝐶 and an integer 𝑘 ∈ {0, . . . , |Vars(𝐶)|}, we can
+compute in polynomial time the quantity #SAT𝑘 (𝐶).
+
+Proof. Our proof is similar to that of [3, Section 3.2]. Let 𝑋
+
+def
+=
+def
+= |𝑋 |. First of all, we preprocess 𝐶 so that the
+Vars(𝐶) and 𝑛
+fanin of every ∨- and ∧-gate is exactly 0 or 2; this can simply be
+done by rewriting every ∧-gate of fanin 𝑚 > 2 with 𝑚 − 1 ∧-
+gates of fanin 2 (same for ∨-gates), and adding a constant gate of
+the appropriate type to every ∨- and ∧-gate of fan-in 1. We then
+compute, for every gate 𝑔 of 𝐶, the set of variables Vars(𝑔) upon
+which the value of 𝑔 depends. For a gate 𝑔 of 𝐶, let us denote by 𝜑𝑔
+the Boolean function over the variables Vars(𝑔) that is represented
+by this gate. For a gate 𝑔 and an integer ℓ ∈ {0, . . . , |Vars(𝑔)|},
+def
+we define 𝛼 ℓ
+= #SATℓ (𝜑𝑔), i.e. the number of assignments of
+𝑔
+size ℓ to Vars(𝑔) that satisfy 𝜑𝑔. We will show how to compute all
+the values 𝛼 ℓ
+𝑔 for every gate 𝑔 of 𝐶 and ℓ ∈ {0, . . . , |Vars(𝑔)|} in
+polynomial time. This will conclude the proof since, for the output
+gate 𝑔output of 𝐶, we have that 𝛼𝑘
+= #SAT𝑘 (𝑓 ). We will need
+the following notation: for two disjoint sets of variables 𝑋1, 𝑋2 and
+two subsets 𝑆1 ⊆ 2𝑋1 , 𝑆2 ⊆ 2𝑋2 of assignments to 𝑋1 and 𝑋2, we
+denote by 𝑆1 ⊗ 𝑆2 ⊆ 2𝑋1∪𝑋2 the set of assignments of 𝑋1 ∪ 𝑋2
+def
+defined by 𝑆1 ⊗ 𝑆2
+= {𝜈1 ∪ 𝜈2 | 𝜈1 ∈ 𝑆2, 𝜈2 ∈ 𝑆2}. We next show
+how to compute the values 𝛼 ℓ
+
+𝑔 by bottom-up induction on 𝐶.
+
+𝑔output
+
+Variable gate. If 𝑔 is a variable gate corresponding to some
+
+variable 𝑦, then Vars(𝑔) = {𝑦}. Then, 𝛼 0
+¬-gate. If 𝑔 is a ¬-gate with input gate 𝑔′, then 𝛼 ℓ
+
+𝑔 is 0 and 𝛼 1
+
+𝑔 is 1.
+𝑔 = (cid:0) |Vars(𝑔) |
+
+(cid:1)−
+
+𝑙
+
+𝛼 ℓ
+𝑔′ for every ℓ ∈ {0, . . . , |Vars(𝑔)|}.
+
+Deterministic ∨-gate. If 𝑔 is a deterministic ∨-gate with no
+input then 𝜑𝑔 is the Boolean function on variables Vars(𝑔) =
+∅ that is always false, hence 𝛼 0
+𝑔 = 0. Otherwise 𝑔 has ex-
+actly two input gates; let us denote them 𝑔1 and 𝑔2. Ob-
+serve that Vars(𝑔) = Vars(𝑔1) ∪ Vars(𝑔2) by definition. De-
+def
+fine 𝑆1
+= Vars(𝑔1) \
+Vars(𝑔2). Since 𝑔 is deterministic, we have:
+
+def
+= Vars(𝑔2) \Vars(𝑔1) and similarly 𝑆2
+
+SAT(𝜑𝑔) = (SAT(𝜑𝑔1 ) ⊗ 2𝑆1 ) ∪ (SAT(𝜑𝑔2 ) ⊗ 2𝑆2 )
+
+with the union being disjoint. By intersecting with the as-
+signments of Vars(𝑔) of size ℓ, we obtain:
+
+SATℓ (𝜑𝑔) =(cid:2)(SAT(𝜑𝑔1 ) ⊗ 2𝑆1 ) ∩ {𝜈 ⊆ Vars(𝑔) | |𝜈 | = ℓ }(cid:3)
+
+∪ (cid:2)(SAT(𝜑𝑔2 ) ⊗ 2𝑆2 ) ∩ {𝜈 ⊆ Vars(𝑔) | |𝜈 | = ℓ }(cid:3)
+with again the middle union being disjoint, therefore:
+#SATℓ (𝜑𝑔) =|(SAT(𝜑𝑔1 ) ⊗ 2𝑆1 ) ∩ {𝜈 ⊆ Vars(𝑔) | |𝜈 | = ℓ }|
+
++ |(SAT(𝜑𝑔2 ) ⊗ 2𝑆2 ) ∩ {𝜈 ⊆ Vars(𝑔) | |𝜈 | = ℓ }|
+
+We now explain how to compute the first term, that is,
+|(SAT(𝜑𝑔1 ) ⊗ 2𝑆1 ) ∩ {𝜈 ⊆ Vars(𝑔) |
+|𝜈 | = ℓ }|; the second
+term is similar. This is equal3 to
+
+min(ℓ, |Vars(𝑔1) |)
+∑︁
+
+𝑖 = max(0, ℓ−|𝑆1 |)
+
+𝛼𝑖
+𝑔1 ×
+
+(cid:19)
+
+.
+
+(cid:18) |𝑆1|
+ℓ − 𝑖
+
+Decomposable ∧-gate. If 𝑔 is a decomposable ∧-gate with no
+input
+then 𝜑𝑔 is the Boolean function on variables
+Vars(𝑔) = ∅ that is always true, hence 𝛼 0
+𝑔 = 1. Otherwise,
+let 𝑔1 and 𝑔2 be the two input gates of 𝑔. Since 𝑔 is decompos-
+able we have Vars(𝑔) = Vars(𝑔1) ∪ Vars(𝑔2) with the union
+being disjoint. But then we have:
+
+SAT(𝜑𝑔) = SAT(𝜑𝑔1 ) ⊗ SAT(𝜑𝑔2 )
+
+We now intersect with the set of assignments of Vars(𝑔) of
+size 𝑙 to obtain
+
+𝛼 ℓ
+𝑔 = #SATℓ (𝜑𝑔) =
+
+min(ℓ, |Vars(𝑔1) |)
+∑︁
+
+𝑔1 × 𝛼 ℓ−𝑖
+𝛼𝑖
+𝑔2
+
+𝑖 = max(0, ℓ−|Vars(𝑔2) |)
+This concludes the proof of the lemma, as well as the proof
+□
+of Proposition 4.4.
+
+Algorithm. Algorithm 1 depicts the solution underlying Propo-
+sition 4.4. The subroutine ComputeAll#SAT𝑘 takes as input a d-D
+circuit 𝐶 and outputs all the values #SAT0 (𝐶), . . . , #SAT|Vars(𝐶) | (𝐶).
+This function computes values 𝛼 ℓ
+𝑔 by bottom-up induction on 𝐶 just
+as in the proof of Lemma 4.5, by using the appropriate equations de-
+pending on the type of each gate. Then, Lines 1–5 in the algorithm
+simply follow the part of the proof that starts at the beginning of
+this section until Lemma 4.5. For instance, the returned value on
+Line 5 corresponds to Equation (3). A quick inspection of Algo-
+rithm 1 reveals that, if one ignores the complexity of performing
+arithmetic operations (i.e., considering that additions and multipli-
+cations take constant time), the running time is 𝑂 (|𝐶 | · |𝐷n|2). If
+one wishes to compute the Shapley value of every endogenous fact
+(as will be done in the experiments), then the overall complexity
+is 𝑂 (|𝐶 | · |𝐷n|3). Last, we point out that, in the case of non-Boolean
+queries, this cost is incurred for each potential output tuple that
+one wants to analyze.
+
+4.2 Implementation Architecture
+In this section, we present our architecture for implementing the
+knowledge compilation approach over realistic datasets. The rele-
+vant parts, for now, are the middle and top part of Figure 3, which
+we next explain. Given a database 𝐷 = 𝐷x ∪ 𝐷n, a query 𝑞( ¯𝑥), a
+tuple ¯𝑡 of the same arity as ¯𝑥, and an endogenous fact 𝑓 ∈ 𝐷n, we
+want to compute Shapley(𝑞[ ¯𝑥/¯𝑡], 𝐷x, 𝐷n, 𝑓 ). We use two existing
+tools to help us with this task: ProvSQL [31] and the knowledge
+compiler c2d [10]. ProvSQL is a tool integrated into PostgreSQL that
+can perform provenance (lineage) computation in various semir-
+ings. For our purposes, a knowledge compiler is a tool that takes as
+input a Boolean function in CNF and outputs an equivalent Boolean
+function into another formalism. The target formalism that we will
+use is the so-called “d-DNNF". A d-DNNF is simply a deterministic
+
+3This comes from the fact that, for disjoint 𝑋1, 𝑋2 and assignments 𝜈1 of 𝑋1 and 𝜈2
+of 𝑋2 we have |𝜈1 ∪ 𝜈2 | = |𝜈1 | + |𝜈2 |, and Vars(𝜑𝑔1 ) and 𝑆1 are disjoint.
+
+Algorithm 1: Shapley values from deterministic and
+decomposable Boolean circuits
+
+Input
+
+: Deterministic and decomposable Boolean
+circuit 𝐶 with output gate 𝑔output
+representing ELin(𝑞, 𝐷x, 𝐷n) and an
+endogenous fact 𝑓 ∈ 𝐷n.
+Output : The value Shapley(𝑞, 𝐷x, 𝐷n, 𝑓 ).
+
+1 Complete 𝐶 so that Vars(𝑔output) = 𝐷n;
+2 Compute 𝐶1 = 𝐶 [𝑓 → 1] and 𝐶2 = 𝐶 [𝑓 → 0];
+
+// Partial evaluations of 𝐶 by setting 𝑓 to 1
+and to 0
+
+3 Γ = ComputeAll#SAT𝑘 (𝐶1);
+4 Δ = ComputeAll#SAT𝑘 (𝐶2);
+
+5 return
+
+|𝐷n |−1
+∑︁
+
+𝑘=0
+
+𝑘! (|𝐷n| − 𝑘 − 1)!
+|𝐷n|!
+
+// As an array
+// As an array
+
+· (Γ [𝑘] − Δ[𝑘]);
+
+6 Def ComputeAll#SAT𝑘 (C):
+7
+
+Preprocess 𝐶 so that each ∨-gate and ∧-gate has
+fan-in exactly 0 or 2;
+
+8
+
+9
+
+10
+
+Compute the set Vars(𝑔) for every gate 𝑔 in 𝐶;
+Compute values 𝛼 ℓ
+and ℓ ∈ {0, . . . , |Vars(𝑔)|} by bottom-up induction
+on 𝐶 using the inductive relations from the proof of
+Lemma 4.5;
+
+𝑔 for every gate 𝑔 in 𝐶
+
+return [𝛼 0
+
+𝑔output
+
+, . . . , 𝛼 |Vars(𝐶) |
+𝑔output
+
+];
+
+and decomposable Boolean circuit such that negation gates are only
+applied to variables (NNF stands for negation normal form).4
+
+In our case, we use ProvSQL as follows: we feed it the database 𝐷,
+query 𝑞( ¯𝑥) and tuple ¯𝑡, and ProvSQL computes Lin(𝑞 [ ¯𝑥/¯𝑡], 𝐷) as
+a Boolean circuit, called 𝐶 in Figure 3. We note here that for SPJU
+queries, 𝐶 can be computed in polynomial-time data complexity. We
+then set to 1 all the exogenous facts to obtain a Boolean circuit 𝐶 ′
+for ELin(𝑞[ ¯𝑥/¯𝑡], 𝐷x, 𝐷n). Then, ideally, we would like to use the
+knowledge compiler to transform 𝐶 ′ into an equivalent d-DNNF, in
+order to be able to apply Algorithm 1. Unfortunately, every knowl-
+edge compiler that we are aware of takes as input Boolean formulas
+in conjunctive normal form (CNF), and not arbitrary Boolean cir-
+cuits. To circumvent it, we use the Tseytin transformation [35] to
+def
+transform the circuit 𝐶 ′ into a CNF 𝜑
+= Tseytin(𝐶 ′), whose size
+is linear in that of 𝐶 ′. This CNF 𝜑 has the following properties:
+(1) its variables are the variables of 𝐶 ′ plus a set 𝑍 of additional
+variables; (2) for every valuation 𝜈 ⊆ Vars(𝐶 ′) that satisfies 𝐶 ′,
+there exists exactly one valuation 𝜈 ′ ⊆ 𝑍 such that 𝜑 (𝜈 ∪ 𝜈 ′) = 1;
+and (3) for every valuation 𝜈 ⊆ Vars(𝐶 ′) that does not satisfy 𝐶 ′,
+there is no valuation 𝜈 ′ ⊆ 𝑍 such that 𝜑 (𝜈 ∪ 𝜈 ′) = 1. We then
+
+4This additional NNF restriction is not important here, but, as far as we know, no
+knowledge compiler has the more general “deterministic and decomposable circuits”
+(without NNF) as a target. It is currently unknown whether d-DNNFs and deterministic
+and decomposable circuits are exponentially separated or not [11, Table 7].
+
+7
+
+feed 𝜑 to the knowledge compiler, which produces a d-DNNF 𝐶 ′′
+equivalent to 𝜑 (the variables of 𝐶 ′′ are again Vars(𝐶 ′) ∪ 𝑍 ). We
+note here that there is no theoretical guarantee that this step is
+efficient; indeed, the task of transforming a CNF into an equivalent
+d-D circuit is FP#P-hard in general; see Section 6 for an experimen-
+tal analysis of its tractability in practice. Next, we need to eliminate
+the additional variables 𝑍 in order to be able to apply Algorithm 1.
+To this end, we use the following Lemma.
+
+Lemma 4.6. Given as input a d-DNNF 𝐶 ′′ that is equivalent to
+Tseytin(𝐶 ′) for a Boolean circuit 𝐶 ′, we can compute in time 𝑂 (|𝐶 ′′|)
+a d-DNNF 𝐶 ′′′ that is equivalent to 𝐶 ′ (in particular, the variables
+of 𝐶 ′′′ are the same as the variables of 𝐶 ′; in our case, they consist
+only of endogenous facts).
+
+Proof sketch. Let 𝑍 be the additional variables coming from
+the Tseytin transformation. First, we remove all the gates of 𝐶 ′′
+that are not satisfiable, and then we remove all the gates that are
+not connected to the output gate. Now, let 𝐶 ′′′ be the circuit that is
+obtained from this intermediate circuit by replacing every literal 𝑧
+or ¬𝑧 for 𝑧 ∈ 𝑍 by a constant 1-gate. We return 𝐶 ′′′. The proof that
+this algorithm is correct uses the properties (1–3) of the Tseytin
+□
+transformation, and is omitted due to lack of space.
+
+Using this lemma, we obtain a d-DNNF 𝐶 ′′′ for the endogenous
+lineage ELin(𝑞[ ¯𝑥/¯𝑡], 𝐷x, 𝐷n), to which we can finally apply Algo-
+rithm 1 to obtain the value Shapley(𝑞[ ¯𝑥/¯𝑡], 𝐷x, 𝐷n, 𝑓 ).
+
+5 INEXACT COMPUTATION
+As we will show in the experimental section, the exact computation
+algorithm that we have proposed performs well in most cases but
+is too costly in others. In the latter cases, we may wish to resort
+to methods that do not necessarily compute exact Shapley values,
+if their results still typically suffice to determine the order of facts
+according to their Shapley contribution. In this section we propose
+CNF Proxy, a heuristic solution that is very efficient, and we will
+experimentally show that the ranking of facts based on CNF Proxy
+tends to match the ranking based on the exact Shapley values.
+
+At a high level, CNF Proxy is based on the observation that hav-
+ing a high Shapley score is correlated (albeit in a complex manner)
+with (1) appearing many times in the provenance and (2) having
+few “alternatives,” that is, facts that could compensate for the ab-
+sence of the given fact. The first factor (number of occurrences)
+may be directly read from the CNF obtained by applying the Tseytin
+transformation to the provenance circuit (𝐶 ′ in Figure 3). It is also
+easy to read from the CNF partial information about the second
+factor (number of alternatives), namely the number of alternatives
+in each clause (ignoring intricate dependencies between clauses).
+Next, we present the details of CNF Proxy.
+
+We will start with an auxiliary definition, denoting the Shapley
+
+value of a general function ℎ : 2𝑋 → R and a variable 𝑥 ∈ 𝑋 as
+
+Shapley(ℎ, 𝑥)
+
+def
+=
+
+∑︁
+
+𝑆 ⊆𝑋 \{𝑥 }
+
+|𝑆 |!(|𝑋 | − |𝑆 | − 1)!
+|𝑋 |!
+
+(cid:0)ℎ(𝑆 ∪ {𝑥 }) − ℎ(𝑆)(cid:1).
+
+Naturally, if ℎ = ELin(𝑞, 𝐷n, 𝐷x), i.e., the endogenous lineage, and 𝑥
+is a fact in 𝐷n, then Shapley(ℎ, 𝑥) = Shapley(𝑞, 𝐷n, 𝐷x, 𝑥).
+
+8
+
+Algorithm 2: CNF Proxy
+
+Input
+Output : The value Shapley((cid:101)
+
+: CNF 𝜑 and a set of endogenous facts 𝐷n.
+𝜑, 𝑥) for each 𝑥 ∈ 𝐷n.
+
+1 𝑛 ← |𝜑.𝑐𝑙𝑎𝑢𝑠𝑒𝑠 ()|;
+2 𝑣 ← 0 |𝐷n |;
+3 for 𝜓 ∈ 𝜑.𝑐𝑙𝑎𝑢𝑠𝑒𝑠 () do
+L ← 𝜓 .𝑙𝑖𝑡𝑒𝑟𝑎𝑙𝑠 ();
+4
+𝑚 ← |L|;
+𝑝𝑜𝑠 ← {ℓ ∈ L | ℓ is positive};
+𝑛𝑒𝑔 ← {ℓ ∈ L | ℓ is negative};
+for ℓ ∈ 𝑝𝑜𝑠 ∩ 𝐷n do
+
+6
+
+7
+
+5
+
+8
+
+9
+
+10
+
+11
+
+12
+
+𝑣 [ℓ.𝑣𝑎𝑟 ()] ← 𝑣 [ℓ.𝑣𝑎𝑟 ()] +
+
+end
+for ℓ ∈ 𝑛𝑒𝑔 ∩ 𝐷n do
+
+𝑣 [ℓ.𝑣𝑎𝑟 ()] ← 𝑣 [ℓ.𝑣𝑎𝑟 ()] −
+
+end
+
+13
+14 end
+15 return 𝑣
+
+// As an array
+
+1
+𝑛𝑚 ·( 𝑚−1
+|𝑛𝑒𝑔|)
+
+;
+
+1
+𝑛𝑚 ·( 𝑚−1
+|𝑝𝑜𝑠 |)
+
+;
+
+Now, note that for a CNF formula 𝜑 = (cid:211)𝑛
+
+𝑖=1 𝜓𝑖 (where each 𝜓𝑖 is
+a disjunction of literals) and an assignment 𝜈 it holds that 𝜑 (𝜈) =
+(cid:206)𝑛
+𝑖=1 𝜓𝑖 (𝜈). Instead of calculating the Shapley values of a CNF
+formula 𝜑 (which may be a hard problem), CNF Proxy computes
+Shapley values with respect to a proxy function, denoted
+𝜑. The
+(cid:101)
+proxy function of 𝜑 is defined as the sum (instead of the product)
+def
+1
+= (cid:205)𝑛
+𝑛𝜓𝑖 (𝜈). Intuitively, a fact that
+of the clauses of 𝜑, i.e.,
+appears in many clauses of the CNF 𝜑 will occur in many summands
+of
+𝜑, the
+(cid:101)
+number of alternatives in each clause will be reflected in decreased
+value of the respective summands.
+
+𝜑, and when we compute Shapley values with respect to
+(cid:101)
+
+𝜑 (𝜈)
+(cid:101)
+
+𝑖=1
+
+12 , 3
+
+12 , 1
+
+12 , 1
+
+Example 5.1. Consider the CNF formula 𝜑 = (𝑥1 ∨ 𝑥2) ∧ (𝑥1 ∨
+𝑥3 ∨ 𝑥4). The Shapley values of 𝑥1, 𝑥2, 𝑥3, 𝑥4 are 7
+12 re-
+spectively. Note that 𝑥1 has the highest influence, which intuitively
+may be attributed to its appearance in two clauses whereas each
+other variable appears only in a single clause. The variable 𝑥2 has
+more influence than 𝑥3 and 𝑥4, intuitively since it has less alterna-
+tives. These comparative features are preserved in
+𝜑 = (𝑥1 ∨ 𝑥2) +
+(cid:101)
+(𝑥1 ∨ 𝑥3 ∨ 𝑥4), and indeed the Shapley values of 𝑥1, 𝑥2, 𝑥3, 𝑥4 with
+3 respectively. Observe that although the
+respect to
+values assigned to the variables are very different from their actual
+Shapley values, their order remains intact in this case.
+
+𝜑 are 5
+(cid:101)
+
+6 , 1
+
+3 , 1
+
+2 , 1
+
+Due to the linearity of Shapley values, their computation with
+𝜑 is much more efficient, as implied by the following
+(cid:101)
+
+respect to
+lemma (whose proof we omit for space reasons):
+
+𝑖=1
+
+Lemma 5.2. Let ℎ = (cid:205)𝑛
+
+1
+𝑛𝜓𝑖 , where each 𝜓𝑖 is a Boolean function
+representing a disjunction of literals. Without loss of generality let
+us assume that for each 𝜓𝑖 there is no variable that appears in more
+than one literal of 𝜓𝑖 . Denote by 𝑎𝑖 and 𝑏𝑖 the number of positive and
+negative literals in 𝜓𝑖 respectively. Then, for every variable 𝑥, it holds
+
+The Shapley value
+Shapley(𝑞[ ¯𝑥/¯𝑡], 𝐷x, 𝐷n, 𝑓 )
+
+Database 𝐷 = 𝐷x ∪ 𝐷n
+Fact 𝑓 ∈ 𝐷n
+Query 𝑞( ¯𝑥)
+Answer ¯𝑡
+
+Input
+
+Algorithm 1
+
+d-DNNF 𝐶 ′′′ for ELin(𝑞[ ¯𝑥/¯𝑡], 𝐷x, 𝐷n)
+(w/o extra vars)
+
+Lemma 4.6
+
+d-DNNF 𝐶 ′′ (w/ extra vars)
+equivalent to 𝜑
+
+ProvSQL
+
+Boolean circuit 𝐶
+for Lin(𝑞[ ¯𝑥/¯𝑡], 𝐷)
+
+Partial eval: set
+exo vars to 1
+
+Bool. circuit 𝐶 ′ for
+ELin(𝑞[ ¯𝑥/¯𝑡], 𝐷x, 𝐷n)
+
+Tseytin
+transform
+
+CNF formula 𝜑
+(w/ extra vars)
+
+Knowledge
+compiler
+
+Proxy
+formula
+
+The value Shapley((cid:101)
+(heuristics)
+
+𝜑, 𝑓 )
+
+Algorithm 2
+
+𝜑 (w/ extra vars)
+(cid:101)
+
+Figure 3: Our implementation architecture.
+
+(cid:205)𝑛
+
+that Shapley(ℎ, 𝑥) = 1
+𝑛
+1
+
+(𝑎𝑖 +𝑏𝑖 ) ·(𝑎𝑖 +𝑏𝑖 −1
+−1
+(𝑎𝑖 +𝑏𝑖 ) ·(𝑎𝑖 +𝑏𝑖 −1
+
+0
+
+Φ(𝜓𝑖, 𝑥) =
+
+𝑎𝑖
+
+𝑏𝑖
+
+
+
+𝑖=1 Φ(𝜓𝑖, 𝑥), where
+
+if 𝑥 appears in 𝜓𝑖 in positive form;
+
+if 𝑥 appears in 𝜓𝑖 in negative form;
+
+)
+
+)
+
+otherwise.
+
+Algorithm 2 then describes the operation of CNF Proxy, com-
+puting Shapley values of
+𝜑 according to Lemma 5.2. The input to
+(cid:101)
+the algorithm is a CNF formula 𝜑 and the set of endogenous facts
+𝐷n. In Line 1, CNF Proxy counts the number 𝑛 of clauses of 𝜑, and
+in Line 2 it initializes the contribution of every variable of 𝜑 to zero.
+Then, it iterates over the clauses (Line 3). For each clause, it counts
+the number 𝑚 of literals, and identifies the set of positive and nega-
+tive literals, 𝑝𝑜𝑠 and 𝑛𝑒𝑔 respectively (Lines 4–7). In Lines 9 and 12
+we add (resp., subtract) quantities for each variable in a positive
+(resp., negative) literal according to Lemma 5.2 (note that 𝑚 corre-
+sponds to 𝑎𝑖 + 𝑏𝑖 as denoted in the lemma). Finally, in Line 15 the
+algorithm returns the contribution value of each fact 𝑥 ∈ 𝐷n based
+𝜑, 𝑥). Observe that CNF Proxy runs in linear time in
+on Shapley((cid:101)
+the size of 𝜑 (which itself, being the Tseytin transformation of the
+provenance circuit 𝐶 ′ from Figure 3, is linear in 𝐶 ′).
+
+Example 5.3. Recall the queries 𝑞1, 𝑞2, 𝑞 and their lineages de-
+
+picted in Figure 1. Using endogenous lineages, we have:
+
+• ELin(𝑞1, 𝐷n, 𝐷x) = 𝑎1
+• ELin(𝑞2, 𝐷n, 𝐷x) = (𝑎2 ∧ 𝑎4) ∨ (𝑎2 ∧ 𝑎5) ∨ (𝑎3 ∧ 𝑎4) ∨
+
+(𝑎3 ∧ 𝑎5) ∨ (𝑎6 ∧ 𝑎7)
+
+• ELin(𝑞, 𝐷n, 𝐷x) =𝑎1 ∨ (𝑎2 ∧ 𝑎4) ∨ (𝑎2 ∧ 𝑎5) ∨ (𝑎3 ∧ 𝑎4) ∨
+(𝑎3 ∧ 𝑎5) ∨ (𝑎6 ∧ 𝑎7)
+
+The lineage of 𝑞1 is a CNF with a single variable, thus the contribu-
+tion of 𝑎1 to 𝑞1 as computed by Algorithm 2 is 1, which is indeed
+equal to Shapley(𝑞1, 𝐷n, 𝐷x, 𝑎1). Applying the Tseytin transforma-
+tion to the lineage of 𝑞2 introduces 6 new variables ({𝑧𝑖 }6
+𝑖=1) and
+results in the following equisatisfiable CNF:
+
+(𝑧1) ∧ (𝑧1 ∨ 𝑧2) ∧ (𝑧1 ∨ 𝑧3) ∧ (𝑧1 ∨ 𝑧4) ∧ (𝑧1 ∨ 𝑧5) ∧ (𝑧1 ∨ 𝑧6) ∧
+(𝑧1 ∨ 𝑧2 ∨ 𝑧3 ∨ 𝑧4 ∨ 𝑧5 ∨ 𝑧6) ∧
+(𝑧2 ∨ 𝑎2) ∧ (𝑧2 ∨ 𝑎4) ∧ (𝑧2 ∨ 𝑎2 ∨ 𝑎4) ∧ (𝑧3 ∨ 𝑎2) ∧ (𝑧3 ∨ 𝑎5) ∧ (𝑧3 ∨ 𝑎2 ∨ 𝑎5) ∧
+(𝑧4 ∨ 𝑎3) ∧ (𝑧4 ∨ 𝑎4) ∧ (𝑧4 ∨ 𝑎3 ∨ 𝑎4) ∧ (𝑧5 ∨ 𝑎3) ∧ (𝑥5 ∨ 𝑎5) ∧ (𝑧5 ∨ 𝑎3 ∨ 𝑎5) ∧
+(𝑧6 ∨ 𝑎6) ∧ (𝑧6 ∨ 𝑎7) ∧ (𝑧6 ∨ 𝑎6 ∨ 𝑎7)
+
+Algorithm 2 iterates over the above clauses, and computes the
+contribution of the endogenous facts 𝐷n over the proxy function.
+Note that the facts 𝐷n appear in clauses of two forms. The first form
+
+9
+
+= −1
+
+1
+22·2·(1
+1)
+
+−1
+22·3·(2
+1)
+
+= 1
+is (cid:0)𝑧 𝑗 ∨ 𝑎𝑖 (cid:1); appearance in this type of clause adds
+44
+to the contribution of 𝑎𝑖 . The second form is (cid:0)𝑧 𝑗 ∨ 𝑎𝑖 ∨ 𝑎ℎ (cid:1), which
+132 . Note that each of 𝑎2, 𝑎3, 𝑎4, 𝑎5 has two appear-
+adds
+ances in clauses of the first form, and one appearance in clauses
+of the second form. Thus, according to Algorithm 2 the contri-
+5
+bution of 𝑎2, 𝑎3, 𝑎4, 𝑎5 is
+132 ≈ 0.038. In contrast, 𝑎6 and 𝑎7 each
+have a single appearance in a clause of the first form and a sin-
+gle appearance in a clause of the second form, thus their contri-
+bution is 1
+66 ≈ 0.015. We note that the values calculated by Al-
+gorithm 2 are very different from the actual Shapley values, as
+Shapley(𝑞2, 𝐷n, 𝐷x, 𝑎𝑖 ) = 11
+60 ≈ 0.183 for 𝑎𝑖 ∈ {𝑎2, 𝑎3, 𝑎4, 𝑎5} and
+Shapley(𝑞2, 𝐷n, 𝐷x, 𝑎𝑖 ) = 2
+15 ≈ 0.133 for 𝑎𝑖 ∈ {𝑎6, 𝑎7}. However,
+the facts 𝑎2, 𝑎3, 𝑎4, 𝑎5, are correctly determined to be more influen-
+tial than 𝑎6 and 𝑎7.
+
+Our experimental evaluation indicates that in most cases, the
+ordering of facts according to the values assigned to them by Algo-
+rithm 2 agrees with the order obtained by using the actual Shapley
+values. There is however no theoretical guarantee that this will
+always be the case, as shown by the following example.
+
+Example 5.4. Applying the Tseytin transformation over the lin-
+eage of 𝑞 will result in a CNF similar to that obtained for 𝑞2, with
+a new variable (𝑧7) and the new clauses (𝑧1 ∨ 𝑧7) ∧ (𝑧7 ∨ 𝑎1) ∧
+(𝑧7 ∨ 𝑎1). In addition, the disjunct ∨𝑧7 will be added to the clause
+(𝑧1 ∨ 𝑧2 ∨ 𝑧3 ∨ 𝑧4 ∨ 𝑧5 ∨ 𝑧6). Similarly to the case of 𝑞2, the contri-
+butions of 𝑎2, 𝑎3, 𝑎4, and 𝑎5 are correctly determined to be larger
+than those of 𝑎6 and 𝑎7. As for 𝑎1, its contribution according to
+Algorithm 2 is 0 while in fact it is the most influential fact.
+
+6 EXPERIMENTS
+Our system is implemented in Python 3.6 and using the PostgreSQL
+11.10 database engine, and the experiments were performed on
+a Linux Debian 14.04 machine with 1TB of RAM and an Intel(R)
+Xeon(R) Gold 6252 CPU @ 2.10GHz processor. ProvSQL [31] was
+used to capture the provenance. For knowledge compilation we
+have used the c2d compiler [9, 10]. The source code of our imple-
+mentation is available in [13].
+
+Since no standard benchmark for our problem exists, we have
+created such a benchmark of 40 queries over the TPC-H (1.4GB)
+and IMDB (1.2GB) databases.The TPC-H queries are based on the
+ones in [34], where we have only removed nested queries (which
+ProvSQL does not handle) and aggregation operations (for which
+
+provenance is not Boolean). The queries for the IMDB database are
+based on the join queries in [19], where for each query we have
+added a (last) projection operation over one of the join attributes to
+make provenance more complex and thus more challenging for our
+algorithms. The resulting queries are quite complex: in particular,
+only 4 out of the 40 are hierarchical. See [13] for details of the
+obtained queries.
+
+6.1 Exact computation
+We have evaluated our solution for exact Shapley computation,
+presented in Section 4.2, on each of the 40 queries. In total, we
+have obtained 95,803 output tuples along with their provenance
+expressions (computed with ProvSQL). We have then transformed
+each provenance expression into a d-DNNF structure using the
+c2d [9, 10] knowledge compiler. In this experiment, for both the
+knowledge compilation (KC) and Shapley evaluation steps we have
+set a timeout of one hour (in fact, as we show below, a much shorter
+timeout of 2.5 seconds typically suffices). In case the compilation
+completed successfully within this timeframe, we have computed
+the Shapley values using Algorithm 1. Table 1 presents the execu-
+tion times of our solution for 16 representative queries; next we
+will overview different aspects of the results.
+
+Success rate. We report here the rate of successful executions.
+The IMDB queries resulted in 95,636 output tuples; the KC step
+completed successfully for 95,599 out of them, where all 37 failures
+were the result of insufficient memory. For each of the IMDB output
+tuples that were successfully compiled into a d-DNNF, we have
+executed Algorithm 1; only a single execution failed in this step (due
+to a timeout of one hour). Overall, the exact computation of Shapley
+values was successful for 95,598 out of the 95,636 IMDB output
+tuples (i.e., 99.96% success rate). The TPC-H queries resulted in 167
+output tuples; the KC step has completed successfully for 141 out
+of them, again all 26 failures were the result of insufficient memory.
+For all TPC-H outputs that compiled successfully Algorithm 1 was
+successful, yielding an overall 84.43% success rate.
+
+Execution time. For each of the 40 queries, we have measured
+the execution time of each step of the computation. First, we have
+measured (in the column “Execution time”) the execution time in
+PostgreSQL, which includes provenance generation for every out-
+put tuple using ProvSQL. Then, for each tuple ¯𝑡 in the output of the
+query, we have measured the KC execution time and the execution
+time of Algorithm 1 to compute the contribution of all input facts
+with respect to the output tuple ¯𝑡. For the latter two algorithms, the
+execution times varied significantly for the different output tuples,
+and thus we report the execution times for different percentiles
+(mean, p25, p50, p75 and p99). Observe that the computation is
+typically efficient; outliers include q11d for which the execution
+time of Algorithm 1 was over 96 seconds in average.
+
+Figure 4 depicts the running time of the KC step and of the
+computation of Shapley values from the d-DNNF as a function of
+different features of the provenance, such as the number of facts
+appearing in the provenance, the number of clauses in its CNF rep-
+resentation, and the number of gates in its d-DNNF representation.
+
+(a) KC time per #facts
+
+(b) Alg. 1 time per #facts
+
+(c) KC time per #CNF clauses
+
+(d) Alg. 1 time per #CNF clauses
+
+(e) KC time per d-DNNF size
+
+(f) Alg. 1 time per d-DNNF size
+
+Figure 4: Running times of knowledge compilation and com-
+putation of Shapley values from the d-DNNF as function of
+the number of distinct facts, CNF clauses, and d-DNNF size
+
+depicts the running time of Algorithm 1 over 8 representative query
+outputs as a function of the number of facts in the lineitem table.
+Figure 5a depicts 4 representative query outputs, for which the
+running time takes a few milliseconds, e.g., for “Q3 23426” (result
+23426 of query 𝑄3) and the full TPC-H dataset, the computation
+of Shapley values for all relevant input facts complete in 4.3ms.
+In contrast, Figure 5b depicts 4 query outputs for which the exact
+computation failed to complete over the full TPC-H database. We
+observe that the algorithm does succeed in these cases if we execute
+the queries over subsets of the input database, though its execution
+time may still be high: e.g., if we take a “slice” of the lineitem table
+consisting of 480,097 facts, then computation of the contribution of
+all input facts w.r.t. “Q9 ALGERIA” takes 556sec.
+
+(a) Representative outputs
+
+(b) “Difficult" outputs
+
+Scalability. To evaluate the scalability of Algorithm 1 we have
+further looked at different scales of the TPC-H database. Figure 5
+
+Figure 5: Alg. 1 running time for various TPC-H query out-
+puts as function of table lineitem size
+
+10
+
+Table 1: Statistics on the exact computation of Shapley values for 16 representative queries
+
+Dataset
+
+Query
+
+H
+-
+C
+P
+T
+
+B
+D
+M
+I
+
+3
+5
+7
+10
+11
+16
+18
+19
+1a
+6b
+7c
+8d
+11a
+11d
+13c
+15d
+16a
+
+#Joined
+tables
+3
+6
+6
+4
+6
+3
+4
+2
+5
+5
+8
+7
+8
+8
+9
+9
+8
+
+#Filter
+conditions
+5
+9
+8
+6
+7
+5
+3
+21
+10
+8
+21
+10
+18
+16
+19
+18
+15
+
+Execution
+time [sec]
+20980.71
+48.67
+30.57
+4.72
+0.13
+1.25
+37.31
+2.04
+0.25
+2.61
+77.33
+145.10
+3.20
+56.99
+2.44
+24.25
+5.56
+
+#Output
+tuples
+100
+5
+4
+10
+10
+10
+10
+1
+35
+1
+2415
+44517
+10
+210
+14
+207
+173
+
+Success
+rate
+100%
+0%
+0%
+100%
+100%
+100%
+100%
+100%
+100%
+100%
+99%
+99.9%
+100%
+98.1%
+100%
+97.6%
+100%
+
+6.2 Inexact computation
+As observed above, computing exact Shapley values using our solu-
+tion for a given output tuple is typically fast, but may be costly or
+even fail in some cases. In this section we evaluate inexact compu-
+tation alternatives.
+
+Algorithms. We compare three algorithms: CNF Proxy (Section 5)
+
+and two existing baselines: Monte Carlo, and Kernel SHAP.
+
+Monte Carlo. This is a well-known sampling algorithm [23]
+for approximating Shapley values in general. To employ the Monte
+Carlo algorithm in our setting, we feed it a provenance expression ℎ
+containing 𝑛 distinct input facts, and a budget of 𝑟 · 𝑛 samples, for
+some 𝑟 ∈ Z+. The Shapley value of each fact 𝑓 is approximated by
+sampling 𝑟 permutations (𝜋1, . . . , 𝜋𝑟 ) of the input facts, and then
+(cid:17), where 𝑆𝜋𝑖,<𝑓 is
+(cid:16)
+outputting 1
+ℎ(𝑆𝜋𝑖,<𝑓 ∪ {𝑓 }) − ℎ(𝑆𝜋𝑖,<𝑓 )
+the coalition of all facts preceding 𝑓 in the permutation 𝜋𝑖 .
+
+𝑟 · (cid:205)𝑟
+
+𝑖=1
+
+Kernel SHAP. Lundberg and Lee [22] have defined the notion
+of SHAP values in the context of ML explainability. Given a function
+ℎ : R𝑑 → R (the model whose decisions we want to explain), a
+probability distribution D on R𝑑 (the inputs), and an input vector
+¯𝑒 ∈ R𝑑 , SHAP values were defined to measure the contribution of
+¯𝑒’s features to the outcome ℎ( ¯𝑒). To overcome the issue that ℎ does
+not operate over subsets of features, the notion of SHAP-score has
+been defined as follows
+
+SHAP(ℎ, ¯𝑒, 𝑥)
+
+def
+=
+
+∑︁
+
+𝑆 ⊆𝑋 \{𝑥 }
+
+|𝑆 |!(|𝑋 | − |𝑆 | − 1)!
+|𝑋 |!
+
+(ℎ ¯𝑒 (𝑆 ∪{𝑥 })−ℎ ¯𝑒 (𝑆)),
+
+where 𝑋 is the set of 𝑑 features, 𝑥 is a specific feature whose
+contribution we wish to assess, and ℎ ¯𝑒 : 2𝑋 → R is defined by
+def
+= E¯𝑧∼D [ℎ( ¯𝑧) | ¯𝑒𝑆 = ¯𝑧𝑆 ], where ¯𝑒𝑆 and ¯𝑧𝑆 denote the
+ℎ ¯𝑒 (𝑆)
+vectors ¯𝑒 and ¯𝑧 restricted to the features in 𝑆.
+
+In [22] the authors have proposed a method for approximating
+SHAP values, called Kernel SHAP. Kernel SHAP assumes feature
+independence and estimates the probability by multiplying the mar-
+ginal distributions (cid:206)𝑖∉𝑆 Pr(𝑧𝑖 ). The marginal probabilities Pr(𝑧𝑖 )
+in turn are estimated from a background data 𝑇 . To approximate
+SHAP values, Kernel SHAP then samples 𝑚 coalitions 𝑆1, . . . , 𝑆𝑚 of
+features, and trains a linear model 𝑔 : 2𝑋 → R by minimizing the
+
+11
+
+KC execution times [sec]
+p50
+0.07
+-
+-
+0.13
+0.08
+0.18
+0.08
+1.20
+0.08
+0.44
+0.28
+0.18
+0.48
+0.32
+0.18
+0.48
+0.14
+
+p75
+0.08
+-
+-
+0.14
+0.08
+0.33
+0.18
+1.20
+0.13
+0.44
+0.63
+0.29
+1.14
+0.78
+0.28
+1.28
+0.20
+
+p25
+0.04
+-
+-
+0.13
+0.08
+0.13
+0.08
+1.20
+0.08
+0.44
+0.18
+0.13
+0.18
+0.19
+0.13
+0.24
+0.13
+
+Mean
+0.06
+-
+-
+0.14
+0.09
+0.26
+0.13
+1.20
+0.17
+0.44
+0.82
+0.26
+0.75
+0.99
+0.22
+1.89
+0.18
+
+p99 Mean
+0.00
+0.13
+-
+-
+-
+-
+0.01
+0.19
+0.01
+0.13
+0.18
+0.57
+0.01
+0.23
+156.06
+1.20
+5.92
+2.10
+0.08
+0.44
+24.28
+9.44
+0.36
+1.09
+23.34
+2.15
+96.19
+5.97
+0.02
+0.53
+70.05
+10.01
+0.02
+0.53
+
+Alg. 1 execution times [sec]
+p50
+0.00
+-
+-
+0.01
+0.00
+0.03
+0.01
+156.06
+0.01
+0.08
+0.05
+0.02
+0.13
+0.06
+0.01
+0.30
+0.01
+
+p25
+0.00
+-
+-
+0.01
+0.00
+0.01
+0.00
+156.06
+0.01
+0.08
+0.02
+0.01
+0.01
+0.02
+0.01
+0.06
+0.01
+
+p75
+0.00
+-
+-
+0.01
+0.01
+0.29
+0.01
+156.06
+0.01
+0.08
+0.39
+0.05
+1.27
+0.48
+0.01
+3.52
+0.02
+
+p99
+0.01
+-
+-
+0.01
+0.03
+0.88
+0.03
+156.06
+206.72
+0.08
+787.12
+2.28
+151.99
+1650.72
+0.06
+1821.13
+0.12
+
+Table 2: Median (resp., mean) performance. Monte Carlo and
+Kernel SHAP use 50 · #facts samples
+
+Execution time
+L1
+L2
+nDCG
+Precision@5
+Precision@10
+
+Monte Carlo
+0.079 (1.875)
+0.439 (0.448)
+0.03 (0.034)
+1.0 (0.992)
+1.0 (0.955)
+1.0 (0.953)
+
+Kernel SHAP
+0.127 (1.978)
+0.110 (0.109)
+0.001 (0.002)
+1.0 (0.998)
+1.0 (0.961)
+1.0 (0.961)
+
+CNF Proxy
+7e-4 (0.002)
+0.317 (0.315)
+0.010 (0.014)
+1.0 (0.999)
+1.0 (0.989)
+1.0 (0.968)
+
+𝑖=1 𝑤𝑖 · (𝑔(𝑆𝑖 ) − ˆℎ ¯𝑒 (𝑆𝑖 ))2, where 𝑤𝑖 is proportional
+weighted loss (cid:205)𝑚
+to the size of 𝑆𝑖 and ˆℎ ¯𝑒 is the estimation of ℎ ¯𝑒 using the feature
+independence assumption. The coefficient associated with a feature
+𝑥 in the trained model 𝑔 is the approximated SHAP value of 𝑥.
+
+We adapt Kernel SHAP to our setting and use it to approximate
+the Shapley values of facts, as follows. The features are the input
+facts of the database, we set ℎ to be the Boolean function represent-
+ing the (endogenous) provenance; the vector of interest, ¯𝑒, has the
+value 1 for all facts, and the background data 𝑇 contains a single
+example with value 0 in all its entries. Note that for such ¯𝑒 and 𝑇 ,
+Kernel SHAP estimates ℎ ¯𝑒 (𝑆) as the result of applying ℎ to a vector
+with ones in 𝑆 features and zeros in the remaining entries.
+
+The input of both Monte Carlo and Kernel SHAP includes a
+budget of 𝑚 samples; for provenance expressions containing 𝑛 dis-
+tinct facts we have experimented with 𝑚 ∈ {10𝑛, 20𝑛, 30𝑛, 40𝑛, 50𝑛}.
+
+Accuracy metrics To evaluate the performance of the above meth-
+ods we have used various metrics, specified below. All metrics were
+computed with respect to the ground truth values obtained by the
+knowledge compilation approach, and thus these experiments are
+confined to the cases where the exact computation succeeded.
+
+• nDCG is the normalized discounted cumulative gain score
+[38], used to compare the ordering based on the inexact
+solution to the ordering based on the ground truth.
+
+• Precision@k is the number of facts that appears in the top-
+𝑘 of both the inexact and exact solutions, divided by 𝑘. This
+was evaluated for 𝑘 ∈ {1, 3, 5, 10}.
+
+• L1 and L2 are the mean absolute error and squared error,
+respectively, of the results of an inexact computation method
+
+(a) Execution time
+
+(b) nDCG
+Figure 6: Comparing various metrics for inexact methods as a function of the sampling budget; CNF Proxy does not rely on
+sampling, thus remains constant for all budgets.
+
+(c) Precision@10
+
+(a) Running time distribution
+
+(b) Worst case running time
+
+(c) nDCG Distribution
+
+(d) Worst case nDCG
+
+(e) Precision@10 distribution
+
+(f) Worst case Precision@10
+
+Figure 7: Comparing inexact methods as a function the num-
+ber of distinct facts in the provenance (𝑛). Sampling methods
+(Kernel SHAP and Monte Carlo) presented with sampling
+budget of 𝑚 = 20𝑛; different budgets led to similar trends.
+
+with respect to the ground truth (i.e. how different the results
+are from the actual Shapley values).
+
+Execution time. Figure 6a depicts the execution time of the above
+methods as a function of the sampling budget. The execution times
+of Monte Carlo and Kernel SHAP are rather similar, while the CNF
+Proxy method (which does not rely on sampling) is substantially
+faster, with a median of 0.72 milliseconds and a mean of 2.06 mil-
+liseconds for a single query output. Figures 7a and 7b depict the
+distribution and worst-case running times of the three methods (for
+Monte Carlo and Kernel SHAP we used a budget of 20 samples per
+fact) as function of the number of distinct facts in the provenance ex-
+pressions. CNF Proxy is substantially faster than its competitors: in
+most cases CNF Proxy completes in few milliseconds and 4 seconds
+in the worst case, whereas Monte Carlo and Kernel SHAP median
+execution time for circuits with 101–200 distinct input facts are 59
+and 62 seconds respectively and may take up to 1,539 seconds.
+
+12
+
+Recall our analysis of the execution time of the exact solution
+in Section 6.1. The computation of Shapley values (KC plus Algo-
+rithm 1) takes 27,600 seconds if performed for all output tuples of
+query q8d in the IMDB dataset; for comparison, the CNF Proxy
+method has (inexactly, see quality analysis below) computed the
+Shapley value of the proxy functions for all query outputs within 95
+seconds, which is 0.3% of the exact computation time. Surprisingly,
+the execution time of the exact computation was comparable to
+Monte Carlo and Kernel SHAP, and even faster for large sampling
+budgets; For example, Kernel SHAP with 𝑚 = 10𝑛 (where 𝑛 is the
+number of distinct facts in the provenance) has completed computa-
+tion for all output tuples of the query q8d in 16,447 seconds, which
+is 59% of the exact computation time. For 𝑚 = 50𝑛, Kernel SHAP
+required 58,161 seconds for completion of this computation, which
+is 210% of the exact computation time. This means that using such
+a sampling budget for Kernel SHAP is impractical in this setting,
+and we will use it to obtain upper bounds on Kernel SHAP’s quality.
+Quality analysis. Figures 6b and 6c depict the ranking quality of
+the above methods as a function of the sampling budget. The rank-
+ings were compared for output tuples where the exact computation
+succeeded, so we have the ground truth. Recall that CNF Proxy does
+not rely on sampling, and so it remains constant throughout the
+different budgets. Naturally, as the sampling budget grows, Monte
+Carlo and Kernel SHAP quality improves. Most notable is Monte
+Carlo improvement in terms of nDCG (Figure 6b), where its median
+(resp., mean) nDCG with budget of 10 samples per fact is 0.9669
+(resp., 0.9435), while with budget of 50 samples per fact it is 1.0
+(resp., 0.9923). Comparison between the two sampling methods
+(Monte Carlo and Kernel SHAP) reveals that Kernel SHAP is supe-
+rior w.r.t all metrics, across the entire budgets range. In terms of
+nDCG, all methods achieve rather high scores, but CNF Proxy per-
+forms best. Indeed, the median (resp., mean) nDCG of CNF Proxy is
+1.0 (resp., 0.9989), while Kernel SHAP requires 50 samples per fact
+to get a median (resp., mean) nDCG of 1.0 (resp., 0.9986); as previ-
+ously noted such budget leads to slower execution than that of the
+exact computation. It is worth mentioning that also when looking
+at nDCG@k for 𝑘 ∈ {1, 3, 5, 10}, CNF Proxy performs better than
+Monte Carlo and Kernel SHAP, even when allowing a budget of 50
+samples per fact. In terms of identifying the top influential facts
+(i.e., Precision@k), CNF Proxy also outperforms the other methods.
+For example, CNF Proxy’s median (resp., mean) Precision@10 are
+1.0 (resp., 0.9688), while Kernel SHAP reaches 1.0 (resp., 0.9611)
+with 50 samples per fact. Similarly, CNF Proxy outperforms Monte
+Carlo and Kernel SHAP in terms of Precision@k for 𝑘 ∈ {1, 3, 5}.
+Finally, Table 2 zooms in on the results when fixing the budgets
+of Monte Carlo and Kernel SHAP to 50 samples per fact, which
+
+is the highest budget tested (already for this budget, computation
+of Monte Carlo and Kernel SHAP is slower than for the exact
+algorithm). Note that CNF Proxy is much faster then the other
+methods, while still being superior in terms of ranking (nDCG and
+Precision@k). As explained above, ranking of facts is indeed the use
+case we recommend for CNF Proxy. Unsurprisingly, Kernel SHAP
+achieves better distance from the exact Shapley values (L1 and L2),
+at the cost of being slower by several orders of magnitude.
+
+Dependency on the provenance size. Figure 7 depicts the perfor-
+mance of Monte Carlo, Kernel SHAP, and CNF Proxy as a function
+of the number of facts in the provenance expression. The results are
+aggregated over all output tuples of all queries. Figure 7c presents
+the quality of facts ranking (nDCG) as a function of the number
+of distinct provenance facts. CNF Proxy performs the best, and
+its quality remains steady regardless of the number of facts in the
+provenance expression. For example, with 1–10 facts the CNF Proxy
+median (resp., mean) nDCG is 1.0 (resp., 0.9999), and with 201–400
+facts it is 0.9977 (resp., 0.9924). Kernel SHAP has a minor deteriora-
+tion, where it drops from median (resp., mean) nDCG of 1.0 (resp.,
+0.9998) with 1–10 facts to 0.9906 (resp., 0.9888) with 201–400 facts.
+Figure 7d zooms in on the aggregated results over the worst case ex-
+pressions of all output tuples for all queries, and shows that even the
+worst case CNF Proxy is superior to the alternatives, and that the
+error in terms of nDCG is small (0.92 in the worst case evaluated).
+Figure 7e depicts the dependency of Precision@10 on the number of
+provenance facts. Both Monte Carlo and Kernel SHAP suffer from
+a massive drop of median (resp., mean) Precision@10, down to 0.4
+(resp., 0.476) and 0.6 (resp., 0.6253) respectively with 201–400 facts,
+while CNF Proxy remains at 0.8 (resp., 0.8293) median and mean
+Precision@10. A similar trend is observed for Precision@5, whereas
+for Precision@3 and Precision@1 the drop is less significant. Here
+again, Figure 7f zooms in on the worst case and again shows the
+superiority of CNF Proxy.
+
+6.3 Hybrid computation
+Recall that in Section 6.1 we have measured the success rate of the
+exact computation: for IMDB the success rate was 99.96% and for
+TPC-H the success rate was 84.43%. We saw in Section 6.2 that the
+inexact method CNF Proxy is very efficient and that the ranking of
+tuples based on CNF Proxy is typically close to the ranking obtained
+based on the real Shapley values.
+
+In this section we consider a hybrid approach that works as
+follows. First, we start by running the exact computation, that is,
+the knowledge compilation step and Algorithm 1. If the exact com-
+putation completes successfully within less than 𝑡 seconds (where
+𝑡 is configurable) we return its result. Otherwise, we terminate the
+exact computation and execute the inexact method CNF Proxy,
+returning only a ranking of input tuples rather than their Shapley
+values. Figure 8a depicts the success rate of the exact computation
+given different timeouts. Note that given a timeout of 2.5 seconds,
+the exact computation succeed for 98.67% of the IMDB output tu-
+ples, and 83.83% for TPCH-H. Increasing the timeout has a rather
+minor impact on the success rate: having a 15 seconds timeout
+increases the success rate for IMDB to 99.52%, while the success
+rate for TPC-H remains unchanged. Recall that having a timeout of
+one hour results in success rates of 99.96% and 84.43% for IMDB and
+
+(a) Exact computation success rate as
+function of the computation timeout
+
+(b) Mean execution time of the hy-
+brid approach as a function of the
+computation timeout
+
+Figure 8: Hybrid approach performance
+
+TPC-H respectively. Figure 8b depicts the mean execution time of
+the hybrid approach as a function of the chosen timeout 𝑡. Observe
+that given a timeout of 2.5 seconds the mean hybrid execution time
+is 0.31 seconds and 0.67 seconds for IMDB and TPC-H respectively.
+The mean execution time of the hybrid approach grows very mod-
+erately w.r.t. the timeout for IMDB (since most cases do not reach
+the timeout); it grows faster for TPC-H, where the difficult cases
+for which timeout is reached have a more significant effect on the
+overall mean execution time.
+
+Main conclusions. Our experimental results indicate that for
+most output tuples (98.67% for IMDB and 83.83% for TPC-H) exact
+computation of Shapley values terminates within 2.5 seconds. When
+it does not, we propose an alternative of ranking facts according to
+CNF Proxy values, which typically only takes several milliseconds
+(up to 4 seconds for an outlier case). Experimental evidence shows
+that the ranking obtained via CNF Proxy is both much faster to
+compute and more accurate (in terms of nDCG and Precision@k,
+measured in cases where exact computation does succeed, and
+so we have the ground truth) than the alternative of only using
+sampling to approximate the actual Shapley values.
+
+7 CONCLUSION
+We have proposed in this paper a first practical framework for
+computing the contributions of database facts in query answering,
+quantified through Shapley values. The framework includes an ex-
+act algorithm that computes the contribution of input facts, and
+a faster algorithm that is practically effective in ranking contribu-
+tions of input facts, while producing inexact Shapley values. Our
+practical implementation is currently designed for SPJU queries
+(that is, to the class of queries supported by ProvSQL). In addition to
+these practical contributions, we have also established a theoretical
+connection between the problem of computing Shapley values and
+that of probabilistic query evaluation, by showing that, for every
+query, the former can be reduced in polynomial time to the latter.
+We leave it open to determine whether there is also a reduction
+in the other direction (Open Problem 1). Other interesting direc-
+tions would be to study further constructs such as aggregates and
+negation, or to extend the framework to bag semantics. Concerning
+bag semantics we observe that, by differentiating each copy of a
+same tuple in a bag database (for instance, adding an identifier
+attribute), our framework can be used as-is. Nevertheless, it would
+be interesting to see how one could adapt the definitions in order
+to consider fact multiplicities in a more elaborate way.
+
+13
+
+[22] Scott M Lundberg and Su-In Lee. 2017. A unified approach to interpreting
+model predictions. In Advances in neural information processing systems. 4765–
+4774.
+http://papers.nips.cc/paper/7062-a-unified-approach-to-interpreting-
+model-predictions.pdf
+
+[23] Irwin Mann and LS Shapley. 1960. Values for large games, IV: Evaluating the
+Electoral College by Monte Carlo Techniques. The Rand Corporation. Research
+Memorandum 2651 (1960). https://www.rand.org/pubs/research_memoranda/
+RM2651.html
+
+[24] Alexandra Meliou, Wolfgang Gatterbauer, Katherine F. Moore, and Dan Suciu.
+2010. The complexity of causality and responsibility for query answers and
+non-answers. PVLDB 4, 1 (2010), 34–45. https://www.vldb.org/pvldb/vol4/p34-
+meliou.pdf
+
+[25] Alexandra Meliou, Sudeepa Roy, and Dan Suciu. 2014. Causality and explanations
+in databases. Proceedings of the VLDB Endowment (PVLDB) 7, 13 (2014), 1715–1716.
+http://www.vldb.org/pvldb/vol7/p1715-meliou.pdf
+
+[26] Mikaël Monet. 2020. Solving a Special Case of the Intensional vs Extensional
+Conjecture in Probabilistic Databases. In Proceedings of PODS. 149–163. https:
+//arxiv.org/abs/1912.11864
+
+[27] Alon Reshef, Benny Kimelfeld, and Ester Livshits. 2020. The impact of negation
+on the complexity of the Shapley value in conjunctive queries. In Proceedings of
+PODS. 285–297. https://arxiv.org/abs/1912.12610
+
+[28] Alvin E Roth. 1988. The Shapley Value: Essays in Honor of Lloyd S. Shapley.
+
+Cambridge University Press. http://www.library.fa.ru/files/Roth2.pdf
+
+[29] Sudeepa Roy, Laurel J. Orr, and Dan Suciu. 2015. Explaining query answers with
+explanation-ready databases. Proceedings of the VLDB Endowment (PVLDB) 9, 4
+(2015), 348–359. http://www.vldb.org/pvldb/vol9/p348-roy.pdf
+
+[30] Babak Salimi, Leopoldo E. Bertossi, Dan Suciu, and Guy Van den Broeck. 2016.
+Quantifying causal effects on query answering in databases. In TaPP. USENIX
+Association. http://web.cs.ucla.edu/~guyvdb/papers/SalimiTaPP16.pdf
+
+[31] Pierre Senellart, Louis Jachiet, Silviu Maniu, and Yann Ramusat. 2018. Provsql:
+Provenance and probability management in postgresql. Proceedings of the VLDB
+Endowment (PVLDB) 11, 12 (2018), 2034–2037. https://hal.inria.fr/hal-01851538/
+file/p976-senellart.pdf
+
+[32] Lloyd S Shapley. 1953. A value for n-person games. Contributions to the Theory of
+Games 2, 28 (1953), 307–317. http://www.library.fa.ru/files/Roth2.pdf#page=39
+[33] Dan Suciu, Dan Olteanu, Christopher Ré, and Christoph Koch. 2011. Probabilistic
+Databases. Morgan & Claypool. https://www.morganclaypool.com/doi/abs/10.
+2200/S00362ED1V01Y201105DTM016
+
+[34] Transaction Processing Performance Council (TPC). 2017. TPC-H benchmark.
+http://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.2.pdf
+[35] Grigori S Tseitin. 1983. On the complexity of derivation in propositional calculus.
+In Automation of reasoning. Springer, 466–483. https://link.springer.com/chapter/
+10.1007/978-3-642-81955-1_28
+
+[36] Guy Van den Broeck, Anton Lykov, Maximilian Schleich, and Dan Suciu. 2021.
+On the tractability of shap explanations. In Proceedings of AAAI. https://arxiv.
+org/abs/2009.08634
+
+[37] Moshe Y Vardi. 1982. The complexity of relational query languages. In STOC.
+ACM, 137–146. http://www.dis.uniroma1.it/~degiacom/didattica/semingsoft/
+SIS05-06/materiale/1-query-congiuntive/riferimenti/vardi-1982.pdf
+
+[38] Yining Wang, Liwei Wang, Yuanzhi Li, Di He, Wei Chen, and Tie-Yan Liu. 2013.
+A theoretical analysis of NDCG ranking measures. In Proceedings of COLT,
+Vol. 8. 6. https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.680.490&
+rep=rep1&type=pdf
+
+[39] Bruno Yun, Srdjan Vesic, Madalina Croitoru, and Pierre Bisquert. 2018. Incon-
+sistency Measures for Repair Semantics in OBDA. In IJCAI. ijcai.org, 1977–1983.
+https://www.ijcai.org/proceedings/2018/0273.pdf
+
+ACKNOWLEDGMENTS
+This research has been partially funded by the European Research
+Council (ERC) under the European Union’s Horizon 2020 research
+and innovation programme (Grant agreement No. 804302). The
+work of Benny Kimelfeld was supported by the Israel Science Foun-
+dation (ISF), Grant 768/19, and the German Research Foundation
+(DFG) Project 412400621 (DIP program).
+
+REFERENCES
+[1] Serge Abiteboul, Richard Hull, and Victor Vianu. 1995. Foundations of Databases.
+
+Vol. 8. Addison-Wesley Reading. http://webdam.inria.fr/Alice/
+
+[2] Marcelo Arenas, Pablo Barceló, Leopoldo Bertossi, and Mikaël Monet. 2021. On
+the complexity of SHAP-score-based explanations: Tractability via knowledge
+https:
+compilation and non-approximability results. arXiv preprint (2021).
+//arxiv.org/abs/2104.08015
+
+[3] Marcelo Arenas, Pablo Barceló, Leopoldo Bertossi, and Mikaël Monet. 2021. The
+tractability of SHAP-score-based explanations over deterministic and decompos-
+able Boolean circuits. In Proceedings of AAAI. https://arxiv.org/abs/2007.14045
+[4] Peter Buneman, James Cheney, Wang-Chiew Tan, and Stijn Vansummeren. 2008.
+Curated databases. In Proceedings of PODS. 1–12. https://homepages.inf.ed.ac.
+uk/opb/papers/inv.pdf
+
+[5] Peter Buneman, Sanjeev Khanna, and Tan Wang-Chiew. 2001. Why and where:
+A characterization of data provenance. In ICDT. Springer, 316–330. https://
+repository.upenn.edu/cgi/viewcontent.cgi?article=1209&context=cis_papers
+[6] Yingwei Cui, Jennifer Widom, and Janet L Wiener. 2000. Tracing the lineage of
+view data in a warehousing environment. ACM Transactions on Database Systems
+(TODS) 25, 2 (2000), 179–227. http://ilpubs.stanford.edu:8090/252/1/1997-3.pdf
+[7] Nilesh Dalvi and Dan Suciu. 2007. Efficient query evaluation on probabilistic
+databases. VLDB J. 16, 4 (2007), 523–544. https://homes.cs.washington.edu/
+~suciu/vldbj-probdb.pdf
+
+[8] Nilesh Dalvi and Dan Suciu. 2013. The dichotomy of probabilistic inference for
+unions of conjunctive queries. Journal of the ACM (JACM) 59, 6 (2013), 1–87.
+https://homes.cs.washington.edu/~suciu/jacm-dichotomy.pdf
+
+[9] Adnan Darwiche. 2001. On the tractable counting of theory models and its
+application to truth maintenance and belief revision. J. Applied Non-Classical
+Logics 11, 1-2 (2001). https://arxiv.org/abs/cs/0003044
+
+[10] Adnan Darwiche. 2004. New advances in compiling CNF to decomposable
+negation normal form. In Proceedings of ECAI. Citeseer, 328–332. http://citeseerx.
+ist.psu.edu/viewdoc/summary?doi=10.1.1.178.2262
+
+[11] Adnan Darwiche and Pierre Marquis. 2002. A knowledge compilation map.
+Journal of Artificial Intelligence Research 17 (2002), 229–264. https://arxiv.org/
+abs/1106.1819
+
+[12] Daniel Deutch, Nave Frost, and Amir Gilad. 2020. Explaining natural language
+query results. The VLDB Journal 29, 1 (2020), 485–508. https://arxiv.org/abs/
+2007.04454
+
+[13] Daniel Deutch, Nave Frost, Benny Kimelfeld, and Mikaël Monet. 2021. Shapley
+
+for database facts source code. https://github.com/navefr/ShapleyForDbFacts.
+
+[14] Todd J Green, Grigoris Karvounarakis, and Val Tannen. 2007. Provenance
+semirings. In Proceedings of PODS. 31–40. https://repository.upenn.edu/cgi/
+viewcontent.cgi?article=1022&context=db_research
+
+[15] Todd J Green and Val Tannen. 2017. The semiring framework for database
+https://dl.acm.org/doi/10.1145/
+
+provenance. In Proceedings of PODS. 93–99.
+3034786.3056125
+
+[16] Anthony Hunter and Sébastien Konieczny. 2010. On the measure of conflicts:
+Shapley inconsistency values. Artificial Intelligence 174, 14 (2010), 1007–1026.
+http://www.cril.univ-artois.fr/~konieczny/papers/aij10a.pdf
+
+[17] Tomasz Imielinski and Witold Lipski Jr. 1984. Incomplete Information in Rela-
+tional Databases. J. ACM 31, 4 (1984), 761–791. https://doi.org/10.1145/1634.1886
+[18] Abhay Jha and Dan Suciu. 2013. Knowledge compilation meets database theory:
+compiling queries to decision diagrams. Theory of Computing Systems 52, 3 (2013),
+403–440. https://link.springer.com/article/10.1007/s00224-012-9392-5
+
+[19] Viktor Leis, Andrey Gubichev, Atanas Mirchev, Peter Boncz, Alfons Kemper, and
+Thomas Neumann. 2015. How good are query optimizers, really? Proceedings
+of the VLDB Endowment 9, 3 (2015), 204–215. https://www.vldb.org/pvldb/vol9/
+p204-leis.pdf
+
+[20] Ester Livshits, Leopoldo E. Bertossi, Benny Kimelfeld, and Moshe Sebag. 2020. The
+Shapley value of tuples in query answering. In ICDT, Vol. 155. Schloss Dagstuhl,
+20:1–20:19. https://arxiv.org/abs/1904.08679
+
+[21] Scott M Lundberg, Gabriel Erion, Hugh Chen, Alex DeGrave, Jordan M Prutkin,
+Bala Nair, Ronit Katz, Jonathan Himmelfarb, Nisha Bansal, and Su-In Lee. 2020.
+From local explanations to global understanding with explainable AI for trees.
+Nature machine intelligence 2, 1 (2020), 2522–5839. https://arxiv.org/pdf/1905.
+04610.pdf
+
+14
+
+

@@ -1,0 +1,2384 @@
+Provenance-aware Discovery of Functional Dependencies
+on Integrated Views
+Ugo Comignani, Laure Berti-Équille, Noël Novelli, Angela Bonifati
+
+To cite this version:
+
+Ugo Comignani, Laure Berti-Équille, Noël Novelli, Angela Bonifati. Provenance-aware Discovery of
+Functional Dependencies on Integrated Views. ICDE 2022 - 38th IEEE International Conference on
+Data Engineering, May 2022, Kuala Lumpur, Malaysia. pp.1-15. ￿hal-03474955￿
+
+HAL Id: hal-03474955
+
+https://hal.science/hal-03474955
+
+Submitted on 10 Dec 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Provenance-aware Discovery of Functional
+Dependencies on Integrated Views
+
+Ugo Comignani
+Tyrex team, Grenoble INP,
+INRIA, France
+ugo.comignani@inria.fr
+
+Laure Berti-Equille
+IRD, ESPACE-DEV
+Montpellier, France
+laure.berti@ird.fr
+
+No¨el Novelli
+Aix-Marseille Univ.
+LIS CNRS, France
+noel.novelli@lis-lab.fr
+
+Angela Bonifati
+Lyon 1 University
+Lyon, France
+angela.bonifati@univ-lyon1.fr
+
+Abstract—The automatic discovery of functional dependencies
+(FDs) has been widely studied as one of the hardest problems in
+data proﬁling. Existing approaches have focused on making the
+FD computation efﬁcient while inspecting single relations at a
+time. In this paper, for the ﬁrst time we address the problem of
+inferring FDs for multiple relations as they occur in integrated
+views by solely using the functional dependencies of the base
+relations of the view itself. To this purpose, we leverage logical
+inference and selective mining and show that we can discover
+most of the exact FDs from the base relations and avoid the full
+computation of the FDs for the integrated view itself, while at
+the same time preserving the lineage of FDs of base relations. We
+propose algorithms to speedup the inferred FD discovery process
+and mine FDs on-the-ﬂy only from necessary data partitions. We
+present InFine (INferred FunctIoNal dEpendency), an end-to-end
+solution to discover inferred FDs on integrated views by leverag-
+ing provenance information of base relations. Our experiments
+on a range of real-world and synthetic datasets demonstrate
+the beneﬁts of our method over existing FD discovery methods
+that need to rerun the discovery process on the view from
+scratch and cannot exploit lineage information on the FDs. We
+show that InFine outperforms traditional methods necessitating
+the full integrated view computation by one to two order of
+magnitude in terms of runtime. It is also the most memory
+efﬁcient method while preserving FD provenance information
+using mainly inference from base table with negligible execution
+time.
+
+I. INTRODUCTION
+
+The automatic discovery of all functional dependencies
+(FDs) holding in a single relation is amongst the hardest prob-
+lems in data proﬁling [1], [24]. Typically, an FD X → Y with
+attribute sets X and Y in a given table allows to enforce that
+the combination of values in the set X uniquely determines the
+values of every attribute in the set Y . Functional dependencies
+are key ingredients in database design, table decomposition,
+database normalization, and for several other data management
+tasks, such as data cleaning [28] and query optimization
+[13], [26]. Due to the high complexity of FD discovery [19]
+(exponential in the number of attributes and quadratic in the
+number of records of a relation), a wealth of algorithms
+have been proposed by relying on aggressive pruning and
+sophisticated validation. Many of these algorithms [11], [12],
+[29], [21], [25] have the same theoretical complexity and are
+able to compute all minimal FDs in less runtime.
+
+Despite the vast literature on the topic, all existing algo-
+rithms focus on the FD discovery problem for one relation at
+
+a time and do not explore reuse of computation when dealing
+with multiple relations. However, relations are oftentimes
+involved in view computation operations, among which the
+notable class of SPJ (Select-Project-Join) view operations. In
+this case, the existing algorithms addressing FD discovery
+would have to entirely recompute the set of FDs for the
+obtained integrated view without being able to reuse any of
+the previous computations on the individual base tables of the
+view. In this paper, for the ﬁrst time we tackle the problem
+of inferring FDs on integrated views (also called Inferred FD
+discovery problem) by solely relying on the FDs available from
+the base tables of the views. To do so, we employ the well-
+known concept of why-provenance [3], which allows us to
+identify the lineage of the FDs on the integrated view and
+throughout the view computation operations.
+
+In our work, we address the Inferred FD discovery problem,
+which consists of considering a SPJ view on top of a set of
+base tables and computing the FDs holding on the view by
+reusing as much as possible the discovered FDs on the base
+tables, and, in turn, reduce the SPJ view computation with
+only the needed attributes.
+
+Explicitly relating the FDs of the base table to the FDs of
+the view has interest on its own as it allows for instance to
+understand whether FDs on the base tables are persistent on
+the view. It can also be beneﬁcial whenever the user needs
+help while debugging the FDs on the base tables by choosing
+the most relevant ones if they also apply to the view. Since
+SPJ views might be obtained as results of data integration
+and ETL scenarios [10], our method allows to understand
+how constraints (namely the FDs) are actually affected by the
+integration process. New FDs that hold on the view but not
+on the base tables may help the user better understand and
+explain the result of the data integration process.
+
+Our method allows us to obtain time savings in terms of
+FD discovery from integrated views. By leveraging logical
+inference and provenance triples, we can avoid recomputing
+the FDs holding on the view from scratch and only focus on
+the new FDs that are not holding on the base tables.
+
+To address the Inferred FD discovery problem, we use a
+multi-step pipeline encompassing the discovery of different
+types of FDs and leveraging logical inference. To this end,
+we propose InFine, an efﬁcient solution for automatically
+discovering multi-relation FDs starting from the FDs of the
+
+Fig. 1: Excerpt of the MIMIC-III clinical database with FDs on base tables and integrated view (best viewed in color).
+
+base tables. Our main contributions are as follows:
+• We propose a provenance-based mechanism capable of
+generating and exploiting provenance triples in a view
+speciﬁcation. In particular, for each FD, we capture the type
+of the FD and a subquery of the view in which the FD holds.
+• We design ﬁve algorithms to compute the provenance of
+FDs (from base FDs, inference, or join operations) from
+the results of the FD discovery on the base tables; these
+algorithms seamlessly address the case of SPJ views, a
+signiﬁcant and representative query fragment.
+
+• We propose InFine, a full-ﬂedged system implementing our
+algorithms. InFine is available online1 with code, scripts, and
+datasets for the reproducibility of our experiments;
+
+• We gauge the effectiveness of our system through an ex-
+tensive experimental evaluation. We compare InFine against
+state-of-the-art FD discovery methods over a rich number of
+SPJ views on real-world and synthetic datasets. We ﬁnd that
+InFine outperforms the competing methods by one order up
+to two orders of magnitude in terms of execution time for
+discovering exact FDs while preserving the smallest memory
+consumption on average.
+
+Outline. Section II presents an illustrative example. Section III
+presents the necessary background and notations. In Sec-
+tion IV, we formalize the Inferred FD discovery problem
+and provide an overview of InFine. We also present our main
+contributions and the algorithms at the core of InFine. We de-
+scribe our performance experiments evaluating the efﬁciency
+and accuracy of InFine in Section V. Finally, we discuss
+related work in Section VI and conclude in Section VII.
+
+II. MOTIVATING EXAMPLE
+
+Let
+
+database
+MIMIC-III2 [14], out of which we extract the PATIENT
+
+real-world
+
+consider
+
+clinical
+
+us
+
+a
+
+1https://github.com/ucomignani/InFine
+2https://physionet.org/content/mimiciii/1.4/
+
+a
+
+the
+
+two
+
+that
+
+join
+
+location
+
+between
+
+computes
+
+admission
+
+the patient died at
+
+(admission_location),
+
+table containing information about patients: their identiﬁer
+(subject_id), gender, date of birth (dob), date of
+death (dod), and a boolean expire_flag indicating
+whether the patient passed away, and the table ADMISSION
+containing administrative and clinical
+information about
+patients such as the hospital admission time (admittime),
+the
+the
+insurance, the diagnosis, and a boolean h_expire_flag
+indicating whether
+the hospital.
+Let us consider V ,
+the SPJ view (illustrated in Fig.
+above
+1)
+tables:
+WHERE
+SELECT * FROM PATIENT, ADMISSION
+PATIENT.subject_id=ADMISSION.subject_id. We are
+interested in discovering the set of FDs that hold over the
+SPJ view by reusing as much as possible the FDs of the base
+tables PATIENT and ADMISSION. For ease of exposition,
+we focus on FDs with RHS limited to one single attribute
+(as it is the case in a canonical cover of FDs). The LHS
+might consist of multiple attributes as those mined from
+the join in Fig. 1. A total of 42 minimal and canonical
+FDs is considered in this running example thus making the
+example far from being trivial. These FDs can be obtained
+by FD discovery methods running on the view. However,
+their lineage is also important as they carry the information
+of whether they are valid in the base tables or they solely
+hold on the view. Precisely, we use color coding to encode
+the FD provenance in the ﬁgure. We can observe that the
+9 exact FDs from the base table PATIENT (highlighted in
+green), as well as 9 (out of the 14) exact FDs from the base
+table ADMISSION (highlighted in pink) are preserved in the
+result of the integrated view. Imagine that a data steward
+would like to investigate why a few valid FDs in the base
+tables are no longer valid in the integrated view result or,
+conversely, why some FDs that are not valid in the base
+tables become valid in the view. Better informed, s/he may
+
+PATIENTsubject_idgenderdobdodexpire_ﬂag249F13/03/75NULL0250F27/12/6422/11/88 00:001251M15/03/90NULL0252M06/03/78NULL0257F03/04/3108/07/21 00:001Asubject_idadmittimeadmission_locationinsurancediagnosish_expire_ﬂaggenderdobdodexpire_ﬂag24917/12/49 20:41EMERGENCY ROOM ADMITMedicareUNSTABLE ANGINA ASTHMA BRONCHITIS0F13/03/75NULL024903/02/55 20:16EMERGENCY ROOM ADMITMedicareCHEST PAIN0F13/03/75NULL024927/04/56 15:33PHYS REFERRAL/NORMAL DELIMedicareGI BLEEDING\COLONOSCOPY0F13/03/75NULL025012/11/88 09:22EMERGENCY ROOM ADMITSelf PayPNEUMONIA R/O TB1F27/12/6422/11/88 00:00125127/07/10 06:46EMERGENCY ROOM ADMITPrivateINTRACRANIAL HEAD BLEED0M15/03/90NULL025231/03/33 04:24EMERGENCY ROOM ADMITPrivateGASTROINTESTINAL BLEED0M06/03/78NULL025215/08/33 04:23EMERGENCY ROOM ADMITPrivateGASTROINTESTINAL BLEED0M06/03/78NULL0ADMISSIONsubject_idadmittimeadmission_locationinsurancediagnosish_expire_ﬂag24703/08/56 20:35CLINIC REFERRAL/PREMATURE HOMEUNOBTAINABLECHEST PAIN024819/10/42 16:30EMERGENCY ROOM ADMITPrivateS/P MOTOR ROLLOR024917/12/49 20:41EMERGENCY ROOM ADMITMedicareUNSTABLE ANGINA ASTHMA BRONCHITIS024903/02/55 20:16EMERGENCY ROOM ADMITMedicareCHEST PAIN024927/04/56 15:33PHYS REFERRAL/NORMAL DELIMedicareGI BLEEDING\COLONOSCOPY025012/11/88 09:22EMERGENCY ROOM ADMITSelf PayPNEUMONIA R/O TB125127/07/10 06:46EMERGENCY ROOM ADMITPrivateINTRACRANIAL HEAD BLEED025231/03/33 04:24EMERGENCY ROOM ADMITPrivateGASTROINTESTINAL BLEED025215/08/33 04:23EMERGENCY ROOM ADMITPrivateGASTROINTESTINAL BLEED025321/01/74 20:58TRANSFER FROM HOSP/EXTRAMMedicareCOMPLETE HEART BLOCK\PACEMAKER IMPLANT09 Exact FDs  from PATIENTSdob --> dod 
+dob --> expire_ﬂag 
+dob --> gender
+dob --> subject_id
+dod --> expire_ﬂag
+subject_id --> dob
+subject_id --> dod
+subject_id --> expire_ﬂag
+subject_id --> gender42 Exact Minimal FDs discovered from the SPJ view V 
+14 Exact FDs from ADMISSION
+admittime --> admission_location 
+admittime --> diagnosis 
+admittime --> h_expire_ﬂag 
+admittime --> insurance 
+admittime --> subject_id admission_location,diagnosis --> subject_id admission_location,diagnosis --> insurance
+diagnosis --> h_expire_ﬂag
+insurance,diagnosis --> admission_location insurance --> h_expire_ﬂag insurance,diagnosis --> subject_id subject_id --> insurance subject_id --> h_expire_ﬂag
+subject_id,diagnosis --> admission_location 
+⋈subject_idV: SELECT  * FROM PATIENT       ADMISSIONdob --> dod 
+dob --> expire_ﬂag 
+dob --> gender
+dob --> subject_id
+dod --> expire_ﬂag
+subject_id --> dob
+subject_id --> dod
+subject_id --> expire_ﬂag
+subject_id --> gender9 FDs  from PATIENT9 FDs  from ADMISSIONadmittime --> admission_location 
+admittime --> diagnosis
+admittime --> h_expire_ﬂag
+admittime --> insurance
+admittime --> subject_id
+diagnosis --> h_expire_ﬂag
+insurance --> h_expire_ﬂag
+subject_id --> h_expire_ﬂag
+subject_id --> insurance
+admittime --> dob
+admittime --> dod
+admittime --> expire_ﬂag
+admittime --> gender
+diagnosis --> dob
+diagnosis --> dod
+diagnosis --> expire_ﬂag
+diagnosis --> gender 
+dob --> h_expire_ﬂag
+dob --> insurance
+10 logically inferred FDs from V expire_ﬂag --> dod
+1 AFD from PATIENT           3 AFDs from ADMISSON becoming exact in V             becoming exact in V dod --> h_expire_ﬂag 
+expire_ﬂag --> h_expire_ﬂag
+gender,dod --> insurance
+gender,expire_ﬂag --> insurance
+gender,h_expire_ﬂag --> insurance 
+h_expire_ﬂag --> dod
+h_expire_ﬂag --> expire_ﬂag 
+insurance --> dod
+insurance --> expire_ﬂag
+insurance --> gender
+ 
+ 
+ 
+diagnosis --> admission_location
+diagnosis --> insurance 
+diagnosis --> subject_id10 FDs mined from ⋈change and adapt the constraint (FD) enforcement strategies
+when curating the data using the FDs. Moreover, 10 FDs
+(highlighted in blue) from the view result can be obtained
+by logical inference over the sets of exact FDs discovered
+from each base table: for instance, diagnosis → dod is
+obtained from insurance,diagnosis → subject_id
+and subject_id → insurance in ADMISSION and
+subject_id → dod in PATIENT. As a side note, we
+are not addressing here the problem of meaningfulness of
+the FDs, which is orthogonal and of independent interest.
+Indeed, a valid FD may not be semantically meaningful and
+judging whether a valid FD is relevant typically needs human
+intervention.
+
+When the two tables are joined, patient #257 is removed
+due to the absence of the corresponding subject_id value
+in the other table and approximate FDs (AFD) (such as
+expire_flag (cid:43)1 dod in PATIENT) become exact in the SPJ
+view. These FDs are highlighted in grey in the ﬁgure.
+
+Finally, only 10 exact FDs (highlighted in orange) that hold
+over the view result have to be discovered from scratch from
+the view. However, if we partially join the two tables, only
+with the following combinations of tuples: [(#249,#252) or
+(#249,#251)] and [(#250,#251) or (#250, #252)], we can obtain
+the remaining 10 join FDs without having to compute the
+entire view beforehand.
+
+This example show that with existing FD discovery ap-
+proaches,
+the FDs would have to be computed on both
+the base tables and the integrated view result to preserve
+the FD provenance information. Furthermore, to identify the
+provenance of the FDs, a comparison among the two FD sets
+would have to be performed. We will show the overhead of
+this process in our experimental study in Section V.
+
+Hence, a better understanding of the mechanisms underlying
+the provenance of FDs from integrated views is highly needed.
+Based on these observations, in our work, we address the
+following key questions: How can we preserve the provenance
+of FDs discovered from integrated views? Instead of executing
+FD discovery over each base table and a SPJ view result
+independently, can we infer most of the FDs on the view as
+well as reuse the FDs from the base tables and achieve a non
+negligible speedup? We answer these key questions in the rest
+of the paper and propose an efﬁcient solution for discovering
+FDs from integrated views.
+
+III. PRELIMINARIES
+
+Next, we recall the necessary deﬁnitions of FDs and join
+
+operators with their application to our problem.
+
+Deﬁnition 1 (Functional dependency satisfaction): Let I be
+an instance over a relation schema R, and X, Y be two
+sets of attributes from R. I satisﬁes a functional dependency
+d : X → Y , denoted by I |= d if and only if:
+
+∀t1, t2 ∈ I, t1[X] = t2[X] ⇒ t1[Y ] = t2[Y ].
+
+(1)
+
+Note that the above deﬁnition holds regardless of the selected
+null semantics. This implies that our approach is not depending
+
+on the underlying semantics of null values, in line with other
+approaches in the literature [2], [8], [18].
+
+Following the convention, we use uppercase letters for
+attribute sets and lowercase letters for single attributes. More-
+over, in the rest of the paper we use canonical FDs, i.e., min-
+imal FDs with only one attribute in their right-hand part.We
+recall that for any set of FDs, it can be computed a logically
+equivalent set of canonical FDs, thus this is done without loss
+of generality. We deﬁne the SPJ view speciﬁcation and the
+set of projected attributes over this view as follows:
+
+Deﬁnition 2 (SPJ
+
+view speciﬁcation): Let R =
+{R1; . . . ; Rn} be a set of relational instances. We deﬁne a
+view speciﬁcation VR as a relational algebra formula over
+relations in R and limited to the following set of operators:
+{π; σ; (cid:46)(cid:47); (cid:46)(cid:47) ; (cid:46)(cid:47); (cid:46)(cid:47) ; (cid:110); (cid:111)}.
+
+Deﬁnition 3 (Projected attributes set): Let V, V1, and V2 be
+view speciﬁcations. Let R be a relational instance. Let X be
+a set of attributes. Let ρ be a set of constraints. Let atts(S)
+denotes the set of attributes over a relational instance S. Let (cid:5)
+be a join operator in {(cid:46)(cid:47); (cid:46)(cid:47) ; (cid:46)(cid:47); (cid:46)(cid:47) }. Then the set of projected
+attributes, denoted by proj() is deﬁned as follows:
+
+proj(R) = atts(R)
+proj(πX (V)) = X
+proj(σρ(V)) = proj(V) proj(V1 (cid:5) V2) = proj(V1) ∪ proj(V2)
+
+proj(V1 (cid:110) V2) = proj(V1)
+proj(V1 (cid:111) V2) = proj(V2)
+
+Finally, we deﬁne the types of FDs and the provenance
+triples derived in our framework and used to maintain the
+provenance information of every discovered FD. The base FDs
+are deﬁned as follows:
+
+Deﬁnition 4 (Base FD): Let R = {R1; . . . ; Rn} be a set
+of relational instances. Let VR be a view speciﬁcation over
+relations in R. Let f ds(Ri) denotes the set of minimal FDs
+over the relation Ri ∈ R. Let f ds(VR) denotes the set of
+minimal FDs over the view speciﬁed by VR. An FD d is a
+base FD if d ∈ f ds(VR) and ∃Ri ∈ R s.t. d ∈ f ds(Ri).
+We now deﬁne the notion of upstaged FD, which can occurs
+either in the case of a selection or of a join operation:
+
+Deﬁnition 5 (Upstaged FD): Let R1, R2 be two relational
+instances. Let f ds(Ri) denotes the set of minimal FDs over
+a relational instance Ri. An FD d is an upstaged FD for R1
+if d is deﬁned over attributes from R1 and:
+
+• in the case of a selection σρ(R1): d ∈ f ds(σρ(R1)) and
+
+d (cid:54)∈ f ds(R1)
+
+• in the case of a join R1 (cid:5) R2: d ∈ f ds(R1 (cid:5) R2) and
+
+d (cid:54)∈ f ds(R1)
+
+In the following, we distinguish the upstaged FDs by consider-
+ing if they come from a selection operation or a join operation.
+We also deﬁne two types of FDs that arise speciﬁcally after
+
+a join operation is performed:
+
+Deﬁnition 6 (Inferred FD): Let R1, R2 be two relational
+instances. Let f ds(Ri) denotes the set of minimal FDs over
+instance Ri. Let atts(Ri) denotes the set of
+a relational
+attributes of Ri. Let d : X → y be a FD such that
+d ∈ f ds(R (cid:5) R(cid:48)). Then d is an inferred FD if
+
+(X ∪ {y}) ∩ atts(R1) (cid:54)= ∅ ∧ (X ∪ {y}) ∩ atts(R2) (cid:54)= ∅
+
+and either:
+
+• d can be inferred through the use of Armstrong’s axioms;
+• ∃d(cid:48) : X (cid:48) → y such that X ⊂ X (cid:48) and d(cid:48) can be inferred
+
+through Armstrong’s axioms.
+
+Deﬁnition 7 (Join FD): Let d : X → y be a FD such that
+
+d ∈ f ds(R (cid:5) R(cid:48)). Then d is a join FD if
+
+(X ∪ {y}) ∩ atts(R1) (cid:54)= ∅ ∧ (X ∪ {y}) ∩ atts(R2) (cid:54)= ∅
+
+and d did not belong to the set of inferred FDs.
+From these types of FDs, we deﬁne the provenance triples as
+follows:
+
+Deﬁnition 8 (FD Provenance Triple): Let R =
+{R1; . . . ; Rn} be a set of relational instances. Let VR be a
+view speciﬁcation over relations in R. A provenance triple
+(d, t, s) for an FD d over the view speciﬁed by VR is a triple
+composed of:
+
+• the FD d whose provenance is described;
+• the type t of d,
+
+the following val-
+taking one of
+ues: “base”, “upstaged selection”, “upstaged lef t”,
+“upstaged right”, “inf erred” or “joinF D”;
+
+• the ﬁrst sub-query s over the view speciﬁcation VR in
+
+which d holds during the view computation.
+
+We illustrate the provenance triples in the following example:
+Example 1: Following the running example of Figure 1,
+the provenance triple for FDs subject_id → dob;
+expire_flag → dod and gender, h_expire_flag →
+insurance will be the following:
+
+(subject_id → dob, ”base”, ADMISSION)
+
+(expire_flag → dod, ”upstaged lef t”,
+
+PATIENT (cid:46)(cid:47)subject id=subject id, ADMISSION)
+(gender, h_expire_flag → insurance, ”join F D”,
+PATIENT (cid:46)(cid:47)subject id=subject id ADMISSION).
+
+IV. MINING FDS PROVENANCE TRIPLES OVER VIEWS
+
+In this section, we describe the workﬂow of InFine to com-
+pute FDs and their provenance information from a view spec-
+iﬁcation and the base relations used in the view speciﬁcation.
+In this workﬂow, after discovering FDs from the base tables,
+we mine the FDs appearing during the view computation by
+relying as much as possible on inference methods as well as
+on efﬁcient methods to discover the remaining FDs that cannot
+be inferred.
+
+Problem statement. Let R be a set of base tables; VR be a
+view speciﬁcation over R. The Inferred FD discovery problem
+consists of efﬁciently inferring functional dependencies over
+the view speciﬁed by VR by reusing functional dependencies
+from R and annotating each FD with its provenance informa-
+tion under the form of a provenance triple.
+
+In order to compute the functional dependencies for a given
+view, one needs to tackle the complexity of the FD mining
+problem and thus to tame the size of explored FDs lattices.
+
+In the following theorem, we state that at each computation
+step of a view without projection, the FDs previously mined
+
+Fig. 2: Workﬂow of InFine for discovering inferred FDs from
+a view speciﬁcation V (L, R)
+
+continue to be valid. Conversely, we show that the application
+of a projection can only lead to the suppression of previously
+valid FDs, and never to the discovery of new FDs.
+
+Theorem 1: Let V, V1, and V2 be view speciﬁcations. Let
+D, D1 and D2 be the sets of FDs over views speciﬁed by V,
+V1 and V2, respectively. Let f ds(V ) denotes the set of FDs
+over a view speciﬁed by V .
+Then:
+
+f ds(πX (V)) ⊆ D,
+
+f ds(σρ(V)) ⊇ D, and
+
+f ds(V1 (cid:5) V2) ⊇ D1 ∪ D2, with (cid:5) ∈ {(cid:46)(cid:47); (cid:46)(cid:47) ; (cid:46)(cid:47); (cid:46)(cid:47) ; (cid:110); (cid:111)}.
+
+Our Solution. In order to compute the set of FDs over in-
+tegrated views with their provenance information, we propose
+the workﬂow illustrated in Figure 2. It consists of three main
+steps as follows: (1) Mining of FDs over the base relations,
+limited to FDs with attributes projected in the resulting view
+(InFine step 1); (2) Discovery of approximate single-table FDs
+that are upstaged and become exact FDs via the selection
+operations (InFine step 2); (3) Discovery of all FDs that can
+appear via the join operations (InFine step 3). In other words,
+Step 2 allows to retrieve FDs that are approximate in the
+individual base tables but become exact due to the selection
+operations of the SPJ views, whereas Step 3 retrieves FDs
+due to join operations between multiple base tables including
+upstaged, inferred and join FDs.
+
+These steps and their corresponding algorithms are detailed
+in the next sections, respectively. Their application is done by
+InFine main algorithm (Algorithm 1) either during initialisation
+(lines#1–5 for Step 1) or during the recursive traversal of the
+view speciﬁcation tree (Subroutine provFDs for Steps 2-3).
+
+VInferFDsmineFDsupstageFDsselectionFDs   Discovery of upstaged FDs from       Logical inference of FDs for      FD Discovery from the projection      on the base relations in V  Output:  Sets of FDs discovered from L and R and set of inferred FDs from the view speciﬁcation V with provenance metadata RL,R)V(InFine       Discovery of join FDs forInput:  Integrated view speciﬁcation V applied to base relational instances L and R with operators :      ,     , and      with{◊∈,LR◊LR◊π◊σ{,,◊,,L,,πσAlgorithm 1: InFine
+Input: R: a set of relational instances;
+
+VR: a view speciﬁcation over instances in R.
+
+Result: the set of provenance triples of the FDs over VR.
+
+1 ED ← ∅;
+2 AV ← compute the set of attributes proj(VR) ;
+3 for each relation Ri ∈ R do
+4
+
+DRi ← compute FDs in Ri limited to attributes in AV ;
+add DRi to ED;
+
+5
+6 return provFDs(R, VR, ED, AV );
+7 Subroutine provFDs(R, VR, ED, AV )
+8
+
+switch VR do
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+24
+
+25
+
+26
+
+case R ∈ R do
+P ← ∅;
+D ← get DR in ED;
+for each FD d ∈ D do
+
+add triple (d, ”base”, R) to P
+
+return P;
+
+case πX (V (cid:48)
+
+R) do
+
+case σρ(V (cid:48)
+
+R) do
+
+case V (cid:48)
+
+R (cid:5) V (cid:48)(cid:48)
+
+R do
+
+return provFDs(R, V (cid:48)
+
+R, ED, AV );
+
+P ← provFDs(R, V (cid:48)
+return P ∪ selectionFDs(R, V (cid:48)
+
+R, ED, AV );
+
+R, P, ρ);
+
+R, ED, AV );
+R, ED, AV );
+
+Prec ← provFDs(R, V (cid:48)
+Prec ← provFDs(R, V (cid:48)(cid:48)
+Pup ← joinUpFDs (AV );
+Pinf ←inferFDs ();
+Pjoin ←joinFDs ();
+return Prec ∪ Pup ∪ Pinf ∪ Pjoin ;
+
+A. Reducing Space of Explored Candidates using Projections
+
+As our goal is to discover the FDs occurring on top of
+an integrated view, we focus on mining FDs containing only
+attributes that are retrieved in the output SPJ view.
+
+The number of considered attributes greatly inﬂuences the
+size of the explored lattices during FD mining. Thus, we make
+use of the knowledge of the projected attribute set at the very
+ﬁrst step of our framework, in order to efﬁciently reduce the
+cost of mining FDs from the base relations. This can be seen
+in the main algorithm of our framework, Algorithm 1, during
+the mining of the FDs on the base relations (lines # 3–5). After
+this step, each following step of our framework relies on the
+FDs mined at the previous steps. Thus, additionally to reducing
+the FD discovery complexity over the base relations, removing
+unwanted FDs at this step also prevents useless computation
+during the following steps of our framework.
+
+B. Mining of FDs Through View Selections
+
+New FDs may appear due to selections in the view deﬁ-
+nition. This will occur when the selection operation leads to
+ﬁlter the tuples violating an FD, making this FD valid in the
+resulting instance. In such a case, our framework aims at pro-
+ducing provenance triples for these new FDs with Algorithm 2.
+This algorithm checks if the selection operation leads to some
+tuple ﬁltering (from line #4) to avoid unnecessary mining step
+if the ﬁlter is not applicable. If some tuples are ﬁltered by
+the selection, then upstaged FDs need to be mined and, to
+
+do so, we rely on a level-wise approach for FD mining. The
+intuition behind such an approach is to explore the possible
+sets of attributes involved in the candidate FDs, by organizing
+them into a lattice beginning from an inﬁmum with FDs with
+singleton as lhs (line #5). Then, FD validity is tested and
+next level candidates are generated (line #11) while taking
+into account the FDs discovered at previous levels to prune
+the candidates FDs (lines #8–9). The algorithm stops when
+no candidates are left, and then the resulting set of minimal
+FDs are labelled with their provenance triples, the latter being
+returned by the algorithm.
+
+Algorithm 2: selectionFDs
+Input: R: a set of relational instances;
+
+VR: a view speciﬁcation over instances in R;
+ρ: the selection condition;
+PV : the sets of provenance triples of VR;
+AV : the set of projected attributes to explore.
+
+Result: upstaged FDs provenance triples over VR
+
+1 P ← ∅;
+2 DV ← get the set of FDs in the triples in PV ;
+3 Vsel ← σρ(VR);
+4 if size(Vsel) < size(VR) then
+5
+
+Dcand ← generate candidate FDs for ﬁrst level of VR;
+prune FDs in Dsel with attributes not in AV ;
+repeat
+
+prune non-minimal FDs in Dcand knowing Dout ;
+prune non-minimal FDs in Dcand knowing DV ;
+add to Dout the FDs from Dcand holding in V ;
+Dcand ← generate candidate FDs for next level;
+
+until Dcand = ∅;
+for each FD d ∈ Dout do
+
+add triple (d, ”upstaged selection”, VR) to P
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+16 else
+17
+
+return P
+
+return ∅;
+
+C. Mining of FDs from Joined Tables
+
+In the next sections, we will show how we can mine
+the upstaged, inferred and join FDs generated during a join
+operation. In the next theorem, we state that the join order
+can only affect the type of upstaged FDs which can switch
+between left or right upstaged FDs:
+
+Lemma 1 (FD types preservation though join operations):
+Let R = {R1; . . . ; Rn} be a set of relational
+instances.
+Let f ds(Ri) denotes the set of minimal FDs over the re-
+lational instance Ri. Let Σlef t up, Σright up, Σinf and Σjoin
+denote the sets of left upstaged, right upstaged, inferred and
+join FDs over R1 (cid:5) · · · (cid:5) Rn, respectively. Then, the sets
+Σlef t up ∪ Σright up, Σinf and Σjoin are equal regardless of
+the join order. At the opposite, equality between sets Σlef t up
+and Σright up cannot be guaranteed.
+
+Next, we show how upstaged FDs can be mined over joins.
+1) Mining of Upstaged FDs from Joined Tables: Upstaged
+FDs may appear due to the join operations in the SPJ view
+when tuples from one base relation cannot be joined with their
+counterpart in the other base relation, i.e., when some join at-
+
+tribute values are missing in one of the tables. This mechanism
+is expressed more formally in the following lemma:
+
+Lemma 2 (Upstaged join FDs): Let L and R be two
+instances over relations S and T, respectively, and DL and
+DR be the two sets of all FDs such that L |= DL and R |= DR,
+respectively.
+Then the sets of upstaged join FDs denoted Dnew
+are the sets:
+
+and Dnew
+
+R
+
+L
+
+Dnew
+Dnew
+
+L = {d | d (cid:54)∈ DL ∧ (L♦X=Y (πY (R)) |= d)}
+R = {d | d (cid:54)∈ DR ∧ (πX (L)♦X=Y R) |= d)}
+
+(2)
+
+(3)
+
+Example 2: To illustrate the case of upstaged join FDs we
+use the example in Figure 1. The FD expire_flag (cid:43)1
+dod in Table PATIENT is violated by the presence of two
+in the join result of
+tuples for patient (#257). However,
+PATIENT (cid:46)(cid:47)subject_id ADMISSION, the violating tuple #257
+has no counterpart in the ADMISSION table and it disappears
+from the join result. Consequently, the FD expire_flag →
+dod becomes valid in the join result.
+
+Algorithm 3: joinUpFDs
+Input: VL, VR: two view speciﬁcations;
+
+X, Y : the sets of join attributes for VL and VR;
+♦: a join operator in {(cid:46)(cid:47); (cid:110); (cid:111); (cid:46)(cid:47) ; (cid:46)(cid:47); (cid:46)(cid:47) };
+PVL , PVR : the provenance triples sets of VL and VR;
+AV : the set of projected attributes to explore.
+
+Result: upstaged FDs provenance triples over VL and VR
+
+lef t ← upstagedFDs(VL, VR, X, Y , DVL ,AV );
+
+1 P ← ∅;
+2 DVL ← get the set of FDs in the triples in PVL ;
+3 Dup
+4 for each FD d ∈ Dup
+5
+
+add triple (d, ”upstaged left”, VL♦VR) to P;
+6 DVR ← get the set of FDs in the triples in DVR;
+7 Dup
+8 for each FD d ∈ Dup
+9
+
+add triple (d, ”upstaged right”, VL♦VR) to P;
+
+right ← upstagedFDs(VR, VL, Y , X, DVR ,AV );
+
+right do
+
+lef t do
+
+10 return P;
+11 Subroutine upstagedFDs(I,J,X,Y ,D,AV )
+12
+
+Dout ← ∅;
+Ijoin ← I♦X=Y (πY (J));
+if size(Ijoin) < size(I) then
+
+Dcand ← generate candidate FDs for ﬁrst level of
+
+Ijoin;
+
+prune FDs in Dcand with attributes not in AV ;
+repeat
+
+prune non-minimal FDs in Dcand knowing Dout;
+prune non-minimal FDs in Dcand knowing DV ;
+add to Dout the FDs from Dcand holding in I;
+Dcand ← generate candidate FDs for next level;
+
+until Dcand = ∅;
+
+return Dout
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+To compute upstaged FDs, we propose Algorithm 3.
+Lines #2–9 handle the inputs of the SPJ view for each table
+participating in the join operation. For each side of the join, the
+subroutine upstagedFDs is executed (lines #3 and 7) and
+computes partially the join only with the join attributes from
+the left side table (line #13) to check the assumption of the join
+
+value set preservation [9]. If the assumption is violated (i.e., if
+some tuples have been deleted through the join operation, as
+checked at line #14), some upstaged join FDs are produced.
+The subroutine works analogously to Algorithm 2 to discover
+the FDs in the input instance by using a level-wise approach
+where the previously discovered FDs are used to improves the
+pruning of candidates (lines #18–19).
+
+In this algorithm, the computation is performed over up-
+staged FDs only. Next, we discover the inferred FDs by relying
+on the characteristics of the join and on the FDs discovered
+previously.
+
+2) Mining of Inferred FDs from Joined Tables: We will
+now show how the inferred FDs can be deduced from the
+sets of FDs discovered from the tables involved in the join
+operation. In the next lemma, we show that if the right-hand
+side (rhs) of an FD is not functionally deﬁned by the set of
+join attributes, then this FD cannot be an inferred FD in a join
+result. This property of the join operation is formally deﬁned
+as follow:
+
+Lemma 3: Let L and R be two instances over relations
+S and T, respectively. Let L♦X=Y R be a join result with
+X ⊆ atts(L), Y ⊆ atts(R). For all A ⊆ atts(L) \ X and
+B ⊆ atts(R) \ Y :
+
+if L♦X=Y R (cid:54)|= X → B then L♦X=Y R (cid:54)|= A → B
+
+Example 3: To illustrate the property proved in Lemma 3,
+we observe that the diagnosis is not determined by the patient
+identiﬁer in Figure 1, for example patient #249 has been
+admitted three times for a different pathology each time,
+i.e., PATIENT (cid:46)(cid:47)subject_id ADMISSION (cid:54)|= subject_id →
+diagnosis. From Lemma 3, we know that diagnosis in
+the join result PATIENT (cid:46)(cid:47)subject_id ADMISSION cannot be
+determined by any set of attributes coming from PATIENT
+table. Such similar inferences may be trivial for the user, but
+they usually require the knowledge of the attribute semantics.
+If not encoded, they are difﬁcult to capture by a system.
+However, the property shown in Lemma 3 can be used to
+drastically reduce the set of possible FDs that can appear after
+a join operation.
+Intuitively, from Lemma 3 follow that inferring FDs in the
+results of a join operation using Armstrong’s transitivity axiom
+can only be done if the transitivity is done through the join
+attributes. This is formalized in the following theorem:
+
+Theorem 2: Let L and R be two instances over relations
+S and T, respectively. Let L♦X=Y R be a join result with
+X ⊆ atts(L), Y ⊆ atts(R). For all A ⊆ atts(L) \ X and
+B ⊆ atts(R) \ Y ,
+If L♦X=Y R |= A → X ∧ L♦X=Y R |= X → B,
+Then L♦X=Y R |= A → B.
+
+Example 4: In PATIENT (cid:46)(cid:47) subject_id ADMISSION result
+illustrated in Figure 1, we observe that the diagnosis deter-
+mines the date of birth, i.e., diagnosis → dob. The reason
+is that we have: admission_location, diagnosis →
+subject_id in ADMISSION and subject_id → dob in
+PATIENT. Since these tables do not contain any null values
+for the lhs and rhs attributes, joining them with attribute
+
+subject_id leaves these FDs unchanged with no violation.
+By transitivity, we obtain: diagnosis → dob.
+
+Algorithm 4: inferFDs
+Input: VL, VR: two view speciﬁcations;
+
+X, Y : the sets of join attributes for VL and VR;
+♦: a join operator in {(cid:46)(cid:47); (cid:110); (cid:111); (cid:46)(cid:47) ; (cid:46)(cid:47); (cid:46)(cid:47) };
+PVL , PVR : the provenance triples sets of VL and VR;
+AV : the set of projected attributes to explore.
+
+Result: inferred FDs provenance triples over L♦X=Y R
+
+1 DVL ← get the set of FDs in the triples in PVL ;
+2 DVR ← get the set of FDs in the triples in PVR ;
+3 Dinf L ← infer(X,Y ,DVL ,DVR );
+4 Dinf R ← infer(Y ,X,DVL ,DVR );
+5 Dinf ← Dinf L ∪ Dinf R;
+6 Dref ← refine(L,R,X,Y ,Dinf , ♦);
+7 for each FD d ∈ Dref do
+8
+9 return P;
+10 Subroutine infer(X,Y ,D, D(cid:48))
+11
+
+add triple (d, ”inferred”, VL♦VR) to P
+
+Dout ← ∅;
+forall A → X in D do
+
+forall Y → b in D(cid:48) do
+
+add A → b to Dout;
+
+return Dout;
+
+15
+16 Subroutine refine(L,R,X,Y ,Dinf , ♦)
+17
+
+Let Dout ← Dinf ;
+forall A → b in Dinf do
+
+Let I ← πX∪A(L)♦πY ∪{b}(R);
+forall A(cid:48) ⊂ A do
+
+12
+
+13
+
+14
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+24
+
+if A(cid:48) → b holds in I then
+add A(cid:48) → b to Dout;
+prune non-minimal FDs in Dout knowing
+that A(cid:48) → b is valid;
+
+return Dout;
+
+To compute the set of FDs with lhs attributes coming
+from a single instance, as described in Theorem 2, we propose
+Algorithm 4. First, the subroutine infer extracts the FDs that
+can be retrieved by transitivity (lines #12 and 13 in subroutine
+infer). Note that in the case of equijoins, equality of values
+might be enforced between sets of attributes with different
+names (i.e., X and Y might be different), thus for the general
+case, the FD (line #13) cannot be simpliﬁed into an FD X → b.
+Conversely, if we restrict the join operations to natural joins
+only, such a simpliﬁcation can be made.
+
+Then, for each FD returned by infer,
+
+the subroutine
+refine checks whether the FD is minimal or if a subset of
+its lhs leads to a minimal FD. To do so, subroutine refine
+uses an horizontal partition of the joined instances in which
+only the necessary attributes to perform the veriﬁcation are
+considered (line #19). These necessary attributes are the join
+attributes (to perform the join operation), and the lhs and rhs
+attributes of the reﬁned FD A → b (line #18) as refine only
+considers candidates with subsets of A as lhs and b as rhs
+(lines #20 and 21).
+
+3) Mining of Join FDs from Joined Tables: Now, we
+characterize the set of join FDs which hold on a join result.
+Contrarily to the inferred FDs that can be deduced directly
+
+using a simple logical reasoning, these join FDs need to be dis-
+covered and validated from the data. For example, gender,
+expire_flag→ insurance of our example has attributes
+from PATIENT in lhs and attributes from ADMISSION in
+rhs and it cannot be inferred logically. Other FDs with the
+same properties are illustrated in orange in Figure 1. In the
+following theorem, we show that if lhs attributes of an FD
+come from the instances participating in the join, then we
+cannot predict their validity without checking them directly
+with some representative (if not all) tuples of the join result:
+Theorem 3: Let L and R be two instances over relations
+S and T, respectively. Let L♦X=Y R be a join result with
+X ⊆ atts(L), Y ⊆ atts(R). We cannot guarantee that all
+FDs over L♦X=Y R can be inferred from Armstrong’s axioms
+over the FDs over L and R taken separately.
+Such FDs are illustrated in the following example:
+
+Example 5: In our example of Figure 1, FDs that can-
+not be inferred are highlighted in orange. For example,
+gender, h_expire_flag→ insurance is speciﬁc to the
+join of PATIENT and ADMISSION. It holds in PATIENT
+(cid:46)(cid:47) ADMISSION. Attributes gender and expire_flag come
+from PATIENT and attribute insurance comes
+from
+ADMISSION.
+Theorem 3 motivates the need for designing a new method for
+computing FDs from partial join results, as we cannot always
+infer all the FDs only using logical reasoning. However, we
+can rely on the following theorem to greatly reduce number
+of remaining FDs to check from the data:
+
+Theorem 4: Let L and R be two instances over relations
+S and T, respectively. Let L♦X=Y R be a join result with
+X ⊆ atts(L), Y ⊆ atts(R). For all A ⊆ atts(L), A(cid:48) ⊆
+atts(R) and b ∈ atts(R): If L♦X=Y R |= AA(cid:48) → b, Then
+L♦X=Y R |= Y A(cid:48) → b.
+
+In-line with Theorem 4, we propose Algorithm 5 for se-
+lective mining and use the FDs previously discovered with
+Algorithms 3 and 4 to compute the remaining join FDs.
+Intuitively, Theorem 4 shows that a given attribute b can be
+a rhs of a remaining join FDs only if we have previously
+found an FD of the form Y A → b with Y being the
+join attributes of the instance containing b. Thus, it allows
+us to focus only on the plausible rhs (lines #11 and 15
+in subroutine discover) and explore their candidate lhs
+(lines #12-13 and 16-17). In practice, there is no need to
+generate every candidate FDs initially. Instead, candidate FDs
+can be explored by generating a ﬁrst level containing only
+the smallest candidates and by generating upper levels only
+when currently evaluated candidates are not valid. Moreover,
+we can avoid the computation of the full join by deleting a
+given lhs attribute a if a is not a possible rhs and, for every
+FD candidate d : A → b such that a ∈ A, d is logically implied
+by previously discovered FDs.
+
+D. Completeness, Correctness, and Complexity
+
+In this section we show that the set of FDs retrieved by
+InFine is both complete and correct, and present our solution
+
+Algorithm 5: mineFDs
+Input: VL, VR: two view speciﬁcations;
+
+X, Y : the sets of join attributes for VL and VR;
+♦: a join operator in {(cid:46)(cid:47); (cid:110); (cid:111); (cid:46)(cid:47) ; (cid:46)(cid:47); (cid:46)(cid:47) };
+PVL , PVR : the provenance triples sets of VL and VR;
+P inf
+: the inferred provenance triples set.
+Result: join FDs provenance triples over L♦X=Y R
+VL♦VR
+
+VL♦VR
+
+;
+
+1 Dinf ← get the set of FDs in the triples in P inf
+2 DVL ← get the set of FDs in the triples in PVL ;
+3 Dlef t ← mine(L,R,X,Y ,DVR ,Dinf );
+4 DVR ← get the set of FDs in the triples in PVR ;
+5 Dright ← mine(R,L,Y ,X,DVL ,Dinf );
+6 for each FD d ∈ Dlef t ∪ Dright do
+7
+8 return P;
+9 Subroutine mine(I,J,X,Y ,DJ ,Dinf )
+10
+
+add triple (d, ”joinFD”, VL♦VR) to P
+
+Dout ← ∅;
+forall Y → b in DJ do
+
+forall A ⊆ atts(I) \ X do
+
+if (cid:54) ∃A(cid:48) ⊂ A, A(cid:48) → b ∈ Dinf and A → b holds
+in I♦J then
+
+add A → b to Dout;
+forall Y A(cid:48) → b ∈ DJ such that A(cid:48) (cid:54)→ b do
+
+forall A ∪ A(cid:48) → b such that A ⊆ atts(I) \ X do
+
+if A ∪ A(cid:48) → b holds in I♦J then
+add A ∪ A(cid:48) → b to Dout;
+
+return Dout;
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+complexity. First, we show that InFine always retrieve every
+functional dependency in the speciﬁed SPJ view.
+
+Theorem 5 (InFine completeness): Let R = {R1; . . . ; Rn}
+be a set of relational instances. Let VR be a view speciﬁcation
+over relations in R. Let f ds(VR) denotes the set of minimal
+FDs over the view speciﬁed by VR. Let f ds(InFine ) denotes
+the set of FDs computed by InFine over the view speciﬁed by
+VR. Then:
+
+∀d ∈ f ds(VR), ∃d(cid:48) ∈ f ds(InFine ) s.t. d ≡ d(cid:48)
+
+This establish the completeness of our approach. Now, in
+the next theorem, we show that every FD retrieved by InFine is
+valid in the speciﬁed SPJ view:
+
+Theorem 6 (InFine correctness): Let R = {R1; . . . ; Rn} be
+a set of relational instances. Let VR be a view speciﬁcation
+over relations in R. Let IVR be the view speciﬁed by VR. Let
+f ds(InFine ) denotes the set of FDs computed by InFine over
+the view speciﬁed by VR. Then:
+
+∀d ∈ f ds(InFine ), IVR |= d
+
+We now detail the complexity of our algorithms. Algo-
+rithms 2 and 3 are based on level-wise algorithms through
+the attributes lattices. Their complexity is exponential in the
+number of attributes of the considered table. They prune
+candidates at each level when it
+is possible. In terms of
+memory, only two levels are required. The memory size is
+bounded by O(cid:0) k
+(cid:1) where k is the number of attributes.
+Algorithm 4 infers and reﬁnes FDs coming from the previous
+step with complexity O(n · f ), where f is the number of
+
+k/2
+
+DB
+
+Table
+Patients
+
+MIMIC3 Admissions
+
+PTE
+
+PTC
+
+TPC-H
+
+(Att# ; Tuple#)
+(7 ; 46.52k)
+(18 ; 58.976k)
+(4 ; 651.047k)
+(3 ; 14.710k)
+(2; 300)
+(4 ; 9.317k)
+(5 ; 9.189k)
+(1 ; 340)
+(3; 12.333k)
+(3 ; 24.758k)
+(3 ; 12.379k)
+(2 ; 343)
+(7 ; 10k)
+(8 ; 150k)
+(9 ; 1.5M)
+(16 ; 6M)
+(4 ; 23)
+(3 ; 5)
+(7 ; 200k)
+(5 ; 800k)
+
+Diagnoses icd
+D icd Diagnoses
+active
+bond
+atm
+drug
+atom
+connected
+bond
+molecule
+Supplier
+Customer
+Orders
+LineItem
+Nation
+Region
+Part
+Partsupp
+TABLE I: Data characteristics.
+
+FD#
+11
+631
+2
+2
+1
+3
+5
+0
+2
+3
+2
+1
+34
+51
+53
+3946
+9
+6
+99
+11
+
+validated FDs and n the maximal number of tuples in the left
+or right instance. The complexity of Algorithm 5 is O(f · fj)
+where f is the maximal number of validated FDs in the left
+or right instance and fj the number of validated FDs in the
+join instance.
+
+V. EXPERIMENTS
+
+Evaluation Goals. The two main points we seek to vali-
+date in our experimental study are as follows: (1) Does our
+approach enable us to discover all FDs with their provenance
+information in an efﬁcient manner and faster than the straight-
+forward approach? (2) What is the impact of different data and
+SPJ view characteristics on the InFine performance?
+
+Setup. We perform all experiments on a laptop HP ZBook
+15 machine with an Intel Core i7-4900MQ, 2.8 GHz, 32 GB
+RAM, powered by Windows 10 pro 64-bit. Our implemen-
+tation in C++ uses only one thread. Sharable datasets, SPJ
+queries, scripts, and code are available at https://github.com/
+ucomignani/InFine.
+
+Data. We use three real-world datasets and one synthetic
+dataset in our experiments: (1) MIMIC-3, a clinical database 3
+[14]; (2) PTE4, a database for predictive toxicology evaluation,
+used to predict whether a compound is carcinogenic, and (3)
+PTC5, the dataset from the Predictive Toxicology Challenge
+that consists of more than three hundreds of organic molecules
+marked according to their carcinogenicity on male and female
+mice and rats; and (4) the TPC-H Benchmark6 with scale-
+factor 1. The datasets characteristics are given in Table I and
+the characteristics of the queries corresponding to the views
+on the above datasets are provided in Table II. To the best
+of our knowledge, all the datasets used in the literature for
+
+3https://physionet.org/content/mimiciii/1.4/
+4https://relational.ﬁt.cvut.cz/dataset/PTE
+5https://relational.ﬁt.cvut.cz/dataset/PTC
+6http://www.tpc.org/tpch/
+
+DB SPJ View
+3 Q(patients (cid:46)(cid:47) admissions)
+C
+I
+M
+M
+
+I
+
+diagnosesicd (cid:46)(cid:47) patients
+dicddiagnoses (cid:46)(cid:47) diagnosesicd
+[diagnosesicd(cid:46)(cid:47)patients](cid:46)(cid:47) dicddiag-
+noses
+atom (cid:46)(cid:47) molecule
+connected (cid:46)(cid:47) bond
+[connected (cid:46)(cid:47) bond] (cid:46)(cid:47) molecule
+connected (cid:46)(cid:47)id1 [atom (cid:46)(cid:47) molecule]
+atm (cid:46)(cid:47) drug
+active (cid:46)(cid:47) drug
+[bond (cid:46)(cid:47) drug] (cid:46)(cid:47) active
+[atm (cid:46)(cid:47) bond (cid:46)(cid:47) atm] (cid:46)(cid:47) drug
+Q2∗(P (cid:46)(cid:47) PS (cid:46)(cid:47) S (cid:46)(cid:47) N (cid:46)(cid:47) R)
+Q3∗(C (cid:46)(cid:47) O (cid:46)(cid:47) L)
+Q9∗(P (cid:46)(cid:47) PS (cid:46)(cid:47) S (cid:46)(cid:47) L (cid:46)(cid:47) O (cid:46)(cid:47) N)
+Q11∗(P (cid:46)(cid:47) S (cid:46)(cid:47) N)
+
+C
+T
+P
+
+E
+T
+P
+
+-
+
+H
+C
+P
+T
+
+Tuple#
+58,976
+58,798
+658,498
+658,498
+
+9,111
+24,758
+18,312
+18,312
+9,189
+299
+7,994
+9,317
+21,696
+60,150
+3,735,632
+284,160
+
+FD#
+16
+12
+22
+44
+
+4
+8
+12
+12
+5
+1
+6
+24
+69
+14
+8
+151
+
+TABLE II: SPJ queries considered in our experiments.
+
+benchmarking FD discovery methods consist of single tables,
+while we use multi-table scenarios. Note that the numbers of
+discovered FDs in the literature datasets are not comparable
+as we do not employ the same datasets due to the SPJ views
+studied in our approach. To handle multiple tables with SPJ
+queries, we propose our own benchmark datasets along with
+views on top of them. We adapted TPC-H queries by removing
+group-by and order-by statements (that are not addressed in
+our approach) and used the speciﬁed constants7. SPJ queries
+for the other datasets were manually crafted to make use
+of multiple tables and obtain joins of various sizes (from
+2 to 6 tables), number of tuples (from 299 to 3 millions),
+and coverage values (from 0.12 to 25,812.67) to show the
+performances of our method comparatively in a large and
+representative range of SPJ views.
+
+We observed that the cardinalities and overlap of the join
+attribute values in the datasets are rarely preserved through a
+join operation and this has a great impact on FD discovery
+from SPJ queries depending on the join operator used. To
+quantify this phenomenon, we deﬁne a measure called cover-
+age as follows:
+
+Coverage(R♦L) =
+
+Cov(R♦L, L, X) + Cov(R♦L, R, Y )
+
+(cid:19)
+
+(cid:18)
+
+1
+2
+
+with Cov(Join, I, a) =
+
+1
+|πa(I)|
+
+(cid:88)
+
+∀v∈πa(I)
+
+|σa=v(Join))|
+|σa=v(I)|
+
+.
+
+where X and Y denote the join attributes of L and R base
+tables respectively. I is a considered instance and a the con-
+sidered join attribute. If Coverage(R♦L) = 0, no tuple from
+L can be joined with tuples in R. For Coverage(R♦L) < 1,
+some tuples in L (or R) may be missing from the join result, as
+it is the case for patients #257 in PATIENT and #247, #248, and
+#253 in ADMISSION that do not have their counterparts in the
+other table in our example. For Coverage(R♦L) = 1, there
+are as many tuples in both tables L and R as in the join result.
+
+7see query validation sections of the TPC documentation at http://tpc.org/
+
+tpc documents current versions/pdf/tpc-h v3.0.0.pdf
+
+For Coverage(R♦L) > 1, there are more tuples in the join
+result than in tables L or R as some tuples may be repeated
+through the join. The coverage values of the corresponding
+views are given in Table III.
+
+Methods. We compare the InFine algorithms applied to base
+tables against four state-of-the-art FD discovery methods, i.e.:
+(1) TANE [11], [12], (2) Fast FDs [29], and (3) FUN [21], and
+(4) HyFD [25] with Java implementation of Metanome [23]
+using command line. The datasets employed in our study are
+stored in a PostgresSQL DBMS (version 12.7). Join attributes
+are indexed with both B-Tree and hash indexes. The reported
+results correspond to the average over 10 runs for each query.
+Metrics. We compute accuracy, average runtime, and max-
+imal memory consumption for each view. In our setting,
+accuracy corresponds to precision and is deﬁned as the fraction
+of the number of FDs correctly discovered by InFine applied
+only to the base tables over the total number of FDs found by
+baseline methods classically applied to the SPJ view results.
+Accuracy values are given in Table III and represented as
+percentages in pie charts of Fig. 5. All methods (including
+ours) reach accuracy of 1 at the end of their execution.
+
+Comparison Setup. Our goal is to compare our method
+which discovers FDs from a SPJ view speciﬁcation and base
+tables and provides FD provenance information against the
+straightforward approach which consists of discovering all the
+FDs from each base table, computing the view result, and
+discovering the FDs on top of the latter. Classical methods do
+not provide provenance information. Then, a fair comparison
+requires the preservation of FD provenance information from
+the base tables to the view. To know the origin of each
+FD, both the baselines and our approach have to discover
+FDs from the base tables ﬁrst. Since these execution times
+are the same in both cases, we don’t include them. On the
+one hand, the competing methods are applied to each SPJ
+view result and we report their average execution time to
+which we added the execution time of the full SPJ view
+computation. On the other hand, InFine is applied to the base
+tables only and it computes a partial SPJ view depending
+on the view speciﬁcation (query sub-tree) and generate FD
+provenance triples; we report InFine average execution time
+with time breakdown per algorithm. The time of the partial SPJ
+view computation is included in mineFDs. The generation
+of provenance triples is included in the execution of each
+InFine algorithm in charge of annotating each FD accordingly.
+Total I/O times of InFine are also reported in Table III.
+
+A. Efﬁciency Evaluation
+
+In a ﬁrst set of experiments, we evaluate the runtime and
+memory consumption of the InFine algorithms compared to the
+state-of-the-art FD discovery methods that follow the straight-
+forward approach over the 16 SPJ queries on the real-world
+and synthetic datasets with a wide range of coverage values.
+The selected queries are representative in terms of coverage
+and size (number of tables, tuples, and attributes). Results
+for other queries follow the same trend and are available as
+supplementary material on Github.
+
+Fig. 3: Average runtime (in seconds): InFine against HyFD, FastFDs, FUN, and TANE with full and partial SPJ computation
+
+Fig. 4: Maximal memory consumption (in MegaBytes) of InFine against HyFD, FastFDs, FUN, and TANE algorithms
+
+1) Runtime: Fig. 3 presents, for each method, the average
+total runtime in seconds for FD discovery (including data
+loading) in log scale. For the competing methods, we included
+the average execution time of the SPJ view over the indexed
+data. Similarly, we included the partial SPJ view computation
+time included in mineFDs. For all methods including ours,
+we did not include the time for discovering FDs from base
+tables since these costs are the same. Since our method does
+not require the full SPJ view computation to discover FDs
+and does not operate over the query result but only on the
+single base tables, it is much faster than the traditional methods
+with one order of magnitude on average up to two orders
+of magnitude compared to Fast FDs (> 2, 000 seconds). A
+provenance triple is generated each time an FD is validated
+
+by one of the InFine algorithms and is appended to the corre-
+sponding FD data structures with negligible time (included in
+each algorithm execution time). For MIMIC3 and TPC-H SPJ
+queries with the highest values for coverage and number of
+tuples (e.g., Q9∗ and Q11∗), InFine is still outperforming the
+other methods. The time difference between full and partial
+SPJ computations shown in Fig. 3 also explains the advantage
+of our approach.
+
+2) Memory Consumption: As shown in Fig. 4, the average
+maximal memory consumption of InFine (for accuracy equals
+1) is the lowest for all queries across the datasets. HyFD
+has the second position in terms of memory consumption
+efﬁciency and TANE is the worst one. For all methods, Q9∗
+has the highest memory consumption due to its large size of
+
+0.00	0.01	0.10	1.00	10.00	100.00	1,000.00	atom	ı><ı	molecule	connected	ı><ı	bond	[connected	ı><ı	bond]	ı><ı	molecule	connected	ı><ı	id1_[atom	ı><ı	molecule]	atm	ı><ı	drug	active	ı><ı	drug	[bond	ı><ıdrug]	ı><ı	active	[atm	ı><ı	bond	ı><ı	atm]	ı><ı	drug	Q(patients	ı><ı	admissions)	diagnoseicd	ı><ı	patients	diagnosesicd	ı><ı	dicddiagnoses	[diagnoseicd	ı><ı	patients]	ı><ı	dicddiagnoses	Q2*	Q3*	Q9*	Q11*	Time	(s)	log	sclae																	PTE																																		PTC																																		MIMC3																																			TPC-H														InFine	HyFD	with	full	SPJ	FastFDs	with	full	SPJ	FUN	with	full	SPJ	TANE	with	full	SPJ	SPJ	InFine	mineFDs	including	partial	SPJ	Full SPJInFIne mineFDs 
+including partial SPJ 
+  0	100	200	300	400	500	600	700	pte_active	ı><ı	pte_drug	pte_atm	ı><ı	pte_drug	[pte_bond	ı><ı	pte_drug]	ı><ı	pte_active	[pte_atm	ı><ı	pte_bond	ı><ı	pte_atm]	ı><ı	pte_drug	Memory	(Mo)	PTE	InFine	HyFD	FastFD	FUN	TANE	0	100	200	300	400	500	600	700	800	900	1000	atom	ı><ı	molecule	connected	ı><ı	bond	[connected	ı><ı	bond]	ı><ı	molecule	connected	ı><ı	id1_[atom	ı><ı	molecule]	Memory	(Mo)	PTC	InFine	HyFD	FastFD	FUN	TANE	0	1	2	3	4	5	6	7	8	9	10	Q(patients	ı><ı	admissions)	diagnoseicd	ı><ı	patients	dicddiagnoses	ı><ı	diagnosesicd	[diagnosesicd	ı><ı	patients]	ı><ı	dicddiagnoses	Memory	(Mo)	x1000	MIMIC3	InFine	HyFD	FastFD	FUN	TANE	0	1	2	3	4	5	6	7	8	9	10		Q2*		Q3*		Q9*		Q11*	Memory	(Mo)	x1000	TPC-H	InFine	HyFD	FastFD	FUN	TANE	(MegaBytes)(MegaBytes)Fig. 5: Average runtime and accuracy of InFine with breakdown per algorithm
+
+3.73 millions of tuples, very high coverage (25.8k), and the
+number of joins between 6 tables. This case is an example of
+a worst case scenario where many tuples are repeated through
+the join of the base tables. FD discovery from Q9∗ requires
+the mining and checking of all the valid FDs and storing all
+the relevant information. In this particular case, InFine time
+performance becomes comparable to HyFD over the full SJP
+view computation (due to mineFDs), although all FDs were
+discovered before by upstageFDs and inferFDs (see Fig.
+5).
+
+B. Quality Evaluation
+
+In Fig. 5, we report the average runtime breakdown of
+each algorithm upstageFDs, inferFDs, and mineFDs
+of InFine (as horizontal histograms) and their respective per-
+centages of discovered FDs (in the corresponding pie charts
+with the same color coding). Error bars represent the standard
+deviation of the average total runtime of InFine algorithms.
+selectionFDs’s time is included in upstageFDs’s time.
+Various base table data distributions, SPJ views, and coverage
+values with very different characteristics across the datasets
+illustrate the behavior of our algorithms.
+
+Noticeably, upstageFDs can retrieve from 33.3% to 59%
+of the FDs in MIMIC3 in 0.75ms on average, from 58.3% to
+75% in PTC in 1.12ms, from 66.7% to 100% in PTE in 1.5ms,
+and from 42.8.7% to 87.5% in TPC-H in 7.65ms, which are
+negligible times compared to mineFDs time and I/O time,
+the most time-consuming steps. Table III gives the number of
+FDs retrieved by each algorithm and time breakdowns.
+
+The logical inference times are negligible (below 0.0001
+ms) and are not reported in the table. inferFDs can retrieve
+100% of the FDs for 3 queries over PTE. In some cases,
+mineFDs is executed but does not return any new FD
+(e.g., Q∗9 in TPC-H or [atm (cid:46)(cid:47) bond (cid:46)(cid:47) atm](cid:46)(cid:47)drug),
+whereas in the other queries, mining subsets of the SPJ view
+using mineFDs is necessary to recover the remaining FDs.
+Without computing and mining the join results, upstageFDs
+and inferFDs can retrieve 83.01% of FDs (68.38±20.00 and
+14.63±15.47, respectively) on average across all the datasets.
+We also observed that join ordering does not affect the total
+number of discovered FDs, but it changes FD provenance. The
+main reason is due to the difference in the query execution
+sub-trees triggering different FD validation by each InFine al-
+gorithm.
+
+It should be noted that, due to the NP-completeness of the
+FD mining problem (cf. [7]), this exploration is necessary to
+ensure that no valid FD is missed.
+
+These results clearly show the main advantages of our
+approach, reducing drastically the execution time of FD dis-
+covery from SPJ queries with minimal memory consumption,
+outperforming all the state-of-the art methods tested in our
+experiments over a large representative range of queries.
+
+VI. RELATED WORK
+
+In the last three decades, numerous approaches from the
+database and the data mining communities have been proposed
+to extract automatically valid exact and approximate FDs from
+single relational tables [16], [5]. Liu et al. [19] have shown
+
+0.00	0.04	0.08	0.12	0.16	[atm	ı><ı	bond	ı><ı	atm]	ı><ı	drug	[bond	ı><ı	drug]	ı><ı	active	active	ı><ı	drug	atm	ı><ı	drug	Time	(ms)	PTE	100	100	100	66.67	33.33	20	40	60	80	100	120	[connected	ı><ı	bond]	ı><ı	molecule	atom	ı><ı	molecule	connected	ı><ı	bond	connected	ı><ı	id1[atom	ı><ı	molecule]	Time	(ms)	PTC	58.341.662.5	37.5	75.0	25.0	75.0	25.0	5	15	25	35	45	Q9*	Q11*	Time	(s)	TPC-H	63.523.113.287.523.2	42.857.10.000	0.040	0.080	0.120	0.160	Q2*	Time	(s)	59.48.7	31.80	2	4	6	8	10	12	[diagnosesicd	ı><ı	patients]	ı><ı	dicddiagnoses	dicddiagnoses	ı><ı	diagnosesicd	diagnosesicd	ı><ı	patients	MIMIC3	33.366.7	59.027.213.654.545.40.22	0.24	0.26	0.28	Q(patients	ı><ı	admissions)	Time	(s)	56.3	43.75	15	25	35	45	Q9*	Q11*	Time	(s)	TPC-H	63.523.113.287.523.2	13.01	13.03	13.05	13.07	Q3*	Time	(s)	42.857.10.000	0.040	0.080	0.120	0.160	Q2*	Time	(s)	59.48.7	31.8inferFDsmineFDs   upstageFDs0.000	0.040	0.080	0.120	0.160	Q2*	Time	(s)	Series4	Average	of	algo1Time	(s)	Average	of	algo2Time	(s)	Average	of	algo3Time	(s)	0.000	0.040	0.080	0.120	0.160	Q2*	Time	(s)	Series4	Average	of	algo1Time	(s)	Average	of	algo2Time	(s)	Average	of	algo3Time	(s)	0.000	0.040	0.080	0.120	0.160	Q2*	Time	(s)	Series4	Average	of	algo1Time	(s)	Average	of	algo2Time	(s)	Average	of	algo3Time	(s)	0.000	0.040	0.080	0.120	0.160	Q2*	Time	(s)	Series4	Average	of	algo1Time	(s)	Average	of	algo2Time	(s)	Average	of	algo3Time	(s)	I/O5	15	25	35	45	Q9*	Q11*	Time	(s)	TPC-H	63.523.113.287.523.2	13.01	13.03	13.05	13.07	Q3*	Time	(s)	42.857.10.000	0.040	0.080	0.120	0.160	Q2*	Time	(s)	59.48.7	31.8Accuracy (%) Accuracy (%) Accuracy (%) 12.542.959.127.345.531.957.112.563.623.213.2Accuracy (%) 13.0745DB
+
+SPJ View
+
+E
+T
+P
+
+C
+T
+P
+
+atm (cid:46)(cid:47) drug
+active (cid:46)(cid:47) drug
+[bond (cid:46)(cid:47) drug] (cid:46)(cid:47) active
+[atm (cid:46)(cid:47) bond (cid:46)(cid:47) atm] (cid:46)(cid:47) drug
+atom (cid:46)(cid:47) molecule
+connected (cid:46)(cid:47) bond
+[connected (cid:46)(cid:47) bond] (cid:46)(cid:47) molecule
+connected (cid:46)(cid:47)id1 [atom (cid:46)(cid:47) molecule]
+
+I
+
+3 diagnosesicd (cid:46)(cid:47) patients
+C
+I
+M
+M
+
+dicddiagnoses (cid:46)(cid:47) diagnosesicd
+[diagnosesicd (cid:46)(cid:47) patients] (cid:46)(cid:47) dicddiagnoses
+Q(patients (cid:46)(cid:47) admissions)
+Q2∗(P (cid:46)(cid:47) PS (cid:46)(cid:47) S (cid:46)(cid:47) N (cid:46)(cid:47) R)
+Q3∗(C (cid:46)(cid:47) O (cid:46)(cid:47) L)
+Q9∗(P (cid:46)(cid:47) PS (cid:46)(cid:47) S (cid:46)(cid:47) L (cid:46)(cid:47) O (cid:46)(cid:47) N)
+Q11∗(P (cid:46)(cid:47) S (cid:46)(cid:47) N)
+
+-
+
+H
+C
+P
+T
+
+Cov.
+
+(Att# ; Tuple#)
+
+UpstageFDs
+Accuracy
+1
+1
+0.67
+1
+0.75
+0.625
+0.75
+0.583
+0.591
+0.333
+0.545
+0.563
+0.594
+0.429
+0.875
+0.636
+TABLE III: Accuracy and time breakdowns of InFine algorithms
+
+(5 ; 9,189)
+(2 : 299)
+(6 ; 7,994)
+(14 ; 9,317)
+(4 ; 9,111)
+(5 ; 24,758)
+(6 ; 18,312)
+(6 ; 18,312)
+(12 ; 651,047)
+(7 ; 658,498)
+(14 ; 658,498)
+(10 ; 6,736)
+(10 ; 21,696)
+(6 ; 60,150)
+(9 ; 3,735,632)
+(15 ; 284,160)
+
+MineFDs
+Accuracy
+0
+0
+0
+0
+0
+0
+0
+0
+0.136
+0.667
+0.455
+0437
+0.319
+0.571
+0
+0.132
+
+InferFDs
+Accuracy
+0
+0
+0.33
+0
+0.25
+0.375
+0.25
+0.417
+0.273
+0
+0
+0
+0.087
+0
+0.125
+0.232
+
+14.01
+0.94
+13.83
+14.20
+13.67
+1.50
+27.08
+27.08
+7.50
+22.84
+22.84
+0.79
+1.50
+0.12
+25,813
+80.09
+
+Total Accu-
+racy (FD#)
+1 (5 FDs)
+1 (1 FD)
+1 (6 FDs)
+1 (24 FDs)
+1 (4 FDs)
+1 (8 FDs)
+12 (12FDs)
+1 (12 FDs)
+1 (22 FDs)
+1 (12 FDs)
+1 (44 FDs)
+1 (16 FDs)
+1 (69 FDs)
+1 (14 FDs)
+1 (8 FDs)
+1 (151 FDs)
+
+I/O (s)
+
+0.0246
+0.0015
+0.0215
+0.0879
+0.0231
+0.1012
+0.0686
+0.0903
+2.1876
+1.7202
+5.1232
+0.2360
+0.1299
+13.036
+16.967
+13.771
+
+upstageFDs
+(s)
+0.0000
+0.0000
+0.0030
+0.0030
+0.0000
+0.0015
+0.0000
+0.0030
+0.0015
+0.0000
+0.0000
+0.0015
+0.0045
+0.0000
+0.0015
+0.0246
+
+mineFDs
+(s)
+0.0000
+0.0000
+0.0000
+0.0492
+0.0015
+0.0015
+0.0030
+0.0045
+2.3120
+0.3497
+6.1325
+0.0230
+0.0120
+0.0198
+12.1261
+0.5777
+
+that the complexity of FD discovery is in O(n2( k
+2 )22k) where
+k is the number of attributes and n the number of records
+considered. To ﬁnd FDs efﬁciently, existing approaches can
+be classiﬁed into three categories: (1) Tuple-oriented methods
+(e.g., FastFDs [29], DepMiner [20]) that exploit the notion
+of tuples agreeing on the same values to determine the
+combinations of attributes of an FD; (2) Attribute-oriented
+methods (e.g., Tane [11], [12], Fun [21], [22], FDMine [30])
+that use pruning techniques and reduce the search space to
+the necessary set of attributes of the relation to discover exact
+and approximate FDs. HyFD [25] exploits simultaneously
+the tuple- and attribute-oriented approaches to outperform the
+previous approaches; and more recently (3) Structure learning
+methods relying on sparse regression [31], or on entropy-based
+measures [15] to score candidate constraints (not limited to
+FDs alone). More particularly, FDX [31] performs structure
+learning over a sample constructed by taking the value dif-
+ferences over sampled pairs of tuples from the raw data. In
+addition, incremental approaches (e.g., [27], [4]) have been
+developed to tackle data volume and velocity with updating
+all valid FDs when new tuples are inserted outperforming
+classical approaches that recalculate all FDs after each data
+update. Extensive evaluations of FD discovery algorithms can
+be found in [8], [24]. To the best of our knowledge, previous
+work on FD discovery did not attempt to address the problem
+of FD discovery from integrated views in an efﬁcient manner
+while preserving data provenance. Our approach combining
+logical inference and selective mining from the base tables
+adapting FD lattice approach avoids the full computation of
+FDs from the integrated views and it is the ﬁrst solution in
+this direction.
+
+The problem of deciding whether a semantic constraint
+(being a FD or a Join Dependency) is valid on a tableau
+view, knowing that it is valid on the base relations has been
+addressed by Klug et al. [17]. However, their view constraint
+problem and FD implication is inherently different from our
+FD inference problem, and allowing to reuse discovered FDs
+of base tables while annotating them with provenance infor-
+mation and efﬁciently recomputing FDs that are valid on the
+view and are not valid on the base tables (as stated in Th.
+
+5). Moreover, the underlying technique employed in [17] and
+used for checking the validity of FDs leverages the tableau
+chase as opposed to using the FD lattice, the latter being a
+well established efﬁcient method for FD discovery.
+
+The problem of propagating XML keys to relations is an or-
+thogonal problem with respect to ours [6]. The simple mapping
+language from XML to relations and the restriction to XML
+keys, that cannot capture relational functional dependencies,
+is speciﬁc to this work as also stated in their paper [6].
+
+VII. CONCLUSIONS
+
+We addressed the problem of FD discovery from integrated
+views starting from the FDs of multiple base tables by avoiding
+the full computation of the view beforehand. The salient
+features of our work are the following: (1) We leverage single-
+table approximate FDs that become exact FDs due to the
+join operation; (2) We leverage logical inference to discover
+FDs from the base tables without computing the full view
+result; and (3) We ﬁnd new multi-table join FDs from partial
+join using selective mining on the necessary attributes. We
+empirically show that InFine outperforms, both in terms of
+runtime and memory consumption,
+the state-of-the-art FD
+discovery methods applied to the SPJ views that have to be
+computed beforehand. We hope that our work will open a
+new line of research for reusing the FDs discovered from
+multiple base tables. Various orderings of the base tables lead
+to different sets of potential upstaged FDs, which, in turn, may
+trigger different logical inferences. Future work will be to ﬁnd
+the optimal ordering of the base tables to reduce the overall
+execution time and memory consumption.
+
+REFERENCES
+
+[1] Z. Abedjan, L. Golab, F. Naumann, and T. Papenbrock. Data Proﬁling.
+Synthesis Lectures on Data Management. Morgan & Claypool Publish-
+ers, 2018.
+
+[2] L. Berti- ´Equille, H. Harmouch, F. Naumann, N. Novelli, and S. Thiru-
+muruganathan. Discovery of genuine functional dependencies from
+relational data with missing values. Proc. VLDB Endow., 11(8):880–892,
+Apr. 2018.
+
+[3] P. Buneman, S. Khanna, and W. C. Tan. Why and where: A charac-
+In Database Theory - ICDT 2001, 8th
+terization of data provenance.
+International Conference, London, UK, January 4-6, 2001, Proceedings,
+pages 316–330, 2001.
+
+[4] L. Caruccio, S. Cirillo, V. Deufemia, and G. Polese.
+
+discovery of functional dependencies with a bit-vector algorithm.
+Proc. of CEUR Workshop, vol. 2400, 2019.
+
+Incremental
+In
+
+[31] Y. Zhang, Z. Guo, and T. Rekatsinas. A statistical perspective on
+In Proc. of ACM
+
+discovering functional dependencies in noisy data.
+SIGMOD, 2020.
+
+[5] L. Caruccio, V. Deufemia, and G. Polese. Relaxed functional dependen-
+cies—a survey of approaches. IEEE TKDE, 28(1):147–165, 2015.
+[6] S. B. Davidson, W. Fan, and C. S. Hara. Propagating XML constraints
+
+to relations. J. Comput. Syst. Sci., 73(3):316–361, 2007.
+
+[7] S. Davies and S. Russell. Np-completeness of searches for smallest
+In AAAI Symposium on Intelligent Relevance,
+
+possible feature sets.
+pages 37–39. AAAI Press, 1994.
+
+[8] F. D¨ursch, A. Stebner, F. Windheuser, M. Fischer, T. Friedrich,
+N. Strelow, T. Bleifuß, H. Harmouch, L. Jiang, T. Papenbrock, and
+F. Naumann.
+Inclusion dependency discovery: An experimental eval-
+uation of thirteen algorithms. In CIKM 2019, pages 219–228, 2019.
+[9] H. Garcia-Molina, J. D. Ullman, and J. Widom. Database systems - the
+
+complete book (International Ed.). Pearson Education, 2002.
+
+[10] B. Golshan, A. Y. Halevy, G. A. Mihaila, and W. Tan. Data integration:
+In Proceedings of the 36th ACM SIGMOD-
+After the teenage years.
+SIGACT-SIGAI Symposium on Principles of Database Systems, PODS
+2017, Chicago, IL, USA, May 14-19, 2017, pages 101–106, 2017.
+[11] Y. Huhtala, J. K¨arkk¨ainen, P. Porkka, and H. Toivonen. Efﬁcient
+discovery of functional and approximate dependencies using partitions.
+In Proc. of ICDE, pages 392–401, 1998.
+
+[12] Y. Huhtala, J. K¨arkk¨ainen, P. Porkka, and H. Toivonen. Tane: An efﬁcient
+algorithm for discovering functional and approximate dependencies.
+Computer Journal, 42(2):100–111, 1999.
+
+[13] I. F. Ilyas, V. Markl, P. J. Haas, P. Brown, and A. Aboulnaga. CORDS:
+automatic discovery of correlations and soft functional dependencies. In
+Proc. of ACM SIGMOD, pages 647–658, 2004.
+
+[14] A. E. Johnson, T. J. Pollard, L. Shen, H. L. Li-wei, M. Feng, M. Ghas-
+semi, B. Moody, P. Szolovits, L. A. Celi, and R. G. Mark. MIMIC-III,
+a freely accessible critical care database. Scientiﬁc data, 3, 2016.
+[15] B. Kenig, P. Mundra, G. Prasad, B. Salimi, and D. Suciu. Mining
+
+approximate acyclic schemes from relations, 2019.
+
+[16] J. Kivinen and H. Mannila. Approximate inference of functional depen-
+dencies from relations. Theoretical Computer Science, 149(1):129–149,
+1995.
+
+[17] A. C. Klug and R. Price. Determining view dependencies using tableaux.
+
+ACM Trans. Database Syst., 7(3):361–380, 1982.
+
+[18] S. Kruse and F. Naumann. Efﬁcient discovery of approximate depen-
+
+dencies. PVLDB, 11(7):759–772, 2018.
+
+[19] J. Liu, J. Li, C. Liu, and Y. Chen. Discover dependencies from data—a
+IEEE Trans. on Knowl. and Data Eng., 24(2):251–264, Feb.
+
+review.
+2012.
+
+[20] S. Lopes, J.-M. Petit, and L. Lakhal. Efﬁcient discovery of functional
+dependencies and armstrong relations. In Proc. of EDBT, pages 350–
+364, 2000.
+
+[21] N. Novelli and R. Cicchetti. FUN: an efﬁcient algorithm for mining
+functional and embedded dependencies. In Proc. of ICDT, volume 1973
+of LNCS, pages 189–203, 2001.
+
+[22] N. Novelli and R. Cicchetti. Functional and embedded dependency
+inference: a data mining point of view. Inf. Syst., 26(7):477–506, 2001.
+[23] T. Papenbrock, T. Bergmann, M. Finke, J. Zwiener, and F. Naumann.
+Data proﬁling with metanome. PVLDB, 8(12):1860–1863, 2015.
+
+[24] T. Papenbrock,
+
+J. Ehrlich,
+
+J. Rudolph,
+M. Sch¨onberg, J. Zwiener, and F. Naumann. Functional dependency
+discovery: An experimental evaluation of seven algorithms. Proc. VLDB
+Endow., 8(10):1082–1093, 2015.
+
+J. Marten, T. Neubert,
+
+[25] T. Papenbrock and F. Naumann. A hybrid approach to functional
+
+dependency discovery. In SIGMOD’16, page 821–833, 2016.
+
+[26] G. N. Paulley. Exploiting Functional Dependence in Query Optimiza-
+
+tion. Citeseer, 2000.
+
+[27] P. Schirmer, T. Papenbrock, S. Kruse, F. Naumann, D. Hempﬁng,
+T. Mayer, and D. Neusch¨afer-Rube. DynFD: Functional dependency
+discovery in dynamic datasets. In Proc. of EDBT, pages 253–264, 2019.
+[28] S. Thirumuruganathan, L. Berti- ´Equille, M. Ouzzani, J. Quian´e-Ruiz,
+and N. Tang. Uguide: User-guided discovery of fd-detectable errors. In
+Proc. of ACM SIGMOD, pages 1385–1397, 2017.
+
+[29] C. M. Wyss, C. Giannella, and E. L. Robertson. FastFDs: A heuristic-
+driven, depth-ﬁrst algorithm for mining functional dependencies from
+relation instances - extended abstract. In Proc. of DaWaK, volume 2114
+of LNCS, pages 101–110, 2001.
+
+[30] H. Yao and H. J. Hamilton. Mining functional dependencies from data.
+
+Data Min. Knowl. Discov., 16(2):197–219, 2008.
+
+APPENDIX
+
+Theorem and sketches of proofs:
+Theorem 1: Let V, V1, and V2 be view speciﬁcations. Let
+D, D1 and D2 be the sets of FDs over views speciﬁed by V,
+V1 and V2, respectively. Let f ds(V ) denotes the set of FDs
+over a view speciﬁed by V .
+Then:
+
+f ds(πX (V)) ⊆ D,
+
+f ds(σρ(V)) ⊇ D, and
+
+f ds(V1 (cid:5) V2) ⊇ D1 ∪ D2, with (cid:5) ∈ {(cid:46)(cid:47); (cid:46)(cid:47) ; (cid:46)(cid:47); (cid:46)(cid:47) ; (cid:110); (cid:111)}
+
+Proof: Trivial.
+
+Lemma 1 (FD types conservation though join operations):
+Let R = {R1; . . . ; Rn} be a set of relational
+instances.
+Let f ds(Ri) denotes the set of minimal FDs over the re-
+lationnal instance Ri. Let Σlef t up, Σright up, Σinf andΣjoin
+denote the sets of left upstaged, right upstaged, inferred and
+join FDs over R1 (cid:5) · · · (cid:5) Rn, respectively. Then, the sets
+Σlef t up ∪ Σright up, Σinf and Σjoin are equals regardless of
+the join order. At the opposite, equality between sets Σlef t up
+and Σright up cannot be guaranteed.
+
+Proof:
+
+Lemma 2 (Upstaged join FDs): Let L and R be two
+instances over relations S and T, respectively, and DL and
+DR be the two sets of all FDs such that L |= DL and R |= DR,
+respectively.
+Then the sets of upstaged FDs denoted Dnew
+the sets:
+
+and Dnew
+
+are
+
+R
+
+L
+
+Dnew
+Dnew
+
+L = {d | d (cid:54)∈ DL ∧ (L♦X=Y (πY (R)) |= d)}
+R = {d | d (cid:54)∈ DR ∧ (πX (L)♦X=Y R) |= d)}
+
+(4)
+
+(5)
+
+Lemma 3: Let L and R be two instances over relations
+S and T, respectively. Let L♦X=Y R be a join result with
+X ⊆ atts(L), Y ⊆ atts(R). For all A ⊆ atts(L) \ X and
+B ⊆ atts(R) \ Y :
+
+if L♦X=Y R (cid:54)|= X → B then L♦X=Y R (cid:54)|= A → B
+
+Proof sketch: Let x1, . . . , xn being values over the
+attributes in X, and b1, . . . , bm, b(cid:48)
+m being values over
+the attributes in B. If L♦X=Y R (cid:54)|= X → B then there exist
+two tuples:
+
+1, . . . , b(cid:48)
+
+tR(x1, . . . , xn, b1, . . . , bm, . . . )
+R(x1, . . . , xn, b(cid:48)
+t(cid:48)
+m, . . . )
+in R such that: ∃i ∈ [1, . . . , m], bi (cid:54)= b(cid:48)
+
+1, . . . , b(cid:48)
+
+i and there exists
+a tuple tL(x1, . . . , xn, a1, . . . , ak, . . . ) in L with a1, . . . , ak,
+the values of the attributes in A (otherwise, tuples tR and t(cid:48)
+R
+would have been ﬁltered during the join operation). Thus, the
+join L♦X=Y R leads to the two tuples:
+
+t(x1, . . . , xn, a1, . . . , ak, b1, . . . , bm, . . . )
+t(cid:48)(x1, . . . , xn, a1, . . . , ak, b(cid:48)
+m, . . . )
+
+1, . . . , b(cid:48)
+
+which violate the FD A → B and L♦X=Y R (cid:54)|= A → B
+
+Theorem 2: Let L and R be two instances over relations
+S and T, respectively. Let L♦X=Y R be a join result with
+X ⊆ atts(L), Y ⊆ atts(R). For all A ⊆ atts(L) \ X and
+B ⊆ atts(R) \ Y ,
+If L♦X=Y R |= A → X ∧ L♦X=Y R |= X → B,
+Then L♦X=Y R |= A → B.
+
+Proof: This is trivially derived from lemma 3 by transi-
+
+tivity, with the use of Armstrong’s transitivity axiom.
+
+Theorem 3: Let L and R be two instances over relations
+S and T, respectively. Let L♦X=Y R be a join result with
+X ⊆ atts(L), Y ⊆ atts(R). We cannot guarantee that all
+FDs over L♦X=Y R can be inferred from Armstrong’s axioms
+over the FDs over L and R taken separately.
+
+Proof: In the two following instances L and R, we can
+
+see that only the FDs Y A(cid:48) → b and Y b → A(cid:48) hold.
+L♦X=Y R
+
+L
+X A
+0
+0
+0
+1
+1
+1
+2
+2
+
+R
+Y A(cid:48)
+0
+0
+0
+1
+1
+1
+1
+2
+
+b
+0
+0
+1
+0
+
+X = Y A A(cid:48)
+0
+0
+1
+0
+1
+1
+
+0
+0
+0
+1
+1
+2
+
+0
+1
+1
+1
+1
+2
+
+b
+0
+0
+1
+0
+1
+0
+
+In the join result, the FD AA(cid:48) → b holds but it cannot be
+inferred using Armstrong’s axioms over the FDs discovered
+from each instance L and R.
+
+Theorem 4: Let L and R be two instances over relations
+S and T, respectively. Let L♦X=Y R be a join result with
+X ⊆ atts(L), Y ⊆ atts(R). For all A ⊆ atts(L), A(cid:48) ⊆
+atts(R) and b ∈ atts(R): If L♦X=Y R |= AA(cid:48) → b, Then
+L♦X=Y R |= Y A(cid:48) → b.
+
+Theorem 5 (InFine completeness): Let R = {R1; . . . ; Rn}
+be a set of relational instances. Let VR be a view speciﬁcation
+over relations in R. Let f ds(VR) denotes the set of minimal
+FDs over the view speciﬁed by VR. Let f ds(InFine ) denotes
+the set of FDs computed by InFine over the view speciﬁed by
+VR. Then:
+
+∀d ∈ f ds(VR), ∃d(cid:48) ∈ f ds(InFine ) s.t. d ≡ d(cid:48)
+
+Proof sketch: Algorithm 1 begins by extracting the
+attributes that are retrieved by a view in order to guide the
+mining process of these attributes while still guaranteeing
+completeness. Then Algorithm 1 recursively explores the view
+speciﬁcation, thus its completeness can be shown inductively.
+For the base case where we have a relational instance R
+(Algorithm 1, line# 9), the FDs are mined using a classic
+level-wise algorithm allowing to retrieve every FD in R. In the
+case of a projection (Algorithm 1, line# 15), as the relevant
+attributes are extracted at the very ﬁrst step of Algorithm 1, no
+computation is performed and the previously computed FDs
+are returned. In the cases of a selection or a join (Algorithm 1,
+line# 17 or line# 20 respectively), the tuples are ﬁltered by
+the join operation and Algorithm 2 mines all exact FDs.
+Algorithm 4 retrieves the minimal FDs from the logically
+inferred FDs, thus no lhs subset of FDs remains unchecked.
+
+Theorem 4 indicates which part of the candidate FD lattice
+is pruned. Then, Algorithm 5 explores the candidate FDs
+thus no minimal FD
+using a classic bottom-up approach,
+remains unchecked. Overall, our algorithms explore the lattice
+of candidate FDs until they ﬁnd minimal FDs; they avoid only
+the parts of the lattice that do not contain valid candidate FDs,
+thus InFine with selective mining retrieves the complete set of
+minimal candidate FDs.
+
+Theorem 6 (InFine correctness): Let R = {R1; . . . ; Rn} be
+a set of relational instances. Let VR be a view speciﬁcation
+over relations in R. Let IVR be the view speciﬁed by VR. Let
+f ds(InFine ) denotes the set of FDs computed by InFine over
+the view speciﬁed by VR. Then:
+
+∀d ∈ f ds(InFine ), IVR |= d
+
+Proof sketch: Algorithm 1 recursively explores the view
+speciﬁcation, thus its correctness can be shown inductively.
+For the base case where we have a relational instance R
+(Algorithm 1, line# 9) the FDs are mined using a classic level-
+wise algorithm allowing to retrieve FDs in R.
+
+In case of a projection (Algorithm 1, line# 15), the process
+ensure that only the FDs with relevant attributes (i.e., the one
+that are retrieved in the output view) are kept. Thus, if the
+FDs output by the steps are correct, the handling of projection
+will only lead to remove irrelevant FDs without introducing
+incorrect ones.
+
+In case of a selection (Algorithm 1, line# 17), Algorithm 2,
+valid exact FDs are discovered from the data using the princi-
+ple of the level-wise algorithms adapted to mine upstaged FDs,
+thus the FDs are guaranteed to hold on the joined instance and
+only minimal FDs are kept.
+
+In case of a join (Algorithm 1, line 20), at ﬁrst in Algo-
+rithm 3, valid exact FDs are discovered from the data using
+the same principle as in Algorithm 2, thus returning FDs that
+are guaranteed to hold on the joined instance. Theorem 2
+shows the correctness of the set of FDs inferred through logical
+inference. Then, the subroutine refine checks the correct-
+ness of its candidates FDs holding on the data. Therefore,
+the set of FDs D2 discovered by Algorithm 4 is such that
+D2 |= D♦. In Algorithm 5, Theorem 4 enforces the retrieval
+of FDs based only on the attributes that can become rhs
+in the joined instance, then only plausible candidate FDs are
+explored. Therefore, every discovered FD holds in the joined
+instance. By construction, Algorithm 4 and 5 lead to the
+retrieval of FDs that are minimal.
+
+

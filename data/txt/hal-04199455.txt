@@ -1,0 +1,734 @@
+Full-Power Graph Querying: State of the Art and
+Challenges
+Ioana Manolescu, Madhulika Mohanty
+
+To cite this version:
+
+Ioana Manolescu, Madhulika Mohanty. Full-Power Graph Querying: State of the Art and Challenges.
+VLDB 2023 - 49th International Conference on Very Large Data Bases, Aug 2023, Vancouver, Canada.
+￿10.14778/3611540.3611577￿. ￿hal-04199455￿
+
+HAL Id: hal-04199455
+
+https://inria.hal.science/hal-04199455
+
+Submitted on 7 Sep 2023
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Distributed under a Creative Commons Attribution 4.0 International License
+
+Full-Power Graph Querying:
+State of the Art and Challenges
+
+Ioana Manolescu
+Inria and IPP
+France
+ioana.manolescu@inria.fr
+
+Madhulika Mohanty
+Inria and IPP
+France
+madhulika.mohanty@inria.fr
+
+ABSTRACT
+Graph databases are enjoying enormous popularity, through both
+their RDF and Property Graphs (PG) incarnations, in a variety of ap-
+plications. To query graphs, query languages provide structured, as
+well as unstructured primitives. While structured queries allow ex-
+pressing precise information needs, they are unsuited for exploring
+unfamiliar datasets, as they require prior knowledge of the schema
+and structure of the dataset. Prior research on keyword search in
+graph databases do not suffer from this limitation. However, key-
+word queries do not allow expressing precise search criteria when
+users do know some.
+
+This tutorial (1.5 hours) builds a continuum between structured
+graph querying through languages such as SPARQL and GPML,
+a recently proposed standard for PG querying, on one hand, and
+graph keyword search, on the other hand. In this space between
+querying and information retrieval, we analyze the features of mod-
+ern query languages that go toward unstructured search, discuss
+their strength, limitations, and compare their computational com-
+plexity. In particular, we focus on (𝑖) lessons learned from the rich
+literature of graph keyword search, in particular with respect to re-
+sult scoring; (𝑖𝑖) language mechanisms for integrating both complex
+structured querying and powerful methods to search for connec-
+tions users do not know in advance. We conclude by discussing the
+open challenges and future work directions.
+
+PVLDB Reference Format:
+Ioana Manolescu and Madhulika Mohanty. Full-Power Graph Querying:
+State of the Art and Challenges. PVLDB, 16(12): 3886 - 3889, 2023.
+doi:10.14778/3611540.3611577
+
+1 INTRODUCTION
+Graph databases Graph-structured data has many applications,
+e.g., social network analysis, fraud detection, biological networks,
+etc. [40]. One particularly notable application is that of investiga-
+tive journalism (IJ), where complex journalistic investigations are
+backed by digital data. Such data is oftentimes heterogeneous; a
+database consists of different datasets, possibly of different data
+models. In an enterprise setting, data could be kept as such and ex-
+ploited through dedicated data lake tools. However, for journalists,
+a data lake solution is unfeasible due to lack of IT expertise, time,
+and resources. Instead, heterogeneous data can be automatically
+
+This work is licensed under the Creative Commons BY-NC-ND 4.0 International
+License. Visit https://creativecommons.org/licenses/by-nc-nd/4.0/ to view a copy of
+this license. For any use beyond those covered by this license, obtain permission by
+emailing info@vldb.org. Copyright is held by the owner/author(s). Publication rights
+licensed to the VLDB Endowment.
+Proceedings of the VLDB Endowment, Vol. 16, No. 12 ISSN 2150-8097.
+doi:10.14778/3611540.3611577
+
+transformed into graphs, which journalists then exploit. This has
+been pioneered by the International Consortium of Investigative
+Journalism (ICIJ) in their initial Panama Papers investigation; the
+ConnectionLens [4, 9, 14] system goes towards the same goal. Other
+well-known graph database applications related to IJ are financial
+crime investigation and fraud detection, used by graph database
+providers such as Oracle and Neo4J to advertise their products.
+Graph querying To query graphs, the W3C’s standard SPARQL [42]
+query language and Cypher [39] are among the best known query
+standards. Additionally, the International Organization for Stan-
+dardization (ISO) and International Electrotechnical Commission
+(IEC) are developing GQL as a Property Graph query standard, with
+the graph pattern matching sub-language (GPML) [17] at its core.
+Structured queries require users to be familiar with the schema of
+the graphs; this is typically not the case with journalists, or users
+discovering datasets. This problem is partially tackled by a useful
+feature of modern graph query languages, namely property paths or
+reachability querying. This allows finding if (and how) two sets of
+nodes in the graph are reachable to each other. SPARQL 1.1 queries
+can check, for example, if a French entrepreneur “Alice” has a path
+to an American entrepreneur “Bob” in the sample graph shown
+in Figure 1. However, SPARQL 1.1 does not allow returning the
+matching paths to users. In contrast, a GPML query may also return
+the paths between two given sets of nodes. This is useful, for ex-
+ample, in the fight against money laundering, by enabling finding
+routes in which money is laundered across countries, enterprises,
+etc. None of the graph query languages, however, natively support
+a general connectivity search between three or more sets of nodes.
+For instance, in Figure 1, one cannot express the query seeking con-
+nections between American entrepreneurs, French entrepreneurs
+and French politicians. The ability to express such a query is useful
+for investigative journalists as money laundering usually involves
+multiple players.
+Keyword search in (graph) databases A different paradigm
+for searching for information in graphs is keyword search. This
+has been historically studied for structured and semistructured
+databases, viewed as graphs, e.g., [3, 13, 18, 24, 30]. Users specify
+𝑚 keywords, and request trees (or subgraphs) connecting nodes
+from the graphs, in which at least one node label matches each
+keyword. For example, asking “Alice Bob Falcon” leads to returning
+connecting trees, each containing one node whose label matches
+each keyword. Keyword search can thus be seen as at one end of a
+continuum on an axis of information search in graph, with structured
+queries being at the other end.
+
+Computationally speaking, keyword search in graphs is closely
+related to the Group Steiner Tree Problem (GSTP), which, given 𝑚
+node sets, asks for the top-score, e.g., fewest-edges, tree connecting
+
+2.investsIn
+
+3.Alice
+(entrepreneur)
+
+1
+
+4
+
+.
+
+c
+i
+t
+i
+z
+
+e
+
+n
+
+O
+
+f
+
+1
+
+7
+
+.
+f
+
+u
+
+n
+
+d
+
+s
+
+1.founded
+
+1.OrgB
+(company)
+
+4.l
+
+o
+
+c
+
+a
+t
+e
+
+d
+I
+n
+
+10.USA
+(country)
+
+2.Bob
+(entrepreneur)
+
+5.citizenOf
+
+6.citizenOf
+
+7.founded
+
+5.OrgA
+(company)
+15.locatedIn
+
+8.France
+(country)
+
+n
+
+s I
+
+t
+
+s
+
+e
+
+v
+
+9 .i n
+
+8.CEO
+
+6.Doug
+(entrepreneur)
+0 . c i t i z
+
+1 1 . p a r e n t O f
+
+n O f
+
+e
+
+n O f
+2
+
+e
+
+3 . c i t i z
+
+1
+
+9.Elon
+(politician)
+
+3.p
+
+are
+
+nt
+
+O
+f
+
+4.Carole
+(entrepreneur)
+
+10.founded
+7.OrgC
+(company)
+
+19.investsIn
+12.Falcon
+(politician)
+
+11.“National
+Liberal Party”
+
+12.citizenOf
+
+16.affiliation
+
+n
+
+t i o
+
+8 . a ffi li a
+
+1
+
+Figure 1: Sample data graph.
+
+one node from each set; the problem is NP-hard [27]. Algorithms
+from the literature vary in the score functions that they use, number
+of solutions they are capable of returning, heuristics used to limit the
+search (and thus reduce its complexity) etc. It has been shown [15]
+that these variations lead to important differences in result quality,
+and even in the very concept of what a result is.
+Goals and Objectives At this moment of relative maturity but still
+vibrant development of graph query languages and especially query
+evaluation algorithms, the goal of this tutorial is to systematize and
+compare, in a single framework, graph query problems (structured,
+unstructured, and combined), dimensions, such as score functions
+and other features used to restrict unstructured query results, and
+an overview of algorithms present in the literature. We will also:
+explain how these problems interface with closely related areas,
+such as natural language querying of graphs, graph indexing, and
+graph exploration; and finally, point to open research questions.
+
+2 TUTORIAL OUTLINE
+We plan to organize the material as follows.
+
+2.1 Graph Data Models
+We very briefly recall standard graph data models, and their specific
+features: RDF graphs and property graphs. From our perspective,
+the main differences are: (𝑖) whether nodes are “rich” (include their
+own attributes, à la PG) or just a label (à la RDF); (𝑖𝑖) whether graphs
+just contain data, or are assumed to also come with their ontologies
+(specific to RDF). In this tutorial, we do not focus on reasoning
+and ontologies, and just focus on querying graphs as they are. To
+motivate the need for unstructured querying, we will also introduce
+ConnectionLens graphs [9], which can be seen as a variant of RDF
+graphs enriched by Information Extraction, that adds both nodes
+(extracted entities) and edges (extracted relationships).
+
+2.2 Searching for Information in Graphs
+We next introduce the various means for querying data graphs.
+
+(1) Structured Querying: We recall the useful semantics of
+the recently proposed structured query standard [17] for
+Property Graphs known as GPML. In particular, we focus
+on its support for finding unbounded and unspecified paths
+between sets of nodes.
+
+(2) Keyword Search: We introduce the problem of “keyword
+search” on graphs. We describe the notion of a valid an-
+swer and the problem’s similarity to the known NP-Hard
+problem of finding Group Steiner Trees [27] in a graph.
+
+Limitations of Graph Queries. We compare the abilities and limi-
+tations of each query paradigm. We show that current query lan-
+guages allow, at best, to return paths whose lengths and labels
+are not specified in advance. However, they do not allow finding
+connections between three or more (groups of) nodes. For instance,
+consider the example query from Section 1:
+
+“What are the connections between an American entrepreneur,
+
+a French entrepreneur, and a French politician?”
+
+This query cannot be successfully expressed using any exist-
+ing graph query language because it requires seeking connections
+(trees, and not just paths) between three sets of nodes, the American
+entrepreneurs, the French entrepreneurs and the French politicians,
+respectively. It can neither be achieved by using just keyword search
+because of its inability to specify and capture the aforementioned
+precise sets of nodes. This highlights the need for a more powerful
+and expressive language in order to fully express the user’s infor-
+mation need, that has both structured and unstructured fragments.
+
+2.3 A Structured Introduction to Keyword
+
+Search in Graphs
+
+Next, we discuss the existing keyword search algorithms and intro-
+duce the notion of completeness. We also present a classification of
+the existing keyword search approaches according to the various
+dimensions and identify their limitations. Overall, we consider the
+algorithms from the following dimensions:
+
+(1) Notion of an answer: Existing algorithms differ what is
+considered an answer. While the majority consider connect-
+ing trees as answers [13, 15, 20, 43], a number of algorithms
+search for a subgraph or clique as an answer [25, 26].
+(2) Number of solutions returned: The keyword search al-
+gorithms can either return just one optimal solution [18,
+26, 31] or a list of top-𝑘 results [13, 20, 30, 32, 45]. For one
+result, the algorithms provide a set of guarantees about the
+result being within a known distance from the optimum
+with respect to a fixed score function. Such algorithms can
+employ pruning strategies tuned specifically to finding the
+top-𝑘 solutions.
+
+(3) Directionality: Another categorization of the algorithms
+is based on the direction of the search. A majority of al-
+gorithms only consider a unidirectional search [1, 3, 13,
+20, 22, 46]. That is, the result trees have a root node from
+which there are unidirectional paths to all keyword match-
+ing nodes. GAM [9] is the only bidirectional search algo-
+rithm.
+
+(4) Data models: Many keyword search algorithms depend
+on the intrinsic data model for their performance. The al-
+gorithms proposed for RDBMS [3, 16, 21, 22, 32, 33] search
+for joined tuple trees (JTTs) which are sets of tuples joined
+by a primary key - foreign key constraint. The techniques
+proposed in [19, 23] exploit the tree structure of XML data
+to aid the search. ObjectRank [12] assumes availability of
+a schema graph. STAR [28] uses the RDF graph taxonomy
+to reduce the search space. All such algorithms are, thus,
+schema-dependent.
+
+(5) Use of summaries: Certain keyword search algorithms do
+not work directly over the input graph. The ones presented
+in [12, 29, 41, 47] require a precomputed, compact summary
+of the graph in order to search for trees.
+
+(6) Score functions: The algorithms presented in [18, 20, 24,
+31] use a fixed score function for scoring their results. The
+score function’s properties are used to limit the search and
+are therefore, crucial to the runtime guarantees.
+
+(7) Completeness: The final dimension that we consider is
+completeness. That is, when given sufficient time and space,
+the search algorithm will find all the solutions regardless
+of the directions of edges, the data model or score function.
+We discuss GAM which is a complete algorithm.
+
+Prior surveys studied these algorithms only through their an-
+
+swers [43, 44] and their chosen score function [15].
+
+2.4 Extended Graph Queries
+Next, we discuss the existing support and extensions in the graph
+query languages with respect to unstructured search. We recall the
+SPARQL1.1 [42] property paths that allow checking for existence of
+unidirectional paths with only specified labels. We then present the
+research prototype JEDI [2] which additionally also allows to return
+such paths. We further discuss the regular path query support in
+G-CORE [10] and GPML [17] which allow querying and returning
+an unbounded and bidirectional path with any label.
+
+Beyond searching for paths, we then present a recent work [5–7]
+on extending GPML with Connecting Tree Patterns (CTPs) to allow
+Extended Queries (EQs) in order to support both structured and
+unstructured fragments in the same query. The sample query from
+Section 2.2 can be expressed by the extended queries using the
+existing query primitives to specify the three sets of nodes corre-
+sponding to the American entrepreneurs, the French entrepreneurs
+and the French politicians, respectively and then, using CTPs to
+ask for the connections between them. We also present a straight-
+forward evaluation technique for evaluating the EQs. For evaluating
+CTPs, we outline MoLESP, an algorithm which speeds up GAM but
+may be incomplete for certain inputs. Putting it all together, we
+show a simple strategy for evaluating extended queries, comprising
+both an unstructured part (CTPs) and a structured one.
+2.5 Future Work Directions
+With a large number of keyword search algorithms, each being
+customised for a given dimension, there is still a need for a generic,
+complete and efficient algorithm. While MoLESP is a step forward
+in this direction, it is still proven to be incomplete for greater than
+three keywords. For the execution of EQs, the strategy proposed
+in [5, 6] uses a straight-forward evaluation mechanism of first
+
+evaluating the structured fragment, followed by evaluation of the
+unstructured fragment. This order may not be always the most
+optimal. Thus, further work needs to be done in order to decide
+how to optimally interweave the structured and unstructured parts
+of the search by using classical techniques such as join ordering, and
+cost estimation. Additionally, batch evaluation of keyword queries
+and also EQs in general, remains to be addressed.
+
+3 TARGET AUDIENCE AND DURATION
+This lecture-style tutorial of 1.5 hours is aimed for researchers,
+graduate students and industry practitioners, who are interested in
+graph-structured data and its applications. Researchers and gradu-
+ate students will benefit from an introduction to graphs and ways
+to query it; they will also find open problems and challenges to be
+addressed as future work directions. Industry practitioners will get
+an overview of existing works in graph querying, their scope and
+limitations along with introduction to recent research prototypes
+having applicability in various industrial softwares. In general, the
+tutorial will also enable new users of graph databases to learn about
+techniques to explore their datasets with ease. No prior knowledge
+of graphs or databases is expected. However, familiarity with a
+structured query language like SQL will be helpful.
+
+4 NOVELTY AND POSITIONING
+The tutorial [11] introduced a unified graph data model, the gram-
+mar for a structured query language involving regular expression
+based path querying, and its various evaluation paradigms includ-
+ing approximations. [34] discussed the query processing, primarily
+the join algorithms, of many prominent graph databases. The tuto-
+rial [38] discussed graph exploration using exemplar queries. Our
+tutorial is the first to cover a continuum of various means of query-
+ing graphs – the extended queries support the space starting from
+purely structured queries for precise information needs to that of
+unstructured keyword queries for graph exploration. It has not
+been presented previously.
+
+5 SPEAKERS
+Ioana Manolescu (https://pages.saclay.inria.fr/ioana.manolescu/)
+is a senior researcher at Inria Saclay and a part-time professor at
+Ecole Polytechnique, France. She is the lead of the CEDAR Inria
+team, focusing on rich data analytics at cloud scale. She is also
+the scientific director of LabIA, a program ran by the French gov-
+ernment to introduce AI solutions in the public national and local
+administration. She has been a member of the PVLDB Endowment
+Board of Trustees, an Associate PVLDB Editor, president of the
+ACM SIGMOD PhD Award Committee, chair of the IEEE ICDE
+conference, and a program chair of EDBT, SSDBM, ICWE among
+others. She has co-authored more than 150 articles in international
+journals and conferences and co-authored books on “Web Data
+Management” and on “Cloud-based RDF Data Management”. Her
+main research interests algebraic and storage optimizations for
+semistructured data, in particular Semantic Web graphs, novel data
+models and languages for complex data management, data mod-
+els and algorithms for fact-checking and data journalism, a topic
+where she is collaborating with journalists from Le Monde and
+RadioFrance. Since 2018, she has been working to integrate highly
+heterogeneous journalistic data sources in graphs with the help of
+
+AI and Information Extraction [9, 14] and querying them through
+keywords [4, 8] and through expressive structured and unstructured
+queries [5, 7].
+
+Madhulika Mohanty (https://www.madhulikamohanty.com/)
+is a postdoctoral researcher in the CEDAR team at Inria Saclay.
+Prior to this, she was an Assistant Professor at IIT Dhanbad in
+India. She obtained her PhD in 2020 from IIT Delhi with a thesis ti-
+tled “Techniques for Effective Search and Retrieval over Knowledge
+Graphs”. During her PhD, she has worked on efficiently querying
+graphs using structured SPARQL queries [37] and unstructured
+keyword queries [35, 36]. Recently, she has worked on enabling
+support for both structured and unstructured queries using ex-
+tended queries [5, 7]. Her research interests include Graph Data
+Management, Natural Language Question Answering and Informa-
+tion Retrieval.
+ACKNOWLEDGMENTS
+The work outlined in the tutorial has been funded by the AI Chair
+SourcesSay (ANR-20-CHIA-0015-01) and CQFD (ANR-18-CE23-
+0003) projects.
+
+REFERENCES
+[1] B. Aditya, Gaurav Bhalotia, Soumen Chakrabarti, Arvind Hulgeri, Charuta Nakhe,
+Parag, and S. Sudarshan. 2002. BANKS: Browsing and Keyword Searching in
+Relational Databases. In VLDB.
+
+[18] Bolin Ding, Jeffrey Xu Yu, Shan Wang, Lu Qin, Xiao Zhang, and Xuemin Lin.
+2007. Finding Top-k Min-Cost Connected Trees in Databases. In ICDE. IEEE
+Computer Society.
+
+[19] Lin Guo, Feng Shao, Chavdar Botev, and Jayavel Shanmugasundaram. 2003.
+
+XRANK: Ranked Keyword Search over XML Documents. In SIGMOD.
+
+[20] Hao He, Haixun Wang, Jun Yang, and Philip S. Yu. 2007. BLINKS: ranked keyword
+
+searches on graphs. In SIGMOD.
+
+[21] Vagelis Hristidis, Luis Gravano, and Yannis Papakonstantinou. 2003. Efficient
+
+IR-Style Keyword Search over Relational Databases. In VLDB.
+
+[22] Vagelis Hristidis and Yannis Papakonstantinou. 2002. DISCOVER: Keyword
+
+Search in Relational Databases. In VLDB.
+
+[23] Vagelis Hristidis, Yannis Papakonstantinou, and Andrey Balmin. 2003. Keyword
+
+Proximity Search on XML Graphs. In ICDE.
+
+[24] Varun Kacholia, Shashank Pandit, Soumen Chakrabarti, S. Sudarshan, Rushi
+Desai, and Hrishikesh Karambelkar. 2005. Bidirectional Expansion For Keyword
+Search on Graph Databases. In VLDB.
+
+[25] Mehdi Kargar and Aijun An. 2011. Keyword Search in Graphs: Finding r-cliques.
+
+In VLDB.
+
+[26] Mehdi Kargar, Lukasz Golab, Divesh Srivastava, Jaroslaw Szlichta, and Morteza
+Zihayat. 2022. Effective Keyword Search Over Weighted Graphs. In IEEE Trans.
+Knowl. Data Eng.
+
+[27] Richard M. Karp. 1972. Reducibility Among Combinatorial Problems. In Proceed-
+
+ings of a symposium on the Complexity of Computer Computations.
+
+[28] Gjergji Kasneci, Maya Ramanath, Mauro Sozio, Fabian M. Suchanek, and Gerhard
+Weikum. 2009. STAR: Steiner-Tree Approximation in Relationship Graphs. In
+ICDE.
+
+[29] Wangchao Le, Feifei Li, Anastasios Kementsietsidis, and Songyun Duan. 2014.
+
+Scalable Keyword Search on Large RDF Data. In IEEE Trans. Knowl. Data Eng.
+
+[30] Guoliang Li, Beng Chin Ooi, Jianhua Feng, Jianyong Wang, and Lizhu Zhou.
+2008. EASE: an effective 3-in-1 keyword search method for unstructured, semi-
+structured and structured data. In SIGMOD.
+
+[31] Rong-Hua Li, Lu Qin, Jeffrey Xu Yu, and Rui Mao. 2016. Efficient and Progressive
+
+[2] Christian Aebeloe, Gabriela Montoya, Vinay Setty, and Katja Hose. 2018. Dis-
+
+Group Steiner Tree Search. In SIGMOD.
+
+covering Diversified Paths in Knowledge Bases. In VLDB.
+
+[32] Yi Luo, Xuemin Lin, Wei Wang, and Xiaofang Zhou. 2007. Spark: top-k keyword
+
+[3] Sanjay Agrawal, Surajit Chaudhuri, and Gautam Das. 2002. DBXplorer: A System
+
+query in relational databases. In SIGMOD.
+
+for Keyword-Based Search over Relational Databases. In ICDE.
+
+[4] Angelos-Christos Anadiotis, Oana Balalau, Théo Bouganim, Francesco Chimienti,
+Helena Galhardas, Mhd Yamen Haddad, Stéphane Horel, Ioana Manolescu, and
+Youssr Youssef. 2021. Empowering Investigative Journalism with Graph-based
+Heterogeneous Data Management. In Bulletin of the Technical Committee on Data
+Engineering. IEEE Computer Society.
+
+[33] Yi Luo, Wei Wang, Xuemin Lin, Xiaofang Zhou, Jianmin Wang, and Keqiu Li.
+2011. SPARK2: Top-k Keyword Query in Relational Databases. In IEEE Trans.
+Knowl. Data Eng.
+
+[34] Amine Mhedhbi and Semih Salihoglu. 2022. Modern Techniques for Querying
+Graph-Structured Relations: Foundations, System Implementations, and Open
+Challenges. VLDB (2022).
+
+[5] Angelos Christos Anadiotis, Ioana Manolescu, and Madhulika Mohanty. 2023.
+
+[35] Madhulika Mohanty and Maya Ramanath. 2018. Klustree: clustering answer
+
+Integrating Connection Search in Graph Queries. In ICDE.
+
+trees from keyword search on graphs. In COMAD/CODS.
+
+[6] Angelos Christos Anadiotis, Ioana Manolescu, and Madhulika Mohanty. 2023.
+
+[36] Madhulika Mohanty and Maya Ramanath. 2019. Insta-Search: Towards Effective
+
+Integrating Connection Search in Graph Queries. Technical Report.
+
+Exploration of Knowledge Graphs. In CIKM.
+
+[7] Angelos Christos Anadiotis, Ioana Manolescu, and Madhulika Mohanty. 2023.
+
+More power to SPARQL: From paths to trees. In ESWC.
+
+[8] Angelos-Christos G. Anadiotis, Oana Balalau, Theo Bouganim, Francesco Chimi-
+enti, Helena Galhardas, Mhd Yamen Haddad, Stephane Horel, Ioana Manolescu,
+and Youssr Youssef. 2021. Discovering Conflicts of Interest across Heterogeneous
+Data Sources with ConnectionLens. In CIKM.
+
+[9] Angelos-Christos G. Anadiotis, Oana Balalau, Catarina Conceição, Helena Gal-
+hardas, Mhd Yamen Haddad, Ioana Manolescu, Tayeb Merabti, and Jingmao You.
+2022. Graph integration of structured, semistructured and unstructured data for
+data journalism. In Inf. Syst.
+
+[10] Renzo Angles, Marcelo Arenas, Pablo Barceló, Peter A. Boncz, George H. L.
+Fletcher, Claudio Gutierrez, Tobias Lindaaker, Marcus Paradies, Stefan Plantikow,
+Juan F. Sequeda, Oskar van Rest, and Hannes Voigt. 2018. G-CORE: A Core for
+Future Graph Query Languages. In SIGMOD. ACM.
+
+[11] Marcelo Arenas, Claudio Gutierrez, and Juan F. Sequeda. 2021. Querying in the
+
+Age of Graph Databases and Knowledge Graphs. In SIGMOD.
+
+[12] Andrey Balmin, Vagelis Hristidis, and Yannis Papakonstantinou. 2004. Objec-
+
+tRank: Authority-Based Keyword Search in Databases. In VLDB.
+
+[13] Gaurav Bhalotia, Arvind Hulgeri, Charuta Nakhe, Soumen Chakrabarti, and S.
+Sudarshan. 2002. Keyword Searching and Browsing in Databases using BANKS.
+In ICDE.
+
+[15]
+
+[14] Camille Chanial, Rédouane Dziri, Helena Galhardas, Julien Leblay, Minh-
+Huong Le Nguyen, and Ioana Manolescu. 2018. ConnectionLens: Finding Con-
+nections Across Heterogeneous Data Sources (demonstration). In PVLDB.
+Joel Coffman and Alfred C. Weaver. 2014. An Empirical Performance Evaluation
+of Relational Keyword Search Techniques. In IEEE Trans. Knowl. Data Eng.
+[16] Pericles de Oliveira, Altigran S. da Silva, Edleno Silva de Moura, and Rosiane
+Rodrigues. 2018. Match-Based Candidate Network Generation for Keyword
+Queries over Relational Databases. In ICDE.
+
+[17] Alin Deutsch, Nadime Francis, Alastair Green, Keith Hare, Bei Li, Leonid Libkin,
+Tobias Lindaaker, Victor Marsault, Wim Martens, Jan Michels, Stefan Plantikow,
+Petra Selmer, Oskar van Rest, Hannes Voigt, Domagoj Vrgoc, Mingxi Wu, and
+Fred Zemke. 2022. Graph Pattern Matching in GQL and SQL/PGQ. In SIGMOD.
+
+[37] Madhulika Mohanty, Maya Ramanath, Mohamed Yahya, and Gerhard Weikum.
+2019. Spec-QP: Speculative Query Planning for Joins over Knowledge Graphs.
+In EDBT.
+
+[38] Davide Mottin, Matteo Lissandrini, Yannis Velegrakis, and Themis Palpanas.
+
+2019. Exploring the Data Wilderness through Examples. In SIGMOD.
+[39] Neo4j. 2022. Cypher Query Language. https://neo4j.com/developer/cypher/
+[40] Sherif Sakr, Angela Bonifati, Hannes Voigt, Alexandru Iosup, Khaled Ammar,
+Renzo Angles, Walid G. Aref, Marcelo Arenas, Maciej Besta, Peter A. Boncz,
+Khuzaima Daudjee, Emanuele Della Valle, Stefania Dumbrava, Olaf Hartig, Bern-
+hard Haslhofer, Tim Hegeman, Jan Hidders, Katja Hose, Adriana Iamnitchi,
+Vasiliki Kalavri, Hugo Kapp, Wim Martens, M. Tamer Özsu, Eric Peukert, Stefan
+Plantikow, Mohamed Ragab, Matei Ripeanu, Semih Salihoglu, Christian Schulz,
+Petra Selmer, Juan F. Sequeda, Joshua Shinavier, Gábor Szárnyas, Riccardo Tom-
+masini, Antonino Tumeo, Alexandru Uta, Ana Lucia Varbanescu, Hsiang-Yun
+Wu, Nikolay Yakovets, Da Yan, and Eiko Yoneki. 2021. The future is big graphs:
+a community view on graph processing systems. In Commun. ACM.
+
+[41] Thanh Tran, Haofen Wang, Sebastian Rudolph, and Philipp Cimiano. 2009. Top-k
+Exploration of Query Candidates for Efficient Keyword Search on Graph-Shaped
+(RDF) Data. In ICDE.
+
+[42] W3C. 2013. SPARQL 1.1. https://www.w3.org/TR/sparql11-overview/
+[43] Haixun Wang and Charu C. Aggarwal. 2010. A Survey of Algorithms for Keyword
+
+[44]
+
+Search on Graph Data. In Managing and Mining Graph Data. Springer.
+Jianye Yang, Wu Yao, and Wenjie Zhang. 2021. Keyword Search on Large Graphs:
+A Survey. In Data Sci. Eng.
+
+[45] Yueji Yang, Divyakant Agrawal, H. V. Jagadish, Anthony K. H. Tung, and Shuang
+Wu. 2019. An Efficient Parallel Keyword Search Engine on Knowledge Graphs.
+In ICDE.
+
+[46] Zhiwei Zhang, Jeffrey Xu Yu, Guoren Wang, Ye Yuan, and Lisi Chen. 2022. Key-
+core: cohesive keyword subgraph exploration in large graphs. In World Wide
+Web.
+
+[47] Yuanyuan Zhu, Qian Zhang, Lu Qin, Lijun Chang, and Jeffrey Xu Yu. 2022.
+Cohesive Subgraph Search Using Keywords in Large Networks. In IEEE Trans.
+Knowl. Data Eng.
+
+

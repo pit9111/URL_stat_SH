@@ -1,0 +1,645 @@
+Learning URI Selection Criteria to Improve the
+Crawling of Linked Open Data (Extended Abstract)
+Hai Huang, Fabien Gandon
+
+To cite this version:
+
+Hai Huang, Fabien Gandon. Learning URI Selection Criteria to Improve the Crawling of Linked Open
+Data (Extended Abstract). IJCAI 2020 - 29th International Joint Conference on Artificial Intelligence,
+Jan 2021, Yokohama, Japan. ￿hal-03064912￿
+
+HAL Id: hal-03064912
+
+https://inria.hal.science/hal-03064912
+
+Submitted on 14 Dec 2020
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Learning URI Selection Criteria to Improve the Crawling of Linked Open Data
+(Extended Abstract)∗
+
+Hai Huang and Fabien Gandon
+Inria, Universit´e Cˆote d’Azur, CNRS, I3S, France
+{hai.huang, fabien.gandon}@inria.fr
+
+Abstract
+
+A Linked Data crawler performs a selection to fo-
+cus on collecting linked RDF (including RDFa)
+data on the Web. From the perspectives of through-
+put and coverage, given a newly discovered and tar-
+geted URI, the key issue of Linked Data crawlers
+is to decide whether this URI is likely to deref-
+erence into an RDF data source and therefore it
+is worth downloading the representation it points
+to. Current solutions adopt heuristic rules to ﬁlter
+irrelevant URIs. But when the heuristics are too
+restrictive this hampers the coverage of crawling.
+In this paper, we propose and compare approaches
+to learn strategies for crawling Linked Data on the
+Web by predicting whether a newly discovered URI
+will lead to an RDF data source or not. We detail
+the features used in predicting the relevance and the
+methods we evaluated including a promising adap-
+tation of FTRL-proximal online learning algorithm.
+We compare several options through extensive ex-
+periments including existing crawlers as baseline
+methods to evaluate their efﬁciency.
+
+1 Introduction
+Linked Data extends the principles of the World Wide Web
+from linking documents to that of linking pieces of data to
+weave a Web of Data. This relies on the well-known linked
+data principles [Heath and Bizer, 2011; Berners-Lee, 2006]
+including the use of HTTP URIs that can be dereferenced and
+the provision of useful and linked descriptions upon access so
+that we can discover more things.
+
+A large amount of data are now being made available as
+linked data in various domains such as health, publication,
+agriculture, music, etc., and the Web of Linked Data is grow-
+ing exponentially [Ermilov et al., 2016].
+In order to har-
+vest this enormous data repository, crawling techniques for
+Linked Data are becoming increasingly important. Differ-
+ent from conventional crawlers, crawling for Linked Data is
+
+∗This is an abridged version of the paper [Huang and Gan-
+don, 2019] that won the best paper award at ESWC-2019. This
+work is supported by the ANSWER project PIA FSN2 N◦P159564-
+2661789/DOS0060094 between Inria and Qwant.
+
+performed selectively to collect structured data connected by
+RDF links. The design objective of Linked Data crawlers is to
+fetch linked RDF data in different formats – RDF/XML, N3,
+RDFa, JSON-LD, etc. – as much as possible within a reason-
+able time while minimizing the download of irrelevant URIs
+– i.e. leading to resources without RDF content. Therefore
+our challenge is to identify as soon as possible the URIs ref-
+erencing RDF sources without downloading them ﬁrst. Our
+research question here is: can we learn efﬁcient URI selection
+criteria to identify sources of Linked Open Data?
+
+To solve this problem, we propose and compare methods
+on real data to predict whether a newly discovered URI will
+lead to RDF data source or not. We extract information from
+the targeting and referring URI and from the context (RDF
+data graph) where URIs and their links were discovered in
+order to produce features fed to learning algorithms and in
+particular to an FTRL-proximal online method employed to
+build the prediction model.
+
+The contributions of this work include: 1) we identify the
+features to predict whether a target URI will lead to some
+RDF data or not; 2) we adapt the FTRL-proximal algorithm
+to our task and build an online prediction model; and 3) we
+implement a Linked Data crawler with the online prediction
+model and evaluate its performance.
+
+2 Related Work
+
+Semantic web crawlers differ from traditional web crawlers in
+only two aspects: the format of the source (RDF format) it is
+traversing, and the means to link RDF across data sources.
+There exist some work [Dodds, 2006; Isele et al., 2010;
+Hogan et al., 2011] in the ﬁeld of Semantic Web/Linked
+Data crawling. The two main representative crawlers for
+Linked Data are LDSpider [Isele et al., 2010] and SWSE
+crawler [Hogan et al., 2011]. They crawl the Web of Linked
+Data by traversing RDF links between data sources and fol-
+low the Linked Data principles [Heath and Bizer, 2011;
+Berners-Lee, 2006].
+
+In order to reduce the amount of HTTP lookups and down-
+loading wasted on URIs referencing non-RDF resources,
+these previous works apply heuristic rules to identify rele-
+vant URIs [Isele et al., 2010; Hogan et al., 2011]. The URIs
+with common ﬁle extensions (e.g., html/htm, jpg, pdf, etc.)
+and those without appropriate HTTP Content-Type Header
+
+(such as application/rdf+xml) are classiﬁed as non-RDF con-
+tent URIs. The content of these URIs would not be retrieved
+by these crawlers. Although this heuristic-based method is
+efﬁcient, it impairs the recall of the crawling. This method
+makes the assumption that data publishers have provided cor-
+rect HTTP Content-Type Header but this is not always the
+case. It can happen that the server does not provide the de-
+sired content type. Moreover, it may happen that the server
+returns an incorrect content type. For example, Freebase
+did not provide any content negotiation or HTML resource
+representation [F¨arber et al., 2018], and only text/plain was
+In [Hogan et al., 2010], it is re-
+returned as content type.
+ported that 17% of RDF/XML documents are returned with
+a content-type other than application/rdf+xml. As a result, a
+huge volume of RDF data is missed by these methods.
+
+Traditional focused crawlers on the Web aim to crawl a
+subset of Web pages based on their relevance to a speciﬁc
+topic [Chakrabarti et al., 1999; Diligenti et al., 2000]. These
+methods build a relevancy model typically encoded as a clas-
+siﬁer to evaluate the web documents for topical relevancy.
+Our work here is different in the sense that we do not ﬁlter on
+the topics but on the type of content. Meusel et al. [Meusel
+et al., 2014] proposed a focused crawling approach to fetch
+microdata embedded in HTML pages. Umbrich et al. [Um-
+brich et al., 2008] built a crawler focused on gathering ﬁles
+of a particular media type and based on heuristics.
+
+3 Prediction Model for Crawling Criteria
+In this section, we present the prediction task, the feature sets
+extracted for the task of prediction and then describe the pre-
+diction model based on FTRL-proximal online learning algo-
+rithm.
+
+3.1 Task Description
+Since the task of Linked Data crawlers is to fetch RDF data
+on the Web, we are interested in RDF-relevant URIs:
+Deﬁnition 1. (RDF-Relevant) Given a URI u, we consider
+that u is RDF-relevant if the representation obtained by deref-
+erencing u contains RDF data. Otherwise, u is called non
+RDF-relevant. We note U R the set of RDF relevant URIs and
+U I the set of non RDF-relevant URIs with U = U R ˙∪U I .
+
+For the URIs that have certain ﬁle extensions such as
+*.rdf/owl or HTTP Content Types Headers such as applica-
+tion/rdf+xml, text/turtle, etc., it is trivial to know the RDF-
+relevance of them. In this work, we focus on a knid of URIs
+called hard URIs whose RDF-relevance cannot be known by
+these heuristics.
+Deﬁnition 2. (Hard URI) We call u a hard URI if the RDF
+relevance of u cannot be known straightforwardly by its ﬁle
+extension or HTTP Content-Type Header.
+
+For example, URI u with HTTP Content-Type header
+text/html is a hard URI since RDFa data could be embedded
+in u. As reported in [F¨arber et al., 2018], the URIs with HTTP
+Content-Type Header text/plain may contain RDF data so
+they are hard URIs too.
+
+Then, for our prediction task, we consider four types of
+URIs involved in the prediction: the target URI, the referring
+URI, direct property URIs and sibling URIs.
+
+Figure 1: Example of a URI with component parts.
+
+t , we deﬁne Gr
+
+t as a node, i.e., ut ∈ V .
+
+Deﬁnition 3. (Target URI) We call target URI and note ut
+the URI for which we want to predict if the deref (ut) will
+lead to a representation that contains RDF data i.e. if ut is
+RDF-Relevant.
+Deﬁnition 4. (Context RDF Graph) Given an RDF rele-
+vant URI ur containing the RDF graph Gr
+t =
+(V, E) as the context RDF graph of URI ut if ut appears in
+Gr
+Deﬁnition 5. (Referring URI) Given a target URI ut, we call
+“referring URI” and note ur the RDF-relevant URI that was
+dereferenced into a representation deref (ur) containing the
+context RDF graph Gr
+t in which we found the target URI ut.
+Deﬁnition 6. (Sibling Set) The sibling set of ut in the context
+RDF Graph Gr
+t denoted by Sibut is the set of all other URIs
+that have common subject-property or property-object pair
+with ut in Gr
+Sibut = {s|∃p, o ∈ Gr
+
+t . Sibut is formally deﬁned as:
+t , s.t.(ut, p, o) ∈ Gr
+
+t ∧ (s, p, o) ∈ Gr
+t }
+t ∧ (s, p, o) ∈ Gr
+t }
+Deﬁnition 7. (Direct Property Set) The direct property set
+P St is the set of properties that connect ut in the context
+graph Gr
+t :
+t ∨ (s, p, ut) ∈ Gr
+t , s.t.(ut, p, o) ∈ Gr
+P St = {p|∃s, o ∈ Gc
+t }
+Prediction Task. Using these deﬁnitions we can now de-
+ﬁne our prediction task. Suppose that a hard URI ut is dis-
+covered from the context graph Gr
+t obtained by dereferenc-
+ing a referring URI ur. We want to predict if ut is RDF-
+relevant based on some features extracted from ut, ur, P St
+and Sibut. Our task is to learn the mapping Relevant :
+U → {0, 1} with Relevant(u) equals 1 if u is RDF-relevant
+( Relevant|U R (cid:55)→ 1) and equals 0 if u is not RDF-relevant
+(Relevant|U I (cid:55)→ 0)
+
+t , s.t.(s, p, ut) ∈ Gr
+
+∨ {o|∃s, p ∈ Gr
+
+3.2 Feature Extraction
+We distinguish between two kinds of features that can be ex-
+ploited for the prediction intrinsic and extrinsic.
+Deﬁnition 8. (Intrinsic URI Features) The intrinsic features
+of a URI u are features obtained by an extraction Fint : U →
+F that relies exclusively on the URI identiﬁer itself.
+
+An example of an intrinsic feature is the protocol e.g.
+
+http.
+Deﬁnition 9. (Extrinsic URI Features) The extrinsic fea-
+tures of a URI u are features obtained by performing some
+network call on the URI Fext : U → F .
+
+The URI generic syntax consists of a hierarchical sequence
+of several components. An example of URI is shown in Fig.1.
+The intrinsic features Fint(u) consider that the different
+components of a URI u are informative and contain helpful
+
+information for prediction. The components include: scheme,
+authority, host, path, query, fragment information. We gener-
+ate the intrinsic features of u based on these components.
+We further distinguish two kinds of extrinsic features:
+Deﬁnition 10. (URI Header Features) These extrinsic fea-
+tures of a URI u are obtained by an HTTP HEAD call Fhead :
+U → F and do not require to download the representation of
+the resource identiﬁed by u.
+Deﬁnition 11. (URI Representation Features) These extrin-
+sic features of a URI u are obtained by an HTTP GET call
+Fget : U → F and characterize the content obtained after
+a complete download of the representation of the resource
+identiﬁed by u.
+
+We distinguish Fhead and Fget because they have differ-
+ent costs in terms of network access time. The URI header
+feature we will consider in this paper is the content type e.g.
+feature ut contentType=‘text/html’.
+
+URI representation features come from the content of the
+referring URI ur, namely the context graph Gr
+t of ut which
+includes the direct properties and siblings information of ut.
+Deﬁnition 12. (URI Similarity Features) The similarity be-
+tween two URIs us and ut denoted by simV alue(us, ut) is
+deﬁned using the Levenshtein distance[Levenshtein, 1966]
+In order
+between the two strings representing these URIs.
+to reduce the feature space, a threshold τ is set for the sim-
+ilarity value and if the similarity value is larger than τ , we
+discretize the similarity as simV alue(ut, us) = high and
+otherwise simV alue(ut, us) = low.
+(RDF Relevance Features) The boolean
+Deﬁnition 13.
+characteristic of being RDF-relevant for a URI u is noted
+FRDF rel(u) and returns true if u is RDF-revelant and false
+otherwise.
+
+With the types of features explained above we can now de-
+ﬁne four atomic feature sets based on the sources the features
+come from to explore and evaluate when training and predict-
+ing the RDF-relevance of a target URI ut:
+
+• F+t = Fint(ut) + Fhead(ut) is a feature set considering
+the intrinsic and header features of the target URI ut.
+• F+r = Fint(ur) is a feature set considering the intrinsic
+
+features of the referring URI ur.
+
+• F+p = (cid:83)
+
+p∈P St
+
+Fint(p) is the set of intrinsic features of
+
+each direct property of the target URI ut.
+
+• F+x =
+
+(cid:83)
+us∈Sibut
+
+Fx(us) is a feature set including fea-
+
+ture crosses that combine the intrinsic, header, similar-
+ity and relevance features of the sibling URIs of ut. This
+supports predictive abilities beyond what those features
+can provide individually and can be interpreted as us-
+ing a logical conjunction ‘AND’ to combine these fea-
+tures Fx(us) = Fint(us)× Fhead(us) × Fsim(us, ut) ×
+FRDF rel(us)
+
+With these deﬁnitions we can now consider and evaluate
+any combination of feature sets. We note F+a the feature set
+with a being a combination of the atomic feature sets as de-
+ﬁned above. For instance an experiment using the feature set
+
+Algorithm 1: Online prediction with the FTRL-
+Proximal algorithm
+Data: URIs u1, u2, · · · , uT
+Result: ˆy1, · · · , ˆyT
+1 for t = 1 to T do do
+2
+
+get feature vector xt of ut;
+probability pt= sigmoid(xt · wt);
+if pt > τ then
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+11 end
+
+output ˆyt=1;
+
+else
+
+output ˆyt=0;
+
+end
+observe real label yt ∈ {0, 1};
+update wt+1 by equation (1);
+
+F+t+r will only consider as inputs the intrinsic and header
+features of the target URI ut and the intrinsic feature of refer-
+ring URI ur. In Section 4, the predictive abilities of different
+combinations of the feature sets are examined.
+
+3.3 Online Prediction
+During the process of crawling, the crawler will encounter
+URIs belonging to millions of domains, and the number of
+properties could be tens of thousands. Obviously, the poten-
+tial feature space will be huge. Thus, we use feature hashing
+technique [Weinberger et al., 2009] to map high-dimensional
+features into binary vectors.
+
+We assume that data becomes available in a sequential
+order during the crawling process. The predictor makes a
+prediction at each step and can also update itself:
+it oper-
+ates in an online style. Compared to batch methods, on-
+line methods are more appropriate for the task of crawl-
+ing since the predictor has to work in a dynamic learn-
+ing environment. FTRL-Proximal [McMahan et al., 2013;
+McMahan, 2011] developed by Google has been proven to
+work well on the massive online learning problems. FTRL-
+proximal outperforms the other online learning algorithms in
+terms of accuracy and sparsity, and has been widely used in
+industry, e.g., recommender systems and advertisement sys-
+tems. We adopt this learning algorithm in our work.
+
+We use xt to denote the feature vector of URI ut and yt ∈
+{0, 1} the true class label of ut. Given a sequence of URIs
+u1, u2, · · · , ur, · · · , ut, the process of online prediction based
+on FTRL-Proximal algorithm is shown in Algorithm 1. We
+adapted the original algorithm to make it output binary values
+by setting a decision threshold τ . If the predicted probability
+pt is greater than the decision threshold τ ∈ [0, 1], it outputs
+prediction ˆyt = 1; otherwise ˆyt = 0.
+
+At round t + 1, the FTRL-Proximal algorithm uses the up-
+
+date formula (1):
+
+wt+1 = argminw(
+
+t
+(cid:88)
+
+s=1
+
+w · gs +
+
+1
+2
+
+t
+(cid:88)
+
+s=1
+
+σs (cid:107) w − ws (cid:107)2
+2
+
++ λ1 (cid:107) w (cid:107)1).
+
+(1)
+In equation (1), wt+1 is the target model parameters to be
+updated in each round. In the ﬁrst item of equation (1), gs
+
+Figure 2: (a) Performance of the combinations of feature sets; (b) Percentage of retrieved RDF relevant URIs by different crawlers.
+
+√
+
+s=1 σs =
+
+is the gradient of loss function for training instance s. The
+second item of equation (1) is a smoothing term which aims
+to speed up convergence and improve accuracy, and σs is a
+non-increasing learning rate deﬁned as (cid:80)t
+t. The
+third item of equation (1) is a convex regularization term used
+to prevent over-ﬁtting and induce sparsity.
+Subsampling. Not all URIs are considered as training in-
+stances since we are interested in hard URIs. We exclude
+from training URIs with the extensions such as *.rdf/owl. In-
+versely, URIs with the ﬁle extension *.html/htm are included
+in the training set since they may contain RDFa data. The
+true class label yt is required to update the predictor online.
+In our scenario, to observe the true class label of a URI we
+have to download it and check whether it contains RDF data
+or not. We cannot afford to download all URIs because of
+the network overhead, and our target is to build a prediction
+model that avoids downloading unnecessary URIs. There, an
+appropriate subsampling strategy is needed. We found that
+the positive URIs are rare and relatively more valuable. For
+each round, if URI ut is predicted positive namely ˆyt = 1, we
+retrieve the content of ut and observe the real class label yt.
+Then the predictor can be updated by new training instance
+(yt, xt). For those URIs predicted negative, we only select
+a fraction (cid:15) ∈]0, 1] of them to download and observe their
+true class label. Here (cid:15) is a balance between online predic-
+tion precision (which requires as many URIs as possible for
+online training) and downloading overhead. To deal with the
+bias of this subsampled data, we assign an importance weight
+1
+(cid:15) to these examples.
+
+4 Empirical Evaluation
+In the ﬁrst experiment, we evaluate the predictive ability
+of different combinations of feature sets introduced in Sec-
+tion 3.2 by using ofﬂine classiﬁers including SVM, KNN
+and Naive Bayes. The dataset including 103K URIs and
+9,825 different hosts is generated by operating a Breadth-First
+Search (BFS) crawl. As described in Section 3.2, the feature
+sets include F+t derived from the target URI ut, F+r derived
+from the referring URI ur, F+p derived from the direct prop-
+erties of ut and F+x derived from the siblings of ut.
+
+In Figure 2(a) we report the results for the 4-element com-
+bination of feature sets ( F+t+r+p+x), all 3-element combina-
+tions and the 2-element combinations ( F+t+x, Fr+p, F+p+x)
+
+which have the best performance in their class. Among all
+combinations, the 3-element combination F+t+r+p outper-
+forms the other combinations with F-measure 0.8216 and ac-
+curacy 0.7902. The 4-element combination F+t+r+p+x as
+the second best combination scores F-measure 0.7944 and
+accuracy 0.7722. We found that augmenting sibling features
+to F+t+r+p is not helpful to improve the performance in the
+cases of three classiﬁers. We also found that the performance
+of F+r+p+x which is derived by excluding feature set F+t
+from F+t+r+p+x decreases a lot (the worst in all 3-element
+combinations) compared to the performance of F+t+r+p+x.
+It indicates that the features from target URI ut are important.
+In the next experiment, we evaluate the performance of the
+proposed online prediction method against several baseline
+methods. We implemented the proposed crawler denoted by
+LDCOC (Linked Data Crawler with Online Classiﬁer). The
+implementation detail of LDCOC is provided in [Huang and
+Gandon, 2019]. The decision threshold τ in Algorithm 1 is
+set to 0.5 and the parameter (cid:15) of LDCOC is set to 0.17 ac-
+cording to the ratio of the number of positive URIs to the
+number of negative URIs in the previous training set. We also
+implemented three crawlers with ofﬂine classiﬁers including
+SVM, KNN and Naive Bayes to select URIs. The classi-
+ﬁers are pre-trained with two training sets (with size 20K and
+40K). The BFS crawler is another baseline to be compared
+to. As suggested above, we use the feature set F+t+r+p for
+the experiment. Figure 2(b) shows the percentage of retrieved
+RDF relevant URIs by different crawlers after crawling 300K
+URIs. Since the Linked Data Web is a dynamic environment,
+the crawlers with ofﬂine classiﬁers pre-trained by a small size
+training set would not improve performance a lot and our pro-
+posed crawler LDCOC outperforms these crawlers.
+
+5 Conclusion
+
+We have presented a solution to learn URI selection criteria
+to improve the crawling of Linked Open Data. The method is
+able to predict whether a newly discovered URI contains RDF
+content or not by extracting features from several sources and
+building a prediction model based on FTRL-proximal learn-
+ing algorithm. The experimental results demonstrate that the
+coverage of the crawl is improved compared to baseline meth-
+ods. Our method can also be generalized to crawl other kinds
+of Linked Data such as JSON-LD, Microdata, etc.
+
+[Meusel et al., 2014] Robert Meusel, Peter Mika, and Roi
+Blanco. Focused crawling for structured data. In CIKM,
+pages 1039–1048, 2014.
+
+[Umbrich et al., 2008] J¨urgen Umbrich, Andreas Harth,
+Aidan Hogan, and Stefan Decker. Four heuristics to guide
+In ICWE, pages 196–202,
+structured content crawling.
+2008.
+
+[Weinberger et al., 2009] Kilian Q. Weinberger, Anirban
+Dasgupta, John Langford, Alexander J. Smola, and Josh
+Attenberg. Feature hashing for large scale multitask learn-
+ing. In ICML, pages 1113–1120, 2009.
+
+References
+[Berners-Lee, 2006] Tim Berners-Lee. Linked data - design
+
+issues. 2006.
+
+[Chakrabarti et al., 1999] Soumen Chakrabarti, Martin
+van den Berg, and Byron Dom. Focused crawling: A
+new approach to topic-speciﬁc web resource discovery.
+Computer Networks, 31(11-16):1623–1640, 1999.
+
+[Diligenti et al., 2000] Michelangelo Diligenti, Frans Coet-
+zee, Steve Lawrence, C. Lee Giles, and Marco Gori. Fo-
+cused crawling using context graphs. In VLDB, pages 527–
+534, 2000.
+
+[Dodds, 2006] Leigh Dodds.
+
+Slug : A Semantic Web
+
+Crawler. 2006.
+
+[Ermilov et al., 2016] Ivan Ermilov, Jens Lehmann, Michael
+Martin, and S¨oren Auer. Lodstats: The data web census
+In International Semantic Web Conference (2),
+dataset.
+volume 9982 of Lecture Notes in Computer Science, pages
+38–46, 2016.
+
+[F¨arber et al., 2018] Michael F¨arber, Frederic Bartscherer,
+Carsten Menne, and Achim Rettinger. Linked data qual-
+ity of dbpedia, freebase, opencyc, wikidata, and YAGO.
+Semantic Web, 9(1):77–129, 2018.
+
+[Heath and Bizer, 2011] Tom Heath and Christian Bizer.
+Linked Data: Evolving the Web Into a Global Data Space,
+volume 1. Morgan & Claypool Publishers, 2011.
+
+[Hogan et al., 2010] Aidan Hogan, Andreas Harth, Alexan-
+dre Passant, Stefan Decker, and Axel Polleres. Weaving
+the pedantic web. In LDOW, 2010.
+
+[Hogan et al., 2011] Aidan Hogan, Andreas Harth, J¨urgen
+Umbrich, Sheila Kinsella, Axel Polleres, and Stefan
+Decker. Searching and browsing linked data with SWSE:
+the semantic web search engine. J. Web Sem., 9(4):365–
+401, 2011.
+
+[Huang and Gandon, 2019] Hai Huang and Fabien Gandon.
+Learning URI selection criteria to improve the crawling of
+linked open data. In ESWC, pages 194–208, 2019.
+
+[Isele et al., 2010] Robert Isele, J¨urgen Umbrich, Christian
+Bizer, and Andreas Harth. Ldspider: An open-source
+In Pro-
+crawling framework for the web of linked data.
+ceedings of the ISWC 2010 Posters & Demonstrations
+Track, 2010.
+
+[Levenshtein, 1966] V. I. Levenshtein. Binary codes capable
+of correcting deletions, insertions and reversals. Sov. Phys.
+Dokl., 6:707–710, 1966.
+
+[McMahan et al., 2013] H. Brendan McMahan, Gary Holt,
+David Sculley, Michael Young, Dietmar Ebner, Julian
+Grady, Lan Nie, Todd Phillips, Eugene Davydov, Daniel
+Golovin, Sharat Chikkerur, Dan Liu, Martin Wattenberg,
+Arnar Mar Hrafnkelsson, Tom Boulos, and Jeremy Ku-
+bica. Ad click prediction: a view from the trenches. In
+SIGKDD, pages 1222–1230, 2013.
+
+[McMahan, 2011] H. Brendan McMahan.
+
+Follow-the-
+regularized-leader and mirror descent: Equivalence theo-
+rems and L1 regularization. In AISTATS, pages 525–533,
+2011.
+
+

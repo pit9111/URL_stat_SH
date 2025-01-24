@@ -1,0 +1,3798 @@
+Optimizing the computation of overriding in DLN
+Piero A. Bonatti, Iliana M. Petrova, Luigi Sauro
+
+To cite this version:
+
+Piero A. Bonatti, Iliana M. Petrova, Luigi Sauro. Optimizing the computation of overriding in DLN.
+Artificial Intelligence, 2022, 311, pp.103764. ￿10.1016/j.artint.2022.103764￿. ￿hal-03934420￿
+
+HAL Id: hal-03934420
+
+https://hal.science/hal-03934420
+
+Submitted on 11 Jan 2023
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Copyright
+
+Optimizing the computation of overriding in DLN
+
+P. A. Bonattia, I. M. Petrovab, L. Sauroa
+
+aDept. of Electrical Eng. and Information Technologies
+Universit`a di Napoli Federico II, Italy
+b Inria, Sophia Antipolis, France
+
+Abstract
+
+One of the factors that is hindering the adoption of nonmonotonic description
+logics in applications is performance. Even when monotonic and nonmonotonic
+inferences have the same asymptotic complexity, the implementation of nonmono-
+tonic reasoning may be signiﬁcantly slower. This happens also with the family of
+nonmonotonic logics DLN.
+
+In this work we address this issue by introducing two optimizations for rea-
+soning in DLN. The ﬁrst optimization, called optimistic evaluation, aims at ex-
+ploiting incremental reasoning in a better way. The second is a module extractor
+for DLN, that has the purpose of focusing reasoning on a relevant subset of the
+knowledge base. The proposed optimization iterates the module extractor that,
+unlike classical module extractors, is not idempotent, in general.
+
+We prove that the proposed optimizations are correct and complete, and as-
+sess them through extensive experiments. Our results prove that optimized DLN
+reasoning is often compatible with interactive query answering, which brings non-
+monotonic description logics closer to practical applications.
+
+Keywords: Nonmonotonic Reasoning, Description Logics, Module extraction
+
+1. Introduction
+
+In many areas, knowledge is formulated by stating general properties and def-
+initions that are progressively reﬁned by specifying exceptions. For example, this
+approach is extensively used in biology; here we report two representative exam-
+ples. First, the human heart is usually located in the left-hand half of the thorax.
+Still, there are exceptional individuals, with so-called situs inversus, whose heart
+is located on the opposite side. Second, eukaryotic cells are those with a proper
+
+Preprint submitted to Artiﬁcial Intelligence Journal
+
+May 29, 2022
+
+nucleus, by deﬁnition. Still, they comprise mammalian red blood cells, that in
+their mature stage have no nucleus.1
+
+Analogously, the formal languages designed to describe security and privacy
+policies generally allow to formulate default conditions, such as open and closed
+policies,2 conﬂict resolution methods such as denials take precedence, and autho-
+rization inheritance with exceptions [3].
+
+Nevertheless, description logics (DLs) – which underlie the Semantic Web
+standard OWL2, and have been proposed as policy languages – do not support
+defeasible knowledge and exceptions. Consequently, several authors advocated
+nonmonotonic semantics as a useful means to address this limitation, and pro-
+posed different formalisms based on circumscription [4, 5, 6], autoepistemic logic
+[7, 8], typicality operators [9, 10, 11], or rational closure [12, 13, 14], just to name
+a few.
+
+In this context, DLN [15, 16, 17] is a recent family of nonmonotonic DLs that
+results from a utilitarian approach to nonmonotonic reasoning. The main goal of
+this approach is addressing the practical needs of ontology and policy designers,
+that have been illustrated with several examples in the literature, including the
+aforementioned papers on biomedical ontologies and semantic web policies. DLN
+features normality concepts NC to denote the standard/prototypical instances of a
+concept C, and prioritized defeasible inclusions (DIs) C (cid:118)n D that mean (roughly
+speaking): “by default, all prototypical instances that satisfy C satisfy also D,
+unless stated otherwise”, that is, unless some higher priority axioms contradict
+this implication; in this case, C (cid:118)n D is overridden. The standard/prototypical
+instances of C must satisfy all the DIs that are not overridden in C.
+
+DLN beneﬁts from some distinguishing features such as: (i) DLN adopts the
+simplest possible criterion for overriding, that is, inconsistency with higher prior-
+ity axioms; (ii) all the normal instances of a concept C conform to the same set of
+default properties, sometimes called prototype; (iii) the conﬂicts between DIs that
+cannot be resolved with priorities can be easily detected and ﬁxed by knowledge
+engineers; (iv) priorities are not cast into the logic, they are part of the knowledge
+base. Here is a summary of the main strenghts deriving from (i)–(iv).
+
+No inheritance blocking. Most of the logics grounded on preferential seman-
+tics and rational closure block the inheritance of all default properties in excep-
+
+1All of these examples are introduced and discussed in [1, 2].
+2If no explicit authorization has been speciﬁed for a given access request, then an open policy
+
+permits the access while a closed policy denies it.
+
+2
+
+tional subclasses (as opposed to overriding only the properties that are modiﬁed
+in those subclasses). DLN’s simple overriding mechanism does not suffer from
+this drawback.
+
+No undesired CWA effects. Many nonmonotonic DLs extend default properties
+to as many individuals as possible, thereby introducing CWA (i.e. closed-world
+assumption) effects that clash with the intended behavior of ontologies. DLN
+does not introduce any CWA effect because it does not force individuals to be
+normal, unless explicitly stated otherwise.
+
+Control on priorities. Since priorities are not ﬁxed a priori in DLN, knowledge
+engineers can adapt them to their needs. It is possible to override DIs based on
+temporal criteria (which may be useful in legal ontologies and ontology version-
+ing, where new assertions partially replace older assertions), or based on speci-
+ﬁcity (i.e. the properties of more speciﬁc classes override the conﬂicting proper-
+ties of their superclasses), and other custom conﬂict resolution criteria. The logics
+derived from inheritance networks, preferential semantics, and rational closure
+can only support their ﬁxed, speciﬁcity-based overriding criterion.
+
+Default role ﬁllers. DLN axioms can specify whether a role should range
+only over normal individuals or not. Some logics are completely unable to apply
+default properties to role values.3 Some others cannot switch this inference off
+when it is not desired. Only DLN and ALC + Tmin make it possible to control
+this kind of inference.
+
+Inconsistent prototype detection. DLN facilitates the identiﬁcation of all con-
+ﬂicts that cannot be resolved with priorities (via consistency checks over normal-
+ity concepts), because their correct resolution is application dependent and should
+require human intervention. Typically, unresolved conﬂicts correspond to knowl-
+edge gaps or errors.
+
+Unique deductive closure. As a result of the automated handling of unresolved
+conﬂicts, several nonmonotonic logics yield multiple deductive closures, that cor-
+respond to all the possible ways of solving each conﬂict. DLN is one of the logics
+that has a unique closure.
+
+Generality. DLN can be uniformly applied to all description logics up to the
+standard OWL2-DL (i.e. the logic SROIQ(D)) and beyond. Typicality logics
+and rational closure, instead, are limited to logics that satisfy the disjoint union
+
+3This is the case for rational closure. Recently, in [18], a solution has been proposed for EL
+with ⊥. It is unclear how to extend it to more expressive DLs, and it is not possible to “turn off”
+the application of default rules to role ﬁllers.
+
+3
+
+model property. Recently, it has been shown that for expressive DLs that do not
+enjoy this property, syntactic inference does not match semantics [14]. The same
+paper introduces stable rational closure that solves the generality problem for
+rational closure, but re-introduces the issue of multiple (or non existent) deductive
+closures. It is currently not clear how to design a logic that satisﬁes the KLM
+postulates, is fully general, and yields a unique closure for all knowledge bases.
+
+Low complexity. DLN preserves the tractability of subsumption and instance
+checking for all low-complexity DLs, including the rich tractable logics EL++
+and DL-lite(HN )
+Horn . Currently, no other nonmonotonic DL enjoys this property to
+the same extent. Rational closure has been proved to be tractable for EL extended
+with ⊥ [19, 18]. Some logics, such as [13, 20, 21, 11, 10], preserve the asymptotic
+complexity of ExpTime-complete DLs like ALC. More generally, DLN preserves
+the asymptotic complexity of all the DLs that belong to a deterministic complexity
+class that contains P. For nondeterministic complexity classes C, an upper bound
+is P C.
+
+In [15, 16] the semantic properties of DLN and the computational complex-
+ity of the related reasoning tasks have been thoroughly studied, here we focus
+on a concrete implementation of a DLN reasoner. As mentioned above, DLN
+preserves the tractability of low-complexity DLs; this opens the way to process-
+ing very large nonmonotonic KBs within these fragments. Asymptotic tractability
+alone, however, does not sufﬁce for practical purposes. DLN reasoning is based on
+an iterative procedure that, given the signature of the queries of interest, discards
+overridden inclusions and transforms the other defeasible inclusions into classi-
+cal axioms. This reduction executes a number of concept consistency checks that
+in the worst case is quadratic in the size of the knowledge base and of the in-
+put signature. Such consistency checks are evaluated against different, generally
+incomparable subsets of the knowledge base, and for this reason they cannot be
+implemented simply by computing a single classiﬁcation of the knowledge base.
+A preliminary implementation of a DLN reasoner in [15] has distinctly shown
+that such a quadratic dependence may slow down the computation signiﬁcantly,
+even if the engine leverages the incremental reasoning facilities natively supported
+by state-ot-art reasoners such as ELK. Consequently, practical reasoning on large
+knowledge bases – such as biomedical ontologies – requires ad hoc optimizations
+to detect and prune unnecessary computations during the reduction to classical
+DL. For this purpose, in this paper we introduce two optimization techniques,
+prove their correctness, and assess their effectiveness experimentally.
+
+The ﬁrst optimization aims at discarding axioms that are irrelevant for a given
+
+4
+
+query by adapting a classical module extraction algorithm to DLN. As a side
+effect, this reduces also the number of iterations in the reduction to classical DL.
+Adapting classical module extractors to DLN turns out to be a nontrivial task,
+given the nonmonotonic nature of its inferences.
+
+As mentioned above, the ﬁrst reasoner for DLN exploited the incremental rea-
+soning mechanisms of the underlying classical reasoner. The second optimization,
+called optimistic method, aims at reducing the number of retractions (that are typ-
+ically the most expensive operations in incremental reasoning).
+
+We experimentally appraise the efﬁciency of each optimization and their com-
+bination. In order to obtain realistic test cases, experiments have been conducted
+on nonmonotonic versions of large biomedical ontologies such as Gene Ontol-
+ogy, Fly Anatomy, and SNOMED. Not only these ontologies are being used in
+concrete application scenarios, they are also commonly adopted in performance
+benchmarking [22, 23, 24, 25, 26, 27, 28]. The experimental results show that
+the two optimizations together reduce the computation time up to four orders of
+magnitude. A detailed analysis of their effectiveness is reported in Section 5.
+
+We start with preliminaries on DL, module extraction, and DLN. Then, in
+Section 3, we introduce the two optimizations and prove their correctness and
+completeness. The implementation of the testbed and the test sets are described in
+Section 4. After the experimental evaluation (Section 5), two sections on related
+work and ﬁnal remarks conclude the paper. Software and data can be downloaded
+from t.ly/Ct68.
+
+2. Preliminaries
+
+2.1. Description Logics
+
+Description logics are a family of formal languages representing the logical
+foundations of the W3C Ontology Web Language (OWL2). DL languages are
+built from a set NC of concept names, a set NR of role names, and a set NI of
+individual names (all countably inﬁnite and pairwise disjoint). We use the term
+predicate to refer to elements of NC∪NR. A signature Σ is a subset of NC∪NR∪NI.
+An interpretation I of a signature Σ is a structure I = (∆I, ·I) where ∆I is
+a nonempty set, and the interpretation function ·I, deﬁned over Σ, is such that (i)
+AI ⊆ ∆I if A ∈ NC; (ii) RI ⊆ ∆I × ∆I if R ∈ NR; (iii) aI ∈ ∆I if a ∈ NI.
+In each DL, compound concepts and roles are inductively deﬁned with the help
+of a speciﬁc set of logical operators. Here, we focus on the DL SROIQ which
+is the basis of the OWL2 standard. The constructors of SROIQ are described in
+Table 1. We will use metavariables A, B for concept names, C, D for (possibly
+
+5
+
+compound) concepts, R, S for (possibly inverse) roles, a, b for individual names.
+The third column shows how to extend the valuation ·I of an interpretation I
+to compound expressions. Table 1 also shows the terminological and assertional
+axioms we deal with. An interpretation I satisﬁes an axiom α (in symbols, I |=
+α) if it satisﬁes the corresponding semantic condition in Table 1. As usual, ⊥,
+∃R, C (cid:116) D, and ∀R.C are syntactic abbreviations for ¬(cid:62), ∃R.(cid:62), ¬(¬C (cid:117) ¬D),
+and ¬∃R.¬C, respectively. Similarly, C ≡ D is an abbreviation for the pair of
+inclusions C (cid:118) D and D (cid:118) C.
+
+A ﬁnite set of terminological axioms T is called a TBox, similarly a ﬁnite set
+of assertional axioms A is called an ABox. Then, a (classical) knowledge base is
+the union of a TBox and an ABox, S = T ∪ A.4
+
+If X is a DL expression, an axiom, or a knowledge base, then sig(X) denotes
+the signature consisting of all symbols occurring in X. An interpretation I of
+a signature Σ ⊇ sig(S) is a model of S (in symbols, I |= S) if I satisﬁes all
+the axioms in S. We say that S entails an axiom α (in symbols, S |= α) if
+all the models of S satisfy α. Given a knowledge base S and general concept
+inclusion (GCI) C (cid:118) D, the subsumption problem consists in deciding whether
+S |= C (cid:118) D.
+
+Hereafter, we denote by DL a generic fragment of SROIQ. We refer to
+[30, 31] for a comprehensive overview over DL fragments and for DL naming
+conventions.
+
+2.2. Module extraction
+
+Informally speaking, given a classical knowledge base S and a reference sig-
+nature Σ, a module is a subset M of S that preserves the consequences of S that
+can be expressed with the symbols in Σ. Different notions of modules can be ob-
+tained by varying the class of such consequences (e.g. ﬁrst-order, second-order,
+assertions, inclusions, etc.), see [32] for more details and possible applications.
+
+Here, we use modules as an optimization technique for entailment checking
+over large ontologies: queries are evaluated against a module M that is often
+much smaller than the knowledge base S. Accordingly, we use the following
+deﬁnition of modules.
+
+4Note that, in order to preserve decidability of the main reasoning tasks, a SROIQ knowledge
+base must satisfy some additional conditions (e.g. regularity of RIA axioms and simplicity of the
+roles denoted in Table 1 by the symbol S). However, these conditions are not used in this paper,
+therefore we refer the reader to [29] for further details.
+
+6
+
+Semantics
+
+{(y, x) | (x, y) ∈ RI}
+
+(R ∈ NR)
+
+(cid:62)I = ∆I
+UI = ∆I × ∆I
+
+{a}I = {aI}
+(C (cid:117) D)I = C I ∩ DI
+(¬C)I = ∆I \ C I
+{d ∈ ∆I | ∃(d, e) ∈ RI : e ∈ C I}
+
+(cid:8)x ∈ ∆I | #{y | (x, y) ∈ SI ∧ y ∈ C I} (cid:46)(cid:47) n(cid:9) ((cid:46)(cid:47)
+
+.
+= ≤, ≥)
+
+{x ∈ ∆I | (x, x) ∈ SI}
+I satisﬁes the axiom if:
+C I ⊆ DI
+1 ∩ SI
+SI
+
+2 = ∅
+
+R−
+
+(cid:62)
+U
+
+Syntax
+
+{a}
+C (cid:117) D
+¬C
+∃R.C
+
+Name
+Compound expressions
+inverse
+role
+top
+universal
+role
+nominals
+intersection
+complement
+existential
+restriction
+number
+restrictions
+self
+Terminological axioms
+GCI
+role
+disjointness
+RIA
+irreﬂexivity
+Concept and role assertion axioms
+conc. assrt.
+role assrt.
+
+C (cid:118) D
+disj(S1, S2)
+
+C(a)
+R(a, b)
+
+((cid:46)(cid:47) n S.C)
+
+∃S.Self
+
+irr(S)
+
+R1 ◦...◦ Rn (cid:118) R RI
+
+1 ◦ . . . ◦ RI
+RI is irrevlexive
+
+n ⊆ RI
+
+aI ∈ C I
+(a, b)I ∈ RI
+
+Table 1: Syntax and semantics of SROIQ.
+
+Deﬁnition 1. Let Σ be a signature and S a DL knowledge base. A subset M of
+S is a Σ-module of S iff, for all concept subsumptions α such that sig(α) ⊆ Σ, it
+holds that M |= α iff S |= α.
+
+In general, deciding whether M is a Σ-module of a knowledge base S is an ex-
+pensive reasoning task, even if S does not contain assertions. For example, in the
+low-complexity description logics EL and DL-litehorn the problem is EXPTIME-
+complete and coNP-complete, respectively [33, 34]; for ALC, the asymptotic
+complexity is 2EXPTIME-complete [35], while for ALCQIO the problem be-
+comes even undecidable [36].
+
+A more effective technique based on a notion of locality has been proposed to
+extract a Σ-module M from S [32, 37, 38]. The underlying idea is the following.
+A ⊥-module of S with respect to a given signature of interest Σ is a set M ⊆ S
+
+7
+
+such that all axioms α ∈ S \ M are ⊥-local with respect to Σ ∪ sig(M). This
+means that if all concept names (resp. role names) that do not belong to Σ∪sig(M)
+are replaced with ⊥ (resp. the empty role), then α becomes a tautology. The
+deﬁnition of (cid:62)-modules and (cid:62)-locality are analogous, the only difference is that
+the concepts and the roles that are not in Σ ∪ sig(M) are replaced with (cid:62) and the
+universal role, respectively.
+
+In order to make locality checking tractable, syntactic approximations of lo-
+cality have been introduced [38]. This approach is implemented in the OWL API5
+that support three module extractors. Two of them are denoted by x-Mod(Σ,S),
+where x ∈ {(cid:62), ⊥} indicates which notion of locality is used. The third is denoted
+by (cid:62)⊥∗-Mod(Σ,S), and consists in an iterative alternation of the previous two,
+that is, (cid:62)⊥∗-Mod(Σ,S) is the limit of the sequence:
+
+M0 = S ,
+
+Mi+1 = (cid:62)-Mod(Σ, ⊥-Mod(Σ, Mi)) .
+
+Clearly (cid:62)⊥∗-Mod(Σ,S) in general returns the smallest module among the three
+extractors.
+
+Even if these techniques do not ensure that the extracted module is ⊆-minimal,
+they turn out to be effective enough to be used as an optimization technique in
+many concrete cases.
+
+We are going to use the three module extractors supported by the OWL API in
+our optimizations of nonmonotonic reasoning. Our correctness and completeness
+results, however, are slightly more general, as they apply to a class of module
+extractors of which the three extractors of the OWL API are particular instances.
+In the proofs contained in the following sections, it is convenient to reason with
+a declarative characterization of such class, as opposed to speciﬁc algorithmic
+characterizations. The declarative characterization is the following:
+
+Deﬁnition 2. ((cid:62)⊥-substitutions, locality, locality-based modules)
+A (cid:62)⊥-substitution for S and a signature Σ is a substitution σ over sig(S) \ Σ that
+maps each concept name on (cid:62) or ⊥, and each role name on the universal role or
+the empty role. An axiom α is σ-local iff σ(α) is a tautology. A set of axioms is
+σ-local if all of its members are. A set M ⊆ S is a locality-based Σ-module of S
+iff there exists a (cid:62)⊥-substitution σ for S and Σ ∪ sig(M) such that S \ M is σ-
+local. In this case we say that σ witnesses that M is a (locality-based) Σ-module
+of S.
+
+5See https://github.com/owlcs/owlapi/wiki for further details.
+
+8
+
+Let us remark again that each x-Mod(Σ,S) (x ∈ {⊥, (cid:62), (cid:62)⊥∗}) returns a
+
+locality-based Σ-module of S.
+
+All locality-based Σ-modules of any classical knowledge base S are Σ-modules
+of S (as per Deﬁnition 1). This result is implicit in [38, Prop. 42]; we include the
+proof of our version, for completeness:
+
+Theorem 1. For all classical knowledge bases S and all signatures Σ, if M is a
+locality-based Σ-module of S, then M is a Σ-module of S in the sense of Deﬁni-
+tion 1.
+
+PROOF. Let M be a locality-based Σ-module of S, and let q be any subsumption
+query such that sig(q) ⊆ Σ. Let σ be a (cid:62)⊥-substitution that witnesses that M is
+a locality-based Σ-module of S. We have to prove that S |= q iff M |= q. The
+“if” part holds by the monotonicity of classical logic. We prove the “only if” part
+by reductio ad absurdum. Assume that S |= q but M (cid:54)|= q. Then there exists a
+model I of M such that
+
+I |= M and I (cid:54)|= q.
+
+(1)
+
+Deﬁne another interpretation J as follows:
+
+∆J = ∆I ;
+aJ = aI
+
+(cid:26) X I
+
+X J =
+
+for all a ∈ NI
+
+if X ∈ Σ ∪ sig(M)
+
+σ(X)I otherwise
+
+for all X ∈ NC ∪ NR
+
+We are going to prove that
+
+J |= S and J (cid:54)|= q,
+
+(2)
+
+which implies S (cid:54)|= q, hence a contradiction (which completes the proof).
+It
+is easy to verify by structural induction that Y J = σ(Y )I, for any compound
+concept or role Y . Consequently, for all axioms γ we have that
+
+a) J |= γ iff I |= σ(γ) ;
+b) if sig(γ) ⊆ Σ ∪ sig(M), then J |= γ iff I |= γ .
+
+By b) and (1), it follows that
+
+J |= M and J (cid:54)|= q.
+
+(3)
+
+Moreover, for all α ∈ S \M, α is σ-local, therefore σ(α) is a tautology. It follows
+(cid:3)
+by a) that J |= S \ M. From this fact and (3) we conclude that (2) holds.
+
+9
+
+In general, module extractors are not correct under nonmonotonic semantics,
+because they are insensitive to the dependencies between predicates introduced
+by nonmonotonic inference. In Section 3.1, this issue will be illustrated in the
+context of DLN, see Example 3 and Example 4. An example for Circumscription
+can be found in [17, Example 6].
+
+2.3. The logic DLN
+
+Let DL be any classical description logic language, and let DLN be the ex-
+tension of DL with a new concept name NC for each DL concept C. The new
+concepts are called normality concepts.
+
+A (canonical) DLN knowledge base is a disjoint union KB = S ∪ D where S
+is a ﬁnite set of DL axioms (called strong or classical axioms) and D is a ﬁnite
+set of defeasible inclusions (DIs, for short) that are expressions C (cid:118)n D where C
+is a DL concept and D a DLN concept. If δ = (C (cid:118)n D), then pre(δ) and con(δ)
+denote C and D, respectively. Informally speaking, the set of DIs satisﬁed by all
+the instances of a normality concept NC constitute the prototype associated to C.
+DIs are prioritized by a strict partial order ≺. If δ1 ≺ δ2, then δ1 has higher
+priority than δ2. DLN solves automatically only the conﬂicts that can be settled
+using ≺; any other conﬂict shall be resolved by the knowledge engineer (typi-
+cally by adding suitable DIs). The expression KB |≈ α means that α is a DLN
+consequence of KB. We do not report the model-theoretic deﬁnition of |≈ and
+present only its reduction to classical reasoning [15], on which implementations
+are based. The classical reduction of |≈ requires some preliminary deﬁnitions:
+
+• For all DIs δ ∈ D and all normality concepts NC, let
+
+δNC = (cid:0)NC (cid:117) pre(δ) (cid:118) con(δ)(cid:1) ;
+
+(4)
+
+the informal meaning of δNC is: NC’s instances satisfy δ;
+
+• for all sets of DL axioms S (cid:48) and all DIs δ, let S (cid:48) ↓≺δ denote the result of
+such that δ0’s priority is not higher
+
+removing from S (cid:48) all the axioms δNC
+than δ’s:
+
+0
+
+S (cid:48) ↓≺δ= S (cid:48) \ {δNC
+in other words, S (cid:48) ↓≺δ is the subset of S (cid:48) that may override δ;
+
+| δ0 (cid:54)≺ δ} ;
+
+0
+
+• ﬁnally, let δ1, . . . , δ|D| be an arbitrary linearization of (D, ≺), which means
+that {δ1, . . . , δ|D|} = D and for all i, j = 1, . . . , |D|, if δi ≺ δj then i < j.
+
+10
+
+The members of D are processed in the order speciﬁed by the chosen lin-
+earization (it can be proved that the outcome is the same for all lineariza-
+tions).
+
+The classical translation of KB, denoted by KBΣ, is a function of both KB and
+a signature Σ that speciﬁes which normality concepts occur in the queries of in-
+terest. In order to simplify notation in the proofs of Section 3, we allow Σ to
+contain also symbols that are not normality concepts, although the deﬁnition be-
+low is insensitive to such concepts. The classical translation KBΣ is deﬁned by the
+following inductive construction, where Γ = Σ ∪ sig(KB) and i = 1, 2, . . . , |D|:
+
+KBΣ
+KBΣ
+
+0 = S ∪ (cid:8)NC (cid:118) C | NC ∈ Γ(cid:9)
+i−1 ∪ (cid:8)δNC
+i = KBΣ
+
+i
+
+| NC ∈ Γ and KBΣ
+
+i−1 ↓≺δi ∪{δNC
+
+(5)
+i } (cid:54)|= NC (cid:118) ⊥(cid:9). (6)
+
+In informal terms, the ﬁrst step extends S with axioms that state that the normal
+instances of a concept C are a fortiori instances of C. The construction proceeds
+by processing the DIs δi ∈ D in decreasing priority order. If adding δi to the
+(higher priority) δj ≺ δi that have been previously selected for NC does not make
+NC inconsistent, as stated by (6), then δNC
+is
+i
+discarded (i.e. overridden). The faithfulness of the above translation can be stated
+as follows:
+
+is included in KBΣ, otherwise δNC
+
+i
+
+Theorem 2 ([15]). Let KB be a DLN knowledge base, and let α be a subsumption
+or an assertion in DLN such that {NC | NC ∈ sig(α)} ⊆ Σ. Then
+
+KB |≈ α holds iff KBΣ |= α.
+
+Note that DLN is entirely parametric w.r.t. the priority relation ≺. In [15, 17],
+for instance, the authors consider several priority relations, including the priority
+relation of rational closure:
+
+δ ≺ δ(cid:48) iff rank (δ(cid:48)) > rank (δ),
+
+(7)
+
+where rank (·) is the ranking function of rational closure [13, 21]. In this paper,
+for simplicity, we use in the examples a priority relation, called speciﬁcity, where
+the speciﬁc default properties of a concept C have higher priority than the more
+generic properties of the concepts that subsume C. The formal deﬁnition is the
+following (where S denotes the strong axioms of the knowledge base and C (cid:118)S D
+means S |= C (cid:118) D):
+
+δ ≺ δ(cid:48) iff pre(δ) (cid:118)S pre(δ(cid:48)) and pre(δ(cid:48)) (cid:54)(cid:118)S pre(δ) .
+
+(8)
+
+11
+
+Our results, however, hold for all priority relations.
+
+Concerning the computational complexity of DLN entailment, the following
+
+characterization holds.
+
+Theorem 3 ([15]). Let DL be a DL fragment such that subsumption (resp. in-
+stance) checking in DL belongs to a complexity class C, and deciding the prefer-
+ence relation ≺ belongs to PC.6 If DL supports (cid:117) in the left-hand side of inclu-
+sions, then subsumption (resp. instance) checking in DLN is in PC.
+
+It is well-known that, if C = TIME(f (n)) and f grows at least as fast as a poly-
+nomial, then PC = C. Then, as a corollary of Theorem 3, deciding whether an
+entailment KB |≈ α holds is tractable in low complexity description logics such
+as DL-lite(HN )
+horn [39] and EL++ [40]. Similarly, the logics with an EXP-complete
+classical subsumption problem, such as ALC, preserve their complexity in DLN,
+while reasoning in SROIQN is in PN2ExpTime.
+
+We end this section with two examples. The ﬁrst example is borrowed from
+
+[2] and shows a typical use of overriding in a biomedical taxonomy.
+
+Example 1. Mammalian red blood cells are an exceptional class of eukariotic
+cells: the latter have a nucleus, while the former, in their mature stage, do not
+have a nucleus. By default, prototypical eukariotic cells have a nucleus, while
+prototypical mammalian red blood cells should not. This introduces two conﬂict-
+ing DIs with different priority. The encoding in ALCN is:
+
+EukCell (cid:118)n ∃has nucleus
+
+MamRedBldCel (cid:118) EukCell
+MamRedBldCel (cid:118)n ¬∃has nucleus .
+
+(9)
+
+(10)
+
+(11)
+
+By (10), speciﬁty yields (11) ≺ (9), that is, (11) has higher priority than (9).
+Accordingly, the enumeration of D must be δ1 = (11), δ2 = (9). Let
+
+Γ = Σ = {NEukCell, NMamRedBldCel} .
+
+6PC is the class of all problems that can be solved by a deterministic Turing machine in poly-
+
+nomial time using an oracle for C.
+
+12
+
+The translation KBΣ consists of (10) (the only axiom in S) plus:
+
+NEukCell (cid:118)
+NMamRedBldCel (cid:118)
+NEukCell (cid:117) MamRedBldCel (cid:118)
+NMamRedBldCel (cid:117) MamRedBldCel (cid:118)
+NEukCell (cid:117) EukCell (cid:118)
+
+EukCell
+
+MamRedBldCel
+¬∃has nucleus
+¬∃has nucleus
+∃has nucleus .
+
+(12)
+
+(13)
+
+(14)
+
+(15)
+
+(16)
+
+where (12) and (13) are the axioms of the form NC (cid:118) C with NC ∈ Γ, and
+. Note that KBΣ does
+, (15) = δNMamRedBldCel
+(14) = δNEukCell
+1
+1
+2
+not contain δNMamRedBldCel
+because, in NMamRedBldCel, δ2 is overridden by δ1. By
+2
+(12) and (13), inclusions (15) and (16) can be simpliﬁed to
+
+, and (16) = δNEukCell
+
+NMamRedBldCel (cid:118) ¬∃has nucleus
+NEukCell (cid:118) ∃has nucleus
+
+(17)
+
+(18)
+
+therefore normal eukariotic cells have a nucleus while normal mammalian red
+blood cells do not have a nucleus, as required. Moreover, by (17) and (18), we
+have KB |≈ NMamRedBldCel (cid:118) ¬NEukCell which means that normal mam-
+(cid:3)
+malian red blood cells are abnormal eukariotic cells.
+
+The second example shows how, differently from other non-monotonic approaches
+as Circumscription, DLN does not silently neutralize unresolved conﬂicts between
+DIs, and hence it allows the ontology engineer to detect and ﬁx them.
+
+Example 2. (Semantic policy) Suppose that project coordinators are both ad-
+ministrative staff and research staff. By default, administrative staff are allowed
+to sign payments, while research staff are not. A conﬂict arises since both of these
+default policies apply to project coordinators. Formally, KB can be formalized
+with:
+
+Admin (cid:118)n ∃has right.Sign
+Research (cid:118)n ¬∃has right.Sign
+PrjCrd (cid:118) Admin (cid:117) Research
+
+(19)
+
+(20)
+
+(21)
+
+Leaving the conﬂict unresolved may cause a variety of security problems.
+If
+project coordinators should not sign payments, and the default policy is open (i.e.
+authorizations are granted by default), then failing to infer ¬∃has right.Sign
+would improperly authorize the signing operation. Conversely, if the authoriza-
+tion is to be granted, then failing to prove ∃has right.Sign causes a denial of
+
+13
+
+service (that is,the user is unable to complete a legal operation). To prevent these
+problems, DLN makes the conﬂict visible by inferring KB |≈ N PrjCrd (cid:118) ⊥
+(showing that PrjCrd’s prototype is inconsistent). This can be proved by check-
+ing that KBΣ |= N PrjCrd (cid:118) ⊥, where Σ = {N PrjCrd}. Then KBΣ consists
+of (21), N PrjCrd (cid:118) PrjCrd, and the translation of (19) and (20) (none overrides
+the other because none is more speciﬁc under any of the two priorities); such
+translation is:
+
+N PrjCrd (cid:117) Admin (cid:118) ∃has right.Sign,
+N PrjCrd (cid:117) Research (cid:118) ¬∃has right.Sign
+
+(22)
+
+(23)
+
+From the above axioms, the desired consequence N PrjCrd (cid:118) ⊥ easily follows.
+(cid:3)
+
+Further examples regarding biomedical and access-control domains can be found
+in [15]. A set of artiﬁcial examples, initially introduced in [41], is used in [17] to
+compare DLN with other non-monotonic approaches [41, 21, 6].
+
+3. Optimizing the Computation of Overriding
+
+This section introduces the two optimization techniques for the nonmonotonic
+description logic DLN, namely, module extraction and the optimistic evaluation
+strategy.
+
+3.1. Module Extraction for DLN
+
+In order to speed up reasoning, one might simply apply a module extractor for
+monotonic DLs to the classical translation KBΣ of KB. However, the computation
+of KBΣ requires to solve one entailment problem for each inclusion δNC
+such that
+NC ∈ Σ ∪ sig(KB) and δi ∈ KB, as speciﬁed in (6). The set of all such δNC
+i may
+grow quadratically with the size of KB. Here we show how to avoid the processing
+of many of the above entailments by adapting module extraction so that it can be
+applied before translating KB into a classical knowledge base. In this way, both
+the number of normality concepts NC and the number of DIs δi that are considered
+during the translation can be reduced. The following deﬁnition extends the notion
+of (cid:62)⊥∗-module and locality to DIs.
+
+i
+
+Deﬁnition 3. (locality for DIs, pre-modules) Let σ range over (cid:62)⊥-substitutions,
+and let KB be a DLN knowledge base. A DI C (cid:118)n D is σ-local iff C (cid:118) D is
+σ-local. A set M ⊆ KB is a pre-module of KB with respect to Σ iff M is a
+locality-based Σ module of KB (as per Deﬁnition 2, using the extended notion of
+locality to handle DIs, and replacing S with KB).
+
+14
+
+Remark 1. Pre-modules can be computed by adapting any of the available mod-
+ule extraction algorithms so as to parse DIs. A simple approach consists in encod-
+ing DIs as classical OWL2 inclusions and marking them with suitable annotations
+to distinguish them from strong inclusions. In this way, the existing module ex-
+tractors can be applied as they are.
+
+Note that the pre-modules of any classical KB w.r.t. Σ are Σ-modules of KB
+according to Theorem 1. When KB contains some DIs, instead, the pre-modules
+of KB are not modules, in general, because they do not preserve the consequences
+of KB.
+
+Example 3. Let Σ = {NA, B} and KB = {A (cid:118) B}. The (cid:62)⊥-substitution σ
+for KB and Σ such that σ(A) = ⊥ witnesses that the empty set is a pre-module
+of KB w.r.t. Σ. Let α = (NA (cid:118) B). Clearly ∅ (cid:54)|≈ α while KB |≈ α, so the
+empty pre-module does not preserve the consequences of KB whose symbols are
+in Σ. Obviously, the problem is that the valid axioms of the form NC (cid:118) C are
+not explicitly included in KB, therefore pre-module extraction does not detect the
+dependencies between NC and C. This particular problem could be solved by
+extracting the pre-module from the extension of KB with these valid axioms, for
+(cid:3)
+a suitable set of relevant concepts NC.
+
+Example 4. Let Σ = {NA, A, A1, A2, P }, and let KB = {δ1, δ2}, where
+
+δ1 = A (cid:118)n ∀P.NB ;
+δ2 = A1 (cid:118)n A2 .
+
+The set M = {δ2} is a pre-module of KB w.r.t. Σ. This is witnessed by a (cid:62)⊥-
+substitution σ such that σ(NB) = (cid:62). Let
+
+α = NA (cid:118) ∀P.(¬A1 (cid:116) A2).
+
+It is not hard to see that M (cid:54)|≈ α. On the contrary, KB |≈ α holds, therefore M
+does not preserve the consequences of KB. The DLN entailment KB |≈ α can be
+veriﬁed through the classical translation KBΣ, that contains the inclusions:
+
+δNA
+1
+
+δNB
+2
+
+= NA (cid:117) A (cid:118) ∀P.NB, that due to (NA (cid:118) A) ∈ KBΣ is equivalent to:
+
+NA (cid:118) ∀P.NB
+
+= NB (cid:117) A1 (cid:118) A2 ≡ NB (cid:118) ¬A1 (cid:116) A2 .
+
+15
+
+2
+
+1
+
+2
+
+and δNB
+
+1 nor δNB
+
+Thus, the inclusion α is a consequence of δNA
+. Let us analyze the source
+of the problem. Since δ1 is not included in the module, NB (cid:54)∈ sig(M). Then
+neither δNA
+are considered in the translation MΣ. This time, the problem
+cannot be solved by extending KB with NA (cid:118) A and NB (cid:118) B. The substitution
+σ(cid:48) such that σ(cid:48)(NB) = σ(cid:48)(B) = (cid:62) witnesses that M(cid:48) = {δ2, NA (cid:118) A} is a
+pre-module of KB ∪ {NA (cid:118) A, NB (cid:118) B} w.r.t. Σ, still M(cid:48) (cid:54)|≈ α. The normality
+concepts occurring in KB (like NB) should rather be protected by including them
+(cid:3)
+in the initial signature Σ.
+
+The deﬁnition of N-modules below shows the correct way of extracting (an
+analogue of) a locality-based module from a DLN knowledge base KB, under
+the reasonable assumption that the normality concepts of interest refer only to
+predicates that occur in KB. More formally, hereafter we assume that:
+
+Assumption 1. For all NC ∈ Σ ∪ sig(KB), sig(C) ⊆ sig(KB) .7
+
+Deﬁnition 4. (N-modules) Let KB be a DLN knowledge base, M is an N-module
+of KB with respect to a signature Σ iff M is a pre-module of KB+ w.r.t. Γ where
+
+1. Γ = Σ ∪ {NC | NC ∈ sig(KB)};
+2. KB+ = KB ∪ {NC (cid:118) C | NC ∈ Γ}.
+
+Note that M is contained in KB+ and not in KB, as the classical notion of mod-
+ules would prescribe. M is a subset of KB extended with some DLN tautologies
+of the form NC (cid:118) C that in general do not belong to KB. However, we will verify
+experimentally that M is nonetheless much smaller than KB in many cases, so
+that the computation of MΣ is much faster than the computation of KBΣ, which
+is our ﬁnal objective. Our next goal is proving that the additional elements in
+Γ \ Σ and KB+ \ KB provide enough dependencies to ensure that M |≈ α iff
+KB |≈ α, for all α such that sig(α) ⊆ Σ. First, we need two technical lemmas on
+the properties of pre-modules. In particular, given a pre-module M of KB w.r.t.
+Σ, we show how to obtain from M pre-modules for smaller KB and Σ.
+
+Lemma 4. Let M be a pre-module of KB w.r.t. a signature Σ and KB(cid:48) ⊆ KB.
+Then M ∩ KB(cid:48) is a pre-module of KB(cid:48) w.r.t. Σ.
+
+7This assumption can always be satisﬁed by adding suitable tautologies to KB.
+
+16
+
+PROOF. If M is a pre-module of KB w.r.t. Σ, then KB \ M is σ-local for some
+(cid:62)⊥-substitution σ for KB and Σ ∪ sig(M). Let σ(cid:48) be the restriction of σ to the
+symbols in
+
+sig(KB(cid:48)) \ (Σ ∪ sig(M)) = sig(KB(cid:48)) \ (Σ ∪ sig(KB(cid:48) ∩ M)).
+
+Clearly, σ(cid:48) is a (cid:62)⊥-substitution for KB(cid:48) and Σ ∪ sig(M ∩ KB(cid:48)). Moreover, for
+all β ∈ KB(cid:48) \ M, we have by construction that σ(β) = σ(cid:48)(β). Since KB(cid:48) \ M =
+KB(cid:48)\(M∩KB(cid:48)), this implies that KB(cid:48)\(M∩KB(cid:48)) is σ(cid:48)-local and hence M∩KB(cid:48)
+(cid:3)
+is a pre-module of KB(cid:48) w.r.t. Σ.
+
+Lemma 5. Let M be a pre-module of KB w.r.t. a signature Σ and let Σ(cid:48) ⊆ Σ.
+Then, M is a pre-module of KB w.r.t. Σ(cid:48), too. Moreover, this can be witnessed by
+a function σ(cid:48) such that if X is in the domain of σ(cid:48) and X ∈ Σ, then σ(cid:48)(X) = ⊥.8
+
+PROOF. By hypothesis, there exists a (cid:62)⊥-substitution σ for KB and Σ, such that
+KB \ M is σ-local w.r.t. Σ ∪ sig(M). Let σ(cid:48) be the (cid:62)⊥-substitution that extends
+σ from its domain dom = sig(KB) \ (Σ ∪ sig(M)) to dom(cid:48) = sig(KB) \ (Σ(cid:48) ∪
+sig(M)) as follows:
+
+σ(cid:48)(X) =
+
+(cid:26) σ(X)
+⊥
+
+if X ∈ dom ;
+otherwise.
+
+Note that dom(cid:48) \ dom ⊆ Σ \ Σ(cid:48). Clearly, σ(cid:48) is a (cid:62)⊥-substitution for KB and
+Σ(cid:48) ∪ sig(M). Now, consider an arbitrary α ∈ KB \ M, and recall that all such
+α must be σ-local. By deﬁnition of locality, σ(α) is a tautology for all possible
+interpretations of the symbols in Σ. Consequently, α is still a tautology if the
+symbols in Σ ∩ dom(cid:48) are replaced with ⊥, as speciﬁed by σ(cid:48). This means that α
+is σ(cid:48)-local. Then KB \ M is σ(cid:48)-local, and M is a pre-module of KB w.r.t. Σ(cid:48).
+(cid:3)
+Finally, by construction, we have that σ(cid:48)(X) = ⊥ for all X ∈ dom(cid:48) ∩ Σ.
+
+Next we focus on N-modules. The proof that each N-module M preserves all
+DLN-consequences is rather long; then, in order to improve readability, we outline
+the proof strategy before delving into the details. We rely on the faithfulness of
+the classical translations KBΣ and MΣ of KB and M (respectively); by proving
+that MΣ is a (classical) module of KBΣ, i.e.
+
+if sig(α) ⊆ Σ, then MΣ |= α iff KBΣ |= α,
+
+(24)
+
+8We replace all such X with ⊥ because we need this in the following lemmas. However the
+same proof holds for all the possible replacements of those X with any combination of (cid:62) and ⊥.
+
+17
+
+KB
+Σ
+Γ
+KB+
+M
+ΓM
+Mall
+KBall
+
+The given knowledge base
+The signature of the queries of interest
+Σ ∪ {NC | NC ∈ sig(KB)}
+KB ∪ {NC (cid:118) C | NC ∈ Γ}
+An N-module of KB w.r.t. Σ, that is, a pre-module of KB+ w.r.t. Γ.
+Σ ∪ {NC | NC ∈ sig(M)}
+str(M) ∪ { δNC | δ ∈ M, NC ∈ ΓM }
+str(KB+) ∪ {δNC | δ ∈ KB, NC ∈ Γ}
+
+Table 2: Summary of the symbols used in Section 3.1
+
+we also show that if sig(α) ⊆ Σ, then M |≈ α iff KB |≈ α. Proving that MΣ is
+a module of KBΣ is not easy since the iterative construction of MΣ and KBΣ is
+nonmonotonic: any DI δi ∈ KB \ M might in principle override another DI δj,
+that is not overridden in M. We obtain (24) by proving that
+
+N ⊆ MΣ ⊆ KBΣ
+
+where N is a suitable pre-module of KBΣ. This forces the three sets to have
+the same logical consequences α such that sig(α) ⊆ Σ, which proves (24). The
+module N is obtained by means of two upper approximations Mall and KBall
+of MΣ and KBΣ, respectively. Mall contains the strong part of M plus all the
+inclusions δNC
+that are processed during the translation (including those that are
+eventually not included in MΣ). KBall has a similar relationship with KB+. We
+ﬁrst prove that Mall is a pre-module of KBall . Then, by Lemma 4, Mall ∩ KBΣ
+is a pre-module of KBΣ, and we set N = Mall ∩ KBΣ.
+
+i
+
+The above proof steps will be formalized in reverse order. In the following, we
+need several auxiliary deﬁnitions and lemmas, where KB+, Γ and M are deﬁned
+as in Deﬁnition 4 and str(X ) denotes the set of strong axioms in X . Let:
+
+1. ΓM = Σ ∪ {NC | NC ∈ sig(M)};
+2. Mall = str(M) ∪ {δNC | δ ∈ M, NC ∈ ΓM};
+3. KBall = str(KB+) ∪ {δNC | δ ∈ KB, NC ∈ Γ} .
+
+Table 2 summarizes the list of all symbols needed in the following.
+
+Lemma 6. M is a pre-module of KB+ w.r.t. ΓM. This is witnessed by a (cid:62)⊥-
+substitution σ(cid:48) such that for all X in its domain, if X ∈ Γ then σ(cid:48)(X) = ⊥.
+
+18
+
+PROOF. We start by proving that ΓM ⊆ Γ. By deﬁnition ΓM = Σ ∪ {NC | NC ∈
+sig(M)} and Γ = Σ ∪ {NC | NC ∈ sig(KB)}, hence it sufﬁces to show that
+{NC | NC ∈ sig(M)} ⊆ Γ.
+
+Now recall that M is a pre-module of KB+ w.r.t. Γ, by Deﬁnition 4. Then,
+M consists by construction of two parts, M1 ⊆ KB and M2 ⊆ (cid:8)NC (cid:118) C |
+NC ∈ Γ(cid:9). Let X be an arbitrary normality concept in sig(M). If X occurs in
+M1, we directly have that X ∈ Γ. Conversely, assume that X occurs in some
+inclusion NC (cid:118) C in M2; if X = NC, then X ∈ Γ, otherwise X ∈ sig(C) and,
+by Assumption 1, sig(C) ⊆ sig(KB), therefore X ∈ Γ holds also in this case.
+
+Then, since ΓM ⊆ Γ and M is a pre-module of KB+ w.r.t. Γ, the Lemma
+(cid:3)
+
+follows directly from Lemma 5.
+
+Lemma 7. Mall is a pre-module of KBall w.r.t. ΓM.
+
+PROOF. We have to show that there exists a (cid:62)⊥-substitution σ for KBall and
+ΓM ∪ sig(Mall) such that KBall \ Mall is σ-local.
+
+First, by Lemma 6 we know that there exists a (cid:62)⊥-substitution σ(cid:48) for KB+
+and ΓM ∪ sig(M) such that KB+ \ M is σ(cid:48)-local and such that for all X in the
+domain of σ(cid:48), if X ∈ Γ then σ(cid:48)(X) = ⊥. By deﬁnition of (cid:62)⊥-substitution, the
+domains of σ and σ(cid:48) should be the following sets dom and dom(cid:48), respectively:
+
+dom = sig(KBall ) \ (ΓM ∪ sig(Mall)) ;
+dom(cid:48) = sig(KB+) \ (ΓM ∪ sig(M)) .
+
+(25)
+(26)
+
+Claim 1. dom(cid:48) ⊆ dom.
+To prove the claim, consider an arbitrary X ∈ dom(cid:48). The deﬁnition of KBall
+implies that sig(KB+) ⊆ sig(KBall ); then, by (26), X ∈ sig(KBall ). Moreover,
+(26) implies X (cid:54)∈ ΓM. Therefore, in order to prove that X ∈ dom, we only have
+to show that X (cid:54)∈ sig(Mall). Suppose not. Then, by (26), X must occur in one of
+the axioms α ∈ Mall \ M. By deﬁnition of Mall, α must equal some δNC, where
+δ ∈ M and NC ∈ ΓM . Note that sig(δNC) = sig(NC (cid:117) pre(δ) (cid:118) con(δ)) =
+sig(δ) ∪ {NC}. If X = NC, then X ∈ ΓM, hence X (cid:54)∈ dom(cid:48) (a contradiction).
+Then X ∈ sig(δ) ⊆ sig(M). But then X (cid:54)∈ dom(cid:48), and we reach a contradiction
+again. This completes the proof of Claim 1.
+
+By Claim 1, we can deﬁne σ as an extension of σ(cid:48) to dom. For all X ∈ dom,
+
+deﬁne:
+
+σ(X) =
+
+(cid:26) σ(cid:48)(X)
+⊥
+
+if X ∈ dom(cid:48) ;
+otherwise.
+
+19
+
+As argued in the proof of Lemma 5, σ(cid:48)-locality implies σ-locality, because σ ex-
+tends σ(cid:48). With this property, we are going to prove that KBall \ Mall is σ-local
+(which completes the proof of this lemma).
+
+Let α be an arbitrary member of KBall \ Mall. By looking into the deﬁnitions
+
+of KBall and Mall, it is easy to see that there are three possible cases:
+a) α is a strong inclusion in KB+ \ M;
+b) α = δNC and δ ∈ KB \ M;
+c) α = δNC, δ ∈ M and NC ∈ Γ \ ΓM.
+
+In case a), α is σ(cid:48)-local because KB+ \ M is σ(cid:48)-local; then α is σ-local, too.
+In case b), ﬁrst note that δ ∈ KB+ \ M (because KB ⊆ KB+). Then, by
+
+analogy with case a), we derive that α is σ-local.
+
+In case c), there are two possibilities. If NC ∈ dom \ dom(cid:48) then, by deﬁnition
+of σ, σ(NC) = ⊥, so σ(δNC) = (⊥ (cid:117) σ(pre(δ)) (cid:118) σ(con(δ))). This is clearly a
+tautology, therefore α is σ-local. Similarly, if NC ∈ dom(cid:48), σ(NC) = σ(cid:48)(NC) = ⊥
+(because σ(cid:48) maps all X ∈ Γ on ⊥), therefore σ(δNC) is a tautology.
+
+We conclude that in all cases α is σ-local, which completes the proof.
+
+(cid:3)
+
+The next lemma makes use of the translation of M into the classical knowl-
+edge base MΣ. In order to facilitate the comparison with KBΣ, the construction
+of MΣ is modiﬁed by inserting dummy steps for the DIs δi that are not included
+in M. The modiﬁed translation of M is the following (where D is the set of DIs
+in KB and i > 0):
+
+HΣ
+
+0 = str(M) ∪ (cid:8)NC (cid:118) C | NC ∈ ΓM
+if δi (cid:54)∈ M; otherwise:
+
+
+
+
+i−1
+
+(cid:9)
+
+HΣ
+
+i =
+
+HΣ
+HΣ
+
+
+
+i−1 ∪ (cid:8)δNC
+
+i
+
+| NC ∈ ΓM and HΣ
+
+i−1 ↓≺δi ∪{δNC
+
+i } (cid:54)|= NC (cid:118) ⊥(cid:9).
+
+(27)
+
+(28)
+
+By comparing the above translation with the translation MΣ deﬁned by (5)–(6),
+it is easy to see that the only difference is that (cid:104)HΣ
+i (cid:105)i has an additional element
+HΣ
+
+i−1 for each δi ∈ KB \ M, therefore the following proposition holds:
+
+i = HΣ
+
+Proposition 8. HΣ = MΣ.
+
+Lemma 9. The following set containments hold:
+
+N ⊆ MΣ ⊆ KBΣ ,
+
+where N = KBΣ ∩ Mall.
+
+20
+
+PROOF. By Proposition 8, MΣ can be equivalent replaced with HΣ in the above
+chain of inclusions. Then, by deﬁnition of KBΣ and HΣ, it sufﬁces to prove by
+induction that for all i = 0, 1, . . . , |D|,
+
+KBΣ
+
+i ∩ Mall ⊆ HΣ
+
+i ⊆ KBΣ
+i .
+
+Base case (i = 0): By deﬁnition of KBΣ
+str(M) which, in turn, is contained in HΣ
+KBΣ
+0 .
+Induction step (i > 0): The induction hypothesis (IH) is:
+
+0 and Mall, KBΣ
+0 . Moreover, by construction, HΣ
+
+0 ∩ Mall is equal to
+0 ⊆
+
+KBΣ
+
+i−1 ∩ Mall ⊆ HΣ
+
+i−1 ⊆ KBΣ
+
+i−1 .
+
+First, suppose that δi (cid:54)∈ M (and hence for all NC, δNC
+Mall = KBΣ
+Lemma follows by IH.
+
+i−1 ∩ Mall, HΣ
+
+i = HΣ
+
+i−1 (by construction), and KBΣ
+
+i
+
+(cid:54)∈ Mall). Then KBΣ
+
+i−1 ⊆ KBΣ
+
+i ∩
+i . The
+
+Next assume that δi ∈ M and let Fi = {δND
+
+i
+
+| ND ∈ ΓM} and Gi = {δND
+
+i
+
+|
+
+ND ∈ Γ \ ΓM}. By construction,
+
+KBΣ
+
+i = KBΣ
+
+i−1 ∪ (KBΣ
+
+i ∩ Fi) ∪ (KBΣ
+
+i ∩ Gi) .
+
+(29)
+
+Note that Gi ∩ Mall = ∅ and Fi ⊆ Mall, by def. of Mall. Consequently, we have
+that
+
+KBΣ
+
+i ∩ Mall = (KBΣ
+
+i−1 ∩ Mall) ∪ (KBΣ
+
+i ∩ Fi) .
+
+Moreover, since HΣ is constructed from ΓM, we also have that
+
+HΣ
+
+i = HΣ
+
+i−1 ∪ (HΣ
+
+i ∩ Fi) .
+
+(30)
+
+(31)
+
+By IH for each δND
+
+i ∈ Fi it holds that
+
+(KBΣ
+
+i−1 ∩ Mall) ↓≺δi ∪{δND
+
+i } ⊆ HΣ
+
+i−1 ↓≺δi ∪{δND
+
+i } ⊆ KBΣ
+
+i−1 ↓≺δi ∪{δND
+
+i } .
+
+i−1 ↓≺δi ∪{δND
+
+i }) ⊆ KBall , by Lemmas 7 and 4, (KBΣ
+i−1 ↓≺δi ∪{δND
+
+The leftmost term equals (KBΣ
+∪{δND
+pre-module of KBΣ
+ND (cid:118) ⊥ iff the rightmost does. It follows that the middle term HΣ
+entails ND (cid:118) ⊥ iff the other two terms do. Then,
+
+i−1 ↓≺δi
+i−1 ↓≺δi ∪{δND
+i }) ∩ Mall is a
+i } w.r.t. ΓM. Then, the leftmost term entails
+i−1 ↓≺δi ∪{δND
+i }
+
+i }) ∩ Mall. Since (KBΣ
+
+HΣ
+
+i ∩ Fi = KBΣ
+
+i ∩ Fi .
+
+The Lemma follows from the above equation and (29)–(31) using the IH.
+
+(cid:3)
+
+21
+
+We are ﬁnally ready to prove that N-modules preserve DLN-reasoning (under As-
+sumption 1):
+
+Theorem 10. Let M be a N-module of KB w.r.t. Σ. Then, for all α such that
+sig(α) ⊆ Σ, KB |≈ α iff M |≈ α.
+
+PROOF. By Lemma 7, Mall is a pre-module of KBall w.r.t. ΓM = Σ ∪ {NC |
+NC ∈ sig(M)}. Moreover, by deﬁnition, KBΣ ⊆ KBall . It follows, by Lemma 4,
+that N = KBΣ ∩ Mall is a pre-module of KBΣ w.r.t. ΓM.
+
+Then, by Theorem 1, N is also a classical ΓM-module of KBΣ. Since ΓM ⊇
+
+Σ, it follows that for all subsumptions α such that sig(α) ⊆ Σ,
+
+N |= α iff KBΣ |= α.
+
+(32)
+
+Then, by Lemma 9 we derive:
+
+N ⊆ MΣ ⊆ KBΣ .
+
+From these inclusions, (32), and the monotonicity of |=, it follows that for all
+subsumptions α such that sig(α) ⊆ Σ,
+
+MΣ |= α iff KBΣ |= α .
+
+Equivalently, since the translation into classical DLs preserves DLN’s consequences,
+M |≈ α iff KB |≈ α .
+
+(cid:3)
+
+In our experiments we compute N-modules using the locality-based module
+
+(cid:62)⊥∗-Mod of the OWL APIs, that is, we compute
+
+(cid:62)⊥∗-Mod(Γ, KB+) .
+
+(33)
+
+The extraction of N-modules can be proﬁtably iterated. To see why, ﬁrst note
+
+that (by Theorem 10) modules enjoy an obvious transitivity property:
+
+Proposition 11. If M is a N-module of KB w.r.t. Σ, and M(cid:48) is a N-module of M
+w.r.t. Σ, then for all α such that sig(α) ⊆ Σ, KB |≈ α iff M(cid:48) |≈ α.
+
+Classical module extractors are typically idempotent, i.e. the module M(cid:48) extracted
+from M equals M. On the contrary, N-module extraction implicitly includes in
+the initial signature Γ also the concepts NC that occur in KB, some of which may
+not occur in M; thus, since M(cid:48) is constructed with the generally smaller initial
+
+22
+
+signature ΓM, it may consequently be a strict subset of M. Thus, in Section 5, we
+analyze also the performance of a module extractor that iterates (33). In particular,
+the iterated module extractor computes the limit of the (monotonically decreasing)
+sequence:
+
+M0 = KB+
+
+Mi+1 = (cid:62)⊥∗-Mod(Γi, KB+
+
+i ) ,
+
+where Γi = Σ∪{NC | NC ∈ sig(Mi)} and KB+
+i = Mi ∪{NC (cid:118) C | NC ∈ Γi}.
+It can be seen that the translation’s size reduction can be quadratic, in the best case.
+The experiments in Section 5 conﬁrm the effectiveness of the iterated N-module
+extractor.
+
+3.2. Optimistic Computation
+
+i−1 ↓≺δi ∪ {δNC
+
+The construction of KBΣ repeats the concept consistency check (6) over knowl-
+edge bases of the form KBΣ
+i } that share a (possibly large) common
+part KBΣ
+0 , so incremental reasoning mechanisms tend to improve efﬁciency by
+avoiding multiple computations of the consequences of KBΣ
+0 . On the contrary, the
+set of inclusions of the form δNC
+i−1 ↓≺δi may change signiﬁ-
+cantly at each step due to the ﬁltering ↓≺δi. This operation requires many axiom
+deletions, which are less efﬁcient than monotonically increasing changes. The
+optimistic algorithm introduced here (Algorithm 1) computes a knowledge base
+KB∗ equivalent to KBΣ in a way that tends to reduce the number of deletions.
+
+that belong to KBΣ
+
+j
+
+Phase 1 of Algorithm 1 optimistically assumes that the DIs incomparable with
+δNC
+do not contribute to entailing NC (cid:118) ⊥ in (6), so they are not ﬁltered with
+i
+↓≺δi in line 7. In this way, the knowledge base used in line 7 increases monoton-
+ically during the for-do loop (incremental reasoning techniques are particularly
+efﬁcient in this case). Phase 2 checks whether the DIs discarded during Phase 1
+should actually be overridden; it does so by applying ↓≺δj in line 17. If the test
+in line 17 is true then it means that δND
+is not overridden. However, since the
+j
+corresponding test in line 7 (with δNC
+) was false, then there must be an
+unresolved conﬂict between δND
+and some other DI with equal or incomparable
+priority, that makes ND inconsistent. Instead of including in the translation of KB
+the translated DIs that entail the inconsistency of ND, Algorithm 1 directly asserts
+ND (cid:118) ⊥ (line 18), which is logically equivalent.
+
+i = δND
+
+j
+
+j
+
+Rather than carrying out Phase 2 by scanning the list of discarded DIs from
+beginning to the end, Algorithm 1 visits the list along chains in decreasing priority
+order (cf. the condition in the while-statement at line 15, and the assignment at
+
+23
+
+Algorithm 1: Optimistic-Method
+
+Input: KB = S ∪ D, Σ
+Output: a knowledge base KB∗ such that KB∗ ≡ KBΣ
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+// Phase 1
+compute a linearization δ1, . . . , δ|D| of D
+Π := ∅ // Π collects the prototypes
+∆ := ∅ // ordered list of all discarded δNC
+for i = 1, 2, . . . , |D| do
+for NC ∈ Σ do
+
+i
+
+Π(cid:48) := Π ∪ {δNC
+i }
+if KBΣ
+
+0 ∪ Π(cid:48) (cid:54)|= NC (cid:118) ⊥ then
+
+Π := Π(cid:48)
+
+else
+
+append δNC
+
+i
+
+to ∆
+
+// Phase 2
+KB∗ = KBΣ
+while ∆ (cid:54)= ∅ do
+
+0 ∪ Π
+
+read from ∆ its ﬁrst element δNC
+let δ := δi
+while ∆ contains some δND
+
+j
+
+i without removing it
+
+such that δ = δj or δ ≺ δj do
+
+remove from ∆ the ﬁrst such δND
+
+j
+
+// (in decreasing priority
+
+order)
+
+if (KBΣ
+
+0 ∪ Π) ↓≺δj ∪{δND
+KB∗ := KB∗ ∪ {ND (cid:118) ⊥}
+extract all δNE
+
+k with E = D from ∆
+
+j } (cid:54)|= ND (cid:118) ⊥ then
+
+let δ := δj
+
+24
+
+line 20), because in this way the knowledge bases used in line 17 often increase
+monotonically at each iteration despite the ﬁltering operation ↓≺δj (so that incre-
+mental reasoning techniques are used efﬁciently also in Phase 2).
+
+Example 5. In this ﬁrst example we show how the optimistic algorithm may re-
+duce the number of assertions and retractions. Let the knowledge base KB contain
+the following axioms:
+
+A1 (cid:118) A2
+B1 (cid:118) B2
+δ1 : A1 (cid:118)n A
+δ2 : B1 (cid:118)n B
+δ3 : A2 (cid:118)n B
+δ4 : B2 (cid:118)n ¬B
+
+The important properties here are that, by speciﬁcity,
+
+δ1 ≺ δ3
+δ2 ≺ δ4
+
+and that δ2 overrides δ4, while δ1 and δ3 are not in conﬂict with each other.
+
+Suppose that the reasoning algorithms use the following linearization of the
+
+priority order:
+
+δ1, δ2, δ3, δ4,
+
+and suppose for a start that the queries of interest concern NB1, therefore Σ =
+{NB1} .
+
+The naive construction deﬁned by (5) and (6) makes inferences with the fol-
+
+lowing sequence of knowledge bases:
+
+1
+
+KBΣ
+KBΣ
+KBΣ
+KBΣ
+
+0 ↓≺δ1 ∪{δNB1
+1 ↓≺δ2 ∪{δNB1
+2 ↓≺δ3 ∪{δNB1
+3 ↓≺δ4 ∪{δNB1
+
+2
+
+3
+
+4
+
+1
+
+} = KBΣ
+} = KBΣ
+} = KBΣ
+} = KBΣ
+
+0 ∪ {δNB1
+0 ∪ {δNB1
+0 ∪ {δNB1
+0 ∪ {δNB1
+
+2
+
+1
+
+2
+
+}
+}
+} ∪ {δNB1
+} ∪ {δNB1
+
+3
+
+4
+
+(34)
+(35)
+(36)
+(37)
+
+}
+} .
+
+Thus, in order to compute (34), δNB1
+order to compute (35), δNB1
+
+1 must be added (asserted) to KBΣ
+1 must be retracted and replaced with δNB1
+
+2
+
+0 ; then in
+; (36) is
+
+25
+
+obtained by retracting δNB1
+tracting δNB1
+1
+and 4 retractions.
+
+and δNB1
+3
+
+and asserting δNB1
+
+2
+, and asserting δNB1
+
+and δNB1
+; (37) is obtained by re-
+3
+. The totals are: 6 assertions
+
+1
+and δNB1
+4
+
+2
+
+The optimistic algorithm, in the four iterations of the for-loop at line 4, pro-
+, δNB1
+. The ﬁrst three inclusions are in-
+2
+is inserted in ∆. Then the algorithm proceeds to the
+to compute the
+
+gressively asserts δNB1
+serted in Π, while δNB1
+second phase. It extracts δNB1
+knowledge base at line 17, that is:
+
+from ∆ and retracts δNB1
+
+, and δNB1
+
+and δNB1
+3
+
+, δNB1
+3
+
+1
+
+4
+
+4
+
+1
+
+4
+
+(KBΣ
+
+0 ∪ Π) ↓≺δ4 ∪ {δNB1
+
+4
+
+} = KBΣ
+
+0 ∪ {δNB1
+
+2
+
+, δNB1
+4
+
+} .
+
+The totals are: 4 assertions and 2 retractions. In this case, the optimistic method
+saves 33% assertions and 50% retractions. The beneﬁts of this processing strategy
+(cid:3)
+become more evident as the number of parallel chains of DIs grows.
+
+Example 6. In this example we illustrate the beneﬁts of processing ∆ along chains
+of DIs with non-increasing priority (cf. the condition in the while-statement at line
+15, and the assignment at line 20). We compare the number of assertions and re-
+tractions performed by phase 2 with those that would be executed if the list ∆
+were processed sequentially.
+
+Suppose that the knowledge base contains ﬁve DIs δ1, . . . , δ5 such that
+
+δ1 ≺ δ3 ≺ δ5 and δ2 ≺ δ4 ,
+
+and that δ1 overrides δ3 and δ5 while δ2 overrides δ4. Here is a knowledge base
+with these properties:
+
+A0 (cid:118) A1 (cid:117) B1
+A1 (cid:118) A2
+A2 (cid:118) A3
+B1 (cid:118) B2
+
+δ1 : A1 (cid:118) A(cid:48) (cid:117) A(cid:48)(cid:48)
+δ3 :
+δ5 :
+δ2 :
+δ4 :
+
+A2 (cid:118) ¬A(cid:48)
+A3 (cid:118) ¬A(cid:48)(cid:48)
+B1 (cid:118) B(cid:48)
+B2 (cid:118) ¬B(cid:48)
+
+26
+
+Let Σ = {NA0} and the linearization of the priority order be δ1, δ2, δ3, δ4, δ5.
+At the end of the ﬁrst phase of the optimistic algorithm, Π = {δNA0
+
+, δNA0
+}
+2
+(cid:105). If ∆ were processed left-to-right, then the sequence
+
+and ∆ = (cid:104)δNA0
+of knowledge bases used in the test at line 17 would be:
+
+, δNA0
+5
+
+, δNA0
+4
+
+3
+
+1
+
+(KBΣ
+(KBΣ
+(KBΣ
+
+0 ∪ Π) ↓≺δ3 ∪{δNA0
+0 ∪ Π) ↓≺δ4 ∪{δNA0
+0 ∪ Π) ↓≺δ5 ∪{δNA0
+
+4
+
+5
+
+3
+
+} = KBΣ
+} = KBΣ
+} = KBΣ
+
+0 ∪ {δNA0
+0 ∪ {δNA0
+0 ∪ {δNA0
+
+1
+
+1
+
+2
+
+, δNA0
+3
+, δNA0
+4
+, δNA0
+5
+
+}
+}
+} .
+
+(38)
+(39)
+(40)
+
+; then (39) is obtained from (38) by retracting δNA0
+
+The knowledge base (38) is obtained from KBΣ
+serting δNA0
+3
+by asserting δNA0
+and asserting δNA0
+re-asserted and δNA0
+
+and δNA0
+4
+and δNA0
+5
+is retracted again.
+
+and as-
+, and
+3
+and δNA0
+; ﬁnally, (40) is obtained by retracting δNA0
+4
+. With this approach, before processing δ5, δNA0
+is
+
+0 ∪ Π by retracting δNA0
+
+2
+and δNA0
+
+2
+
+1
+
+1
+
+1
+
+2
+
+2
+
+The second phase of the optimistic algorithm, instead, processes ∆ in the fol-
+. The sequence of knowledge bases used at line 17
+
+, δNA0
+5
+
+, δNA0
+4
+
+lowing order: δNA0
+3
+is the following:
+
+(KBΣ
+(KBΣ
+(KBΣ
+
+0 ∪ Π) ↓≺δ3 ∪{δNA0
+0 ∪ Π) ↓≺δ5 ∪{δNA0
+0 ∪ Π) ↓≺δ4 ∪{δNA0
+
+5
+
+3
+
+4
+
+} = KBΣ
+} = KBΣ
+} = KBΣ
+
+0 ∪ {δNA0
+0 ∪ {δNA0
+0 ∪ {δNA0
+
+1
+
+1
+
+2
+
+, δNA0
+3
+, δNA0
+5
+, δNA0
+4
+
+}
+}
+} .
+
+(41)
+(42)
+(43)
+
+In this way, when δNA0
+needs
+not be retracted. The beneﬁts of this processing strategy become more evident as
+(cid:3)
+the number of parallel chains of DIs grows.
+
+needs not be re-asserted, and δNA0
+
+is processed, δNA0
+
+5
+
+2
+
+1
+
+In the above examples, all the overridings hypothesized in the ﬁrst phase are
+conﬁrmed in the second phase. The next example, instead, illustrates a case in
+which an unresolved conﬂict is detected in the second phase.
+
+Example 7. Consider a slight modiﬁcation of the previous example, where δ1
+and δ3 have the same priority (e.g. replace δ3 with A1 (cid:118) ¬A(cid:48)). At the end of
+the ﬁrst phase, Π and ∆ are the same as in Example 6. The ﬁrst time line 17 is
+executed (with j = 3 and D = A0), the test succeeds, so NA0 (cid:118) ⊥ is included
+in the translation, ∆ is emptied, and the optimistic algorithm terminates. As a
+consequence, δNA0
+need not be processed. In terms of assertions and
+retractions, it is easy to see that the second phase only needs to retract δNA0
+from
+(cid:3)
+KBΣ
+
+0 ∪ Π and assert δNA0
+
+and δNA0
+
+.
+
+5
+
+4
+
+3
+
+2
+
+27
+
+The following theorem shows the correctness of Algorithm 1 under the as-
+sumption that normality concepts do not occur in KB (they may occur in the
+queries, though). We call such knowledge bases N-free.9
+
+Theorem 12. If KB is N-free, then Algorithm 1’s output is equivalent to KBΣ.
+
+PROOF. First assume that Σ is a singleton (|Σ| = 1) and let NC be its unique
+member. We start by proving some invariants of lines 6-10.
+
+j ∈ KBΣ \ Π, then KBΣ |= NC (cid:118) ⊥.
+
+Claim 1: KBΣ |= Π.
+Claim 2: If, for some j < i, δNC
+We prove these two claims simultaneously by induction on the iteration i. Both
+claims hold vacuously at the ﬁrst execution of line 6. Next, assume by induction
+hypothesis that they hold at line 6 in some iteration; we have to prove that they
+still hold at the next iteration. There are two possibilities: First suppose that for
+j ∈ KBΣ \ Π. By Claim 2, KBΣ |= NC (cid:118) ⊥. This immediately
+some j < i, δNC
+implies that Claim 2 holds also at the next iteration. Moreover, it implies Claim 1
+because all members of Π have an occurrence of NC in the left-hand side.
+
+We are left the case in which
+
+for all j < i, if δNC
+
+j ∈ KBΣ then δNC
+
+j ∈ Π.
+
+(44)
+
+If the condition in line 7 is false, then Π is not changed, so Claim 1 must hold at
+the next iteration. Otherwise, by (44),
+
+KBΣ
+
+0 ∪ Π(cid:48) ⊇ KBΣ
+
+i−1 ↓≺δi ∪{δNC
+
+i } ,
+
+(45)
+
+and hence NC (cid:118) ⊥ is not provable in (6), either. It follows that δNC
+both Π (by line 8) and KBΣ (by (6)). This proves Claim 1 for iteration i.
+
+i
+
+belongs to
+
+Concerning Claim 2, ﬁrst suppose that the condition in line 7 is false; then
+i ∈ KBΣ \ Π. The latter (plus
+either Claim 2 remains vacuously satisﬁed, or δNC
+the deﬁnition of KBΣ and the IH of Claim 1) implies that KBΣ
+0 ∪ Π(cid:48) is entailed
+by KBΣ. It follows that KBΣ |= NC (cid:118) ⊥ as well, which proves Claim 2 in this
+case. Finally, if the condition in line 7 is true, then at line 8 δNC
+i ∈ Π. Together
+with (44), this implies that Claim 2 holds vacuously.
+
+Claim 3: If KBΣ |= NC (cid:118) ⊥ then KB∗ |= NC (cid:118) ⊥.
+Suppose not (we shall derive a contradiction). The assumption and Claim 1
+be the one with
+
+imply that there must be some δNC
+
+k ∈ KBΣ \ KB∗. Let δNC
+
+i
+
+9Note that the examples in Section 2.3 are all N-free.
+
+28
+
+0 ∪ Π ↓≺δi= KBΣ
+
+i ∈ KBΣ iff δNC
+
+minimal k. Using minimality, it can be proved that KBΣ
+i−1 ↓≺δi,
+so the concept consistency test in line 17 (the latter instantiated with j = i and
+i ∈ KB∗,
+D = C) is equivalent to the one in (6). But then δNC
+which contradicts the assumption, so Claim 3 is proved.
+Claim 4: If KBΣ |= NC (cid:118) ⊥ then KB∗ ≡ KBΣ.
+Note that KB∗ ⊆ KBΣ
+
+0 ∪ Π ∪ {NC (cid:118) ⊥} (cf. lines 11, and 18). Clearly,
+KBΣ |= KBΣ
+0 ∪ Π ∪ {NC (cid:118) ⊥} (by def., Claim 1 and the assumption), so
+KBΣ |= KB∗. We are left to prove KB∗ |= KBΣ. By Claim 3, KB∗ |= NC (cid:118) ⊥,
+i ∈ KBΣ (cf. (4)). The other members of
+and this inclusion in turn entails all δNC
+KBΣ are those in KBΣ
+0 (line 11). It follows that
+KB∗ |= KBΣ, which completes the proof of Claim 4.
+Claim 5: If KBΣ (cid:54)|= NC (cid:118) ⊥ then KB∗ ≡ KBΣ.
+Suppose that KBΣ (cid:54)|= NC (cid:118) ⊥. Then, by the contrapositive of Claim 2 all
+0 ∪ Π ≡ KBΣ which further
+δNC are in Π. Hence, it follows by Claim 1 that KBΣ
+implies that the concept consistency in line 17 is equivalent to the corresponding
+test in (6). Then it can be proved that if any of these tests were true, then also
+KBΣ |= NC (cid:118) ⊥ because, by Π’s construction, in that case δi must be in conﬂict
+with some other DI with the same priority. However, KBΣ |= NC (cid:118) ⊥ contradicts
+the assumption. It follows that all tests in line 17 are false, so KB∗ = KBΣ
+0 ∪ Π,
+and we have already argued that this knowledge base is equivalent to KBΣ. This
+completes the proof for |Σ| = 1.
+
+0 , by deﬁnition, and KB∗ ⊇ KBΣ
+
+For |Σ| > 1, note that the tests in lines 7 and 17 do not depend on any δNE
+such that E (cid:54)= C (resp. E (cid:54)= D). Indeed, by ⊥-locality, all such δNE
+are local
+w.r.t. the signature of KB ∪ {NC (cid:118) ⊥}, so they can be removed without changing
+the result of the concept consistency test [32]. However, after their removal, the
+concept consistency tests correspond to the ones for the singleton case Σ = {NC},
+(cid:3)
+which we have already proved correct.
+
+k
+
+k
+
+We conclude this section by showing that when KB is not N-free, the output
+
+of Algorithm 1 is not always correct:
+
+Example 8. Let KB consists of the following axioms (where δ3 is not N-free):
+
+A (cid:118) B
+δ1 : A (cid:118)n C
+δ2 : A (cid:118)n ¬C
+δ3 : B (cid:118)n ∃R.NA .
+
+Speciﬁcity gives δ1 and δ2 the same priority, and, by the ﬁrst axiom above, δ3 has
+lower priority that the other two DIs. In order to answer queries about NA and
+
+29
+
+NB, let Σ = {NA, NB}. It is not hard to see that the two conﬂicting DIs with the
+same priority (i.e. δ1 and δ2) make NA inconsistent; in particular, KBΣ contains
+both
+
+δNA
+1
+δNA
+2
+
+= NA (cid:117) A (cid:118) C and
+= NA (cid:117) A (cid:118) ¬C
+
+that together with the axiom (NA (cid:118) A) ∈ KBΣ imply NA (cid:118) ⊥. As a conse-
+quence of this fact, δ3 is overridden in NB; in particular, the inclusion
+
+δNB
+3
+
+= NB (cid:117) B (cid:118) ∃R.NA
+
+is not included in KBΣ, because (together with (NB (cid:118) B) ∈ KBΣ and NA (cid:118) ⊥,
+that is implied by higher priority axioms) it implies NB (cid:118) ⊥. Since δ3 is overrid-
+den, NB is consistent (KBΣ (cid:54)|= NB (cid:118) ⊥). On the contrary, Algorithm 1 returns a
+knowledge base KB∗ that erroneously entails NB (cid:118) ⊥. This happens as follows,
+assuming that the linearization is δ1, δ2, δ3:10 During Phase 1, the translations of
+the above DIs are processed in the following order:
+
+• ﬁrst δNA
+
+1
+
+and δNB
+
+1
+
+, in some order; none of them makes the respective nor-
+
+mality concept inconsistent, so they are both inserted in Π;
+
+• then δNA
+
+2
+
+and δNB
+
+2
+
+; the former, together with δNA
+
+1
+
+and KBΣ
+
+0 , implies NA (cid:118)
+
+⊥, so it is inserted in ∆;
+
+3
+
+3
+
+• ﬁnally δNA
+
+and δNB
+
+are processed. In the absence of δNA
+
+(that has been tem-
+porarily discarded), NA is consistent, therefore δNA
+do not cause
+their respective normality concepts to be inconsistent, either; consequently,
+both translations are included in Π.
+
+2
+and δNB
+
+3
+
+3
+
+In Phase 2, the algorithm realizes at line 17 that δNA
+has been erroneously dis-
+carded and inserts NA (cid:118) ⊥ in KB∗. However, KB∗ contains also Π (line 11),
+hence δNB
+
+. It follows that KB∗ |= NB (cid:118) ⊥.
+
+2
+
+3
+
+Summarizing, when KB is not N-free, Algorithm 1 may erroneously insert in
+Π ⊆ KB∗ the translation of some DIs that should be overridden due to DIs that
+(cid:3)
+are temporarily discarded in Phase 1.
+
+10The reader may easily verify that the ﬁnal result is the same for the other possible linearization,
+
+i.e. δ2, δ1, δ3.
+
+30
+
+Despite this limitation, we expect the optimistic evaluation method to be use-
+ful in a non-negligible amount of cases. So far, the only known application of
+normality concepts in knowledge base axioms is for asserting that some attributes
+of normal individuals are normal, too, as in the next example.
+
+Example 9 ([15]). The heart of most humans is on the left-hand side of the body,
+but there are exceptions (so-called situs inversus). Thus, the standard position of
+the human heart should be axiomatized as a defeasible property. For this purpose,
+one can ﬁrst describe normal human hearts, and then assert that typical humans
+have normal human organs:
+
+HumanHeart ≡ HumanOrgan (cid:117) Heart ,
+
+Human (cid:118) ∃has organ.Heart ,
+
+HumanHeart (cid:118)n ∃has position.Left ,
+
+Human (cid:118)n ∀has organ.N HumanOrgan .
+
+(46)
+
+Note the explicit use of NHumanOrgan in (46) to state that the organs of normal
+humans are normal themselves. These axioms entail that the heart of typical hu-
+mans is placed on the left-hand side of the body, that is:
+
+KB |≈ NHuman (cid:118) ∃has organ.(Heart (cid:117) ∃has position.Left) .
+
+(cid:3)
+
+It is not always required to state that role values are normal, though; see the ex-
+amples in Section 2.3, and also Example 11 in [15], that illustrates a case where
+stating that role values are normal is not even correct. Moreover, N-module ex-
+traction may eliminate all occurrences of normality concepts, and return an N-free
+module. Thus, N-free knowledge bases are likely to occur in practice, for different
+reasons. In the section devoted to performance analysis we will see that the op-
+timistic evaluation method (when applicable) brings tangible beneﬁts, especially
+when combined with module extraction.
+
+4. System Implementation
+
+We introduce NMReasoner, a DLN implementation based on existing classi-
+cal reasoners. Since mainstream DL technology does not support nonmonotonic
+inferences and the available implementations of nonmonotonic DLs can only han-
+dle knowledge bases with moderate size, currently, no “real” nonmonotonic DL
+
+31
+
+knowledge bases exist. Thus, in order to analyze the reasoner’s performance ex-
+perimentally, in Section 4.2 we propose a systematic approach to the automatic
+generation of synthetic test cases with realistic size and structure.
+
+4.1. Reasoner Implementation
+
+NMReasoner is implemented in Java 8 and distributed as a .jar ﬁle.
+According to the theoretical framework, the engine consists of two modules.
+The ﬁrst one, hereafter called translation module, constructs the classical knowl-
+edge base KBΣ corresponding to the given DLN knowledge base KB = S ∪ D
+(where S and D are the sets of strong and defeasible axioms, respectively). The
+second module computes nonmonotonic subsumptions, sometimes called queries
+in the following. Besides KB, NMReasoner takes as input the set Σ of all normal-
+ity concepts that occur either in KB or in a given set of queries Q. Moreover, if no
+priority relation over DIs is provided as part of the input (encoded in an appropri-
+ate ﬁle), then speciﬁcity (8) is applied by default. Both modules call an external
+classical reasoner for classiﬁcation. In particular, we use the specialized engine
+ELK [42, 43, 44] with knowledge bases that belong to EL, and the general engine
+HermiT [45] otherwise.
+
+NMReasoner implements the optimizations described in Section 3. By default,
+all optimisations are turned off and the reasoner relies only on the optimization
+techniques supported by the underlying, classical reasoning engine. The usage of
+appropriate input parameters enables selectively one or more ad hoc optimisations.
+
+4.2. Test Suites Generator
+
+The test suite generator takes as input a classical knowledge base S, which
+serves as basic pattern, and returns a DLN knowledge base according to the fol-
+lowing steps.
+
+Step 1: DI generation. DIs are generated by either injecting fully synthetic
+DIs in S, or transforming a random set of CIs occurring in S into DIs. A fully
+synthetic DI takes the form A (cid:118)n B or A (cid:118)n ∃R.B where the atomic concepts
+A and B, and the role R are randomly chosen from the signature of S. The
+generator makes sure that no duplicates are generated, and that for each new DI δ,
+pre(δ) (cid:118) con(δ) is not classically entailed by S.The number of fully synthetic and
+transformed DIs are respectively tuned by the Synthetic-DI-rate and CI-to-DI-rate
+parameters (see Figure 1).
+
+Step 2: Disjontness axiom injection. In order to increase the probability of
+overriding (and hence nonmonotonic behavior), some additional inconsistencies
+between DI conclusions are injected. To do that, DI pairs (δ1, δ2) are randomly
+
+32
+
+Meaning
+
+Parameter
+Synthetic-DI-rate % of fully synthetic DIs w.r.t. the number of CIs
+CI-to-DI-rate
+DA-rate
+I-rate
+ABox-rate
+R-rate
+NC-size
+
+% of CIs to be transformed DIs
+% of disjointness axioms w.r.t. the number of CIs
+% of new distinct individuals w.r.t. the number of concept names
+% of assertions w.r.t. the number of concept names
+% of role assertions w.r.t. the number of all assertions
+# of DIs with normality concept within the scope of quantiﬁers
+
+Figure 1: The main parameters of the test-case generator. All parameters, except NC-size, are
+represented as a rate of the number of CIs occurring in S.
+
+selected and, for each of them, two arbitrary concepts C1 and C2 are picked from
+the superclasses of con(δ1) and con(δ2). Then, new disjointness axioms C1 (cid:117)
+C2 (cid:118) ⊥ are added to S. The test case generator makes sure that none of C1,
+C2, and S are made inconsistent, by checking that the following conditions are
+satisﬁed in the extended knowledge base: (i) con(δ2) (cid:54)(cid:118) C1; (ii) con(δ1) (cid:54)(cid:118) C2;
+(iii) C2 (cid:54)(cid:118) C1 and (iv) C1 (cid:54)(cid:118) C2. Note that we intentionally refrain from asserting
+con(δ1)(cid:117)con(δ2) (cid:118) ⊥ directly, so that the reasoning involved in checking whether
+a DI is overridden is generally nontrivial. The generation of disjointness axioms
+is controlled by the DA-rate parameter.
+
+Step 3: N-transformation. Normality concepts are introduced by randomly
+choosing a DI A (cid:118)n ∃R.B and replacing it with A (cid:118)n ∃R.N B.11 The amount of
+normality concept occurrences is controlled by parameter NC-size specifying the
+number of modiﬁed DIs.
+
+The appropriateness of the test suites generated with the above procedure is
+assessed by inspecting the structure of the generated knowledge bases. For the
+sake of readability, this ancillary assessment is reported in the appendix.
+
+Queries have the form NA (cid:118) B where A and B are randomly selected among
+the concepts deﬁned in the knowledge base. Such queries check whether the nor-
+mal instances of A have property B.
+
+11 So far, all the application examples that are not N-free satisfy this restriction, as apparently the
+only purpose of explicit normality concepts is restricting default role ranges to normal individuals.
+
+33
+
+5. Experimental Evaluation
+
+In this section we present a performance analysis of NMReasoner. All test
+cases result from our test suites generator, taking as input one of the following on-
+tologies: a version of the Gene Ontology12 (GO for short) published in 2006, Fly
+Anatomy (FLY)13 and SNOMED CT (Systematized Nomenclature of Medicine
+Clinical Terms)14. These ontologies have been extensively used in many per-
+formance experiments [22, 23, 24, 25, 26, 27, 28]. They are particularly well-
+suited to our purposes because they ﬁt well our application scenarios, being large
+biomedical ontologies.
+In particular, GO features 20465 atomic concepts and
+28896 concept inclusions; FLY has 7797 atomic concepts and 19137 concept in-
+clusions; and SNOMED CT has 291151 atomic concepts, 227704 concept inclu-
+sions and 63452 concept equivalences. They can be encoded in EL++, whose
+nonmonotonic version EL++ N enjoys tractable inference problems.
+
+Hereafter, we refer to the optimization techniques introduced in Section 3 with
+
+the following labels:
+
+Naive: A naive reasoner which realizes the classical reduction in Section 2.3 as
+such, without any optimization technique besides those natively supported
+by the underlying classical reasoner. We use this reasoner as a baseline in
+our performance analysis.
+
+Opt: The optimistic method introduced in Sec. 3.2.
+
+Mod: The N-module extraction method of Sec. 3.1, that uses the module ex-
+
+traction facility of the OWL API.
+
+MO: The sequential execution of Mod and Opt. This combined method is
+
+correct for N-free knowledge bases by Theorem 12 and Theorem 10.
+
+Mod*: The iterated N-module extraction of Sec. 3.1
+
+In order to analyze the contribution of each optimization technique on perfor-
+mance, we designed speciﬁc test suites corresponding to different settings of the
+
+12http://www.geneontology.org
+13One of the largest ontologies listed at
+
+obofoundry.org/.
+
+the OBO Foundry websites http://www.
+
+14The largest biomedical ontology obtained from the ofﬁcial July 2015 international release by
+
+converting from the native syntax (RF2) to FSS using the supplied converter.
+
+34
+
+parameters in Figure 1. First, we consider a test suite where only N-free defeasi-
+ble inclusions are added to the input ontologies (recall that the optimistic method
+is applicable only to N-free knowledge bases). Note that, since this test suite is
+N-free, Mod is idempotent and Mod* is equivalent to Mod. Consequently, we use
+this test suite to evaluate only Opt, Mod, and their combination MO. Mod* will be
+assessed with a second test suite, by gradually injecting normality concepts.
+
+Every single value that is reported in the following sections is obtained as the
+average execution time over ﬁve randomly generated nonmonotonic ontologies
+and ﬁfty different queries on each ontology. Execution time includes the transla-
+tion into classical DL of KB or – if module extraction is applied – of an N-module
+M of KB. The experiments were performed on a server with an 8-cores pro-
+cessor Intel Xeon Silver 4110, 11M cache, 198GB RAM, running Ubuntu 18.04.
+NMReasoner was run on Java 1.8, conﬁgured with 12GB heap memory and 4GB
+stack memory space. We have not exploited parallelism.
+
+label
+PS1
+PS2
+PS3
+PS4
+
+CI-to-DI-rate
+5%, 10%, 15%, 20%, 25%
+0%
+15%
+0%
+
+Synthetic-DI-rate
+0%
+5%, 10%, 15%, 20%, 25%
+0%
+15%
+
+DA-rate
+15%
+15%
+5%, 10%, 15%, 20%, 25%
+5%, 10%, 15%, 20%, 25%
+
+Figure 2: Parameter settings used to evaluate Opt, Mod, and MO.
+
+5.1. Module extraction vs. optimistic computation
+In this section we compare the effectiveness of optimization techniques Opt, Mod,
+and their combination MO. To this end, we consider a test suite where the input
+ontologies are augmented by N-free DIs only (as the optimistic method is correct
+only for such knowledge bases). More speciﬁcally, the suite is composed by 4
+parameter settings where only one of CI-to-DI-rate, Synthetic-DI-rate, and DA-
+rate is allowed to vary (see Figure 2). The parameters not mentioned in Figure 2
+are set to 0, consequently Σ contains only the normality concept occurring in the
+current query. Settings PS1 and PS2 show the impact of |D| (the number of DIs)
+on performance, while PS3 and PS4 evaluate the cost of processing disjointness
+axioms. In PS1 and PS3, DIs are generated by converting strong CIs, whereas
+PS2 and PS4 inject fully synthetic DIs.
+
+Note that PS1 and PS3 preserve the overall number of (strong and defeasible)
+inclusions, while PS2 and PS4 increase the size of the knowledge base up to 25%;
+
+35
+
+therefore the experiments based on fully synthetic DIs are expected to take longer
+computation time.
+
+Figure 3 reports the execution times for the test cases PS1 and PS2. In both
+cases, the methods Naive and Opt grow linearly with |D|. However, Opt is about
+two times faster in GO, FLY and SNOMED CT. Note that response times are
+slower in PS2, since the generated knowledge bases are up to 25% larger in this
+setting, as explained above.
+
+Mod turns out to be far more effective than Opt. On average, in PS1, it is
+approximately 85 times faster than Naive for GO and FLY (max. speedup is 146),
+and 3500 times faster for SNOMED CT. In PS2, Mod is 15 times faster for GO
+and FLY (max. speedup 33), and 70 times faster for SNOMED CT.
+
+On average, the combination of module extraction and optimistic computation
+(MO) yields in PS2 a further 45% improvement over Mod alone; the maximum
+reduction (63%) is obtained in SNOMED with Synthetic-DI-rate=25%, and DA-
+rate=15% (Figure 3, last line in the rightmost table). On the other hand, in PS1,
+the improvement of MO over Mod alone is barely perceptible. This is due to the
+fact that the optimistic method is particularly effective on large modules, while
+on small modules (< 102 axioms) it brings little beneﬁts, and its overhead may
+occasionally slow down the computation.
+In particular, the modules produced
+with PS2 are larger because synthetic DIs connect unrelated parts of the ontology.
+Most modules have 105 − 106 axioms; in this range, the beneﬁts of the optimistic
+computation prevail and MO notably outperforms Mod.
+In PS1, instead, Mod
+returns middle-sized modules with approximately 102 − 103 axioms. This is a
+gray area where the beneﬁts of the optimistic algorithm are more sensitive to the
+structure of the ontology and the query.
+
+The additional conﬂicts induced by injected disjointness axioms have moder-
+ate effects on execution time (cf. Figure 4, dedicated to settings PS3 and PS4).
+This should be expected since the number of classical entailments needed to trans-
+late the knowledge base in classical DL depends on the number of inclusions δNC
+that must be processed, which is not affected by disjointness axioms. Such axioms
+increase the size of the knowledge base, but are processed efﬁciently by modern
+classical reasoners (and ELK in particular). Mod’s average response time across
+both PS3 and PS4 is 0.89 sec. for Gene Ontology, 1.41 sec. for Fly Anatomy and
+111.28 for SNOMED CT, while the longest Mod response times have been 1.6
+sec., 2.82 sec. and 116 sec. respectively. In all cases, the speedups of Mod and
+MO over Naive remain well above one order of magnitude.
+
+i
+
+36
+
+CI-to-DI
+GO
+05%
+10%
+15%
+20%
+25%
+FLY
+05%
+10%
+15%
+20%
+25%
+SNOMED
+05%
+10%
+15%
+20%
+25%
+
+Naive Opt Mod MO
+
+12.3
+24.1
+34.5
+42.0
+49.9
+
+4.22
+7.97
+11.9
+14.4
+17.5
+
+2630
+4389
+6844
+9925
+13638
+
+4.99
+9.49
+14.3
+19.7
+24.9
+
+1.90
+3.78
+5.60
+7.34
+9.18
+
+1191
+2384
+3782
+5260
+6158
+
+0.26
+0.28
+0.29
+0.32
+0.34
+
+0.13
+0.15
+0.17
+0.19
+0.21
+
+1.52
+1.73
+1.91
+2.24
+2.61
+
+0.24
+0.26
+0.29
+0.31
+0.33
+
+0.12
+0.14
+0.16
+0.18
+0.20
+
+1.49
+1.68
+1.85
+2.18
+2.43
+
+Synth-DI
+GO
+05%
+10%
+15%
+20%
+25%
+FLY
+05%
+10%
+15%
+20%
+25%
+SNOMED
+05%
+10%
+15%
+20%
+25%
+
+Naive
+
+Opt Mod MO
+
+13.1
+27.8
+37.5
+46.1
+57.1
+
+4.86
+9.86
+14.7
+19.9
+24.3
+
+2843
+4808
+8139
+11776
+15094
+
+05.17
+09.85
+15.5
+21.2
+27.6
+
+02.01
+03.97
+06.01
+08.59
+10.8
+
+1113
+2117
+3828
+5732
+6637
+
+0.48
+0.83
+1.47
+2.76
+4.66
+
+0.40
+1.19
+2.51
+4.61
+7.25
+
+27.1
+51.3
+112
+248
+521
+
+0.42
+0.64
+0.98
+1.54
+2.46
+
+0.35
+0.67
+1.18
+2.15
+3.34
+
+11.0
+22.5
+51.7
+96.8
+195
+
+Figure 3: Impact of |D| on performance (sec). Parameter settings PS1 (left) and PS2 (right).
+
+DA
+GO
+05%
+10%
+15%
+20%
+25%
+FLY
+05%
+10%
+15%
+20%
+25%
+SNOMED
+05%
+10%
+15%
+20%
+25%
+
+Naive Opt Mod MO
+
+27.4
+27.5
+34.5
+38.6
+36.2
+
+10.3
+11.5
+11.9
+12.1
+12.6
+
+6617
+6872
+6844
+7344
+7924
+
+13.3
+13.8
+14.3
+15.0
+15.6
+
+5.02
+5.38
+5.60
+5.85
+6.20
+
+3689
+3795
+3782
+3881
+3901
+
+0.28
+0.29
+0.29
+0.30
+0.31
+
+0.16
+0.17
+0.17
+0.18
+0.19
+
+1.87
+1.90
+1.91
+2.01
+2.02
+
+0.27
+0.28
+0.29
+0.29
+0.30
+
+0.15
+0.16
+0.17
+0.17
+0.18
+
+1.82
+1.85
+1.85
+1.90
+1.91
+
+DA
+GO
+05%
+10%
+15%
+20%
+25%
+FLY
+05%
+10%
+15%
+20%
+25%
+SNOMED
+05%
+10%
+15%
+20%
+25%
+
+Naive Opt Mod MO
+
+33.3
+35.6
+37.5
+42.0
+43.0
+
+12.9
+14.0
+14.8
+15.9
+16.6
+
+7721
+7895
+8139
+8243
+8665
+
+13.7
+14.7
+15.5
+16.7
+16.9
+
+5.55
+5.84
+6.01
+6.30
+6.59
+
+3517
+3749
+3828
+3899
+4065
+
+1.26
+1.35
+1.47
+1.51
+1.60
+
+2.23
+2.50
+2.52
+2.61
+2.82
+
+104
+107
+112
+114
+116
+
+0.86
+0.92
+0.98
+1.00
+1.06
+
+1.07
+1.14
+1.18
+1.22
+1.30
+
+47.5
+49.2
+51.7
+56.0
+62.9
+
+Figure 4: Impact of DAs on performance (sec). Parameter settings PS3 (left) and PS4 (right).
+
+37
+
+5.2. Effectiveness of Iterated Module Extraction
+
+In the following we analyse the performance of the iterated module extractor Mod*
+by comparing it with the non-iterated version Mod. Here we use knowledge bases
+that contain occurrences of normality concepts, because – as explained above – on
+N-free inputs Mod* and Mod return the same results. Since the input knowledge
+bases are not N-free, Opt is not applicable to this test set.
+
+Mod* shows its beneﬁts as soon as the number of normality concepts in the
+knowledge base (and in the relevant signature Σ) increases. Figure 5 illustrates
+a test suite where normality concepts are injected in KB by tuning the parameter
+NC-size (see Step 3 in Section 4.2). This parameter sets the size of Σ from 50 to
+250 normality concepts, while DA-rate is set to the intermediate value 15%, and
+both CI-to-DI-rate (Figure 5, left) and Synthetic-DI-rate (Figure 5, right) are set
+to 25%.
+
+With the Naive method, the translation of each DI δ must process an inclusion
+δNC, for all NC ∈ Σ. Thus, the computational cost of Naive rapidly increases with
+|Σ|. The execution time always exceeds the timeout (30 min), and is not reported
+in Figure 5.
+
+With Mod all the injected normality concepts are included in the relevant sig-
+nature Γ (cf. Table 2), so the extracted modules are quite large and the compu-
+tation time is considerably slower, compared to the N-free tests in Section 5.1.
+The iterated module extraction Mod* makes DLN reasoning more than one order
+of magnitude faster than Mod. This remarkable result can be explained by the
+twofold beneﬁts of iteratively reducing the size of the relevant signature Γ: First,
+if at some iteration a normality concept NC is removed from the current module,
+then the next iteration of Mod* starts with a smaller Γ and has the opportunity of
+further reducing the module’s size. Moreover, translating a smaller ﬁnal module
+means – in the best case – processing a quadratically smaller number of inclusions
+δNC, since both the set of DIs δ and the set of NC occurring in the ﬁnal module
+decrease.
+
+5.3. Some Remarks on Modules not Based on Locality
+
+We conclude this section with a remark on module extractors based on prin-
+ciples different from locality, such as PrisM for example [46]. In our algorithms,
+locality-based module extractors cannot be simply replaced with arbitrary module
+extractors, because the proof of Theorem 10 (on which the correctness of our ap-
+proach is based) relies on locality in many points. For example, it is not hard to
+
+38
+
+|Σ|
+GO
+50
+100
+150
+200
+250
+FLY
+50
+100
+150
+200
+250
+SNOMED
+50
+100
+150
+200
+250
+
+Mod Mod*
+
+2.70
+8.59
+16.9
+28.2
+42.0
+
+10.4
+23.4
+42.8
+64.6
+88.0
+
+8.79
+26.7
+44.9
+83.8
+118
+
+0.45
+0.45
+0.46
+0.46
+0.46
+
+0.47
+0.58
+0.66
+0.73
+0.99
+
+4.82
+4.77
+5.32
+5.37
+4.64
+
+|Σ|
+GO
+50
+100
+150
+200
+250
+FLY
+50
+100
+150
+200
+250
+SNOMED
+50
+100
+150
+200
+250
+
+Mod Mod*
+
+186
+414
+697
+1012
+1412
+
+288
+620
+1020
+1478
+2103
+
+16098
+34628
+40996
+63696
+83782
+
+8.18
+10.4
+15.3
+20.4
+28.3
+
+22.4
+34.0
+47.8
+63.5
+83.5
+
+1004
+2604
+3565
+5398
+6362
+
+Figure 5: Non N-free tests. Impact of normality concepts (sec). DA rate = 15%. CI-to-DI-rate =
+25% (left), Synthetic-DI = 25% (right).
+
+39
+
+see that Lemma 4 cannot be extended to arbitrary modules M, even if KB is clas-
+sic. Consequently, it is not yet clear if and how different notions of modules can
+be used to optimize reasoning in DLN. The answer to this question lies beyond
+the scope of this paper and is an interesting subject for future work.
+
+6. Related Work on Optimizations for Nonmonotonic DL
+
+Module extraction is used for speeding up reasoning in several works on non-
+monotonic DLs based on rational closure [20, 47]. To see the details, let us sketch
+the computation of the rational closure of a knowledge base KB. In a preliminary
+phase, a ﬁnite sequence (cid:104)Ei(cid:105)i of subsets of KB is computed, such that:
+
+KB ⊇ E1 ⊇ E2 ⊇ . . . ⊇ En .
+
+A concept C has rank i iff
+
+Ei |= (cid:62) (cid:118)n ¬C and Ei+1 (cid:54)|= (cid:62) (cid:118)n ¬C;
+
+(47)
+
+if no such i exists, then the rank of C is ∞. Then, for each query C (cid:118)n D, the
+answer is “yes” iff the rank of C is either ∞ or smaller than the rank of C (cid:117) ¬D.
+The computation of the rank of C and C (cid:117) ¬D can be accelerated by extracting
+a module M of KB w.r.t. the signature of C (cid:117) ¬D, and modifying (47) by inter-
+secting Ei and Ei+1 with M. The experiments reported in [20, 47] have been run
+on small, randomly generated knowledge bases in ALC, with a number of axioms
+that ranges uniformly from 150 to 5150. On these ontologies, the computation
+of the ranking takes between a few milliseconds and approximately 24 seconds,
+depending on the ontology size and number of ranks, while the average query
+answering time is less than 2 ms.
+
+Another nonmonotonic extension of DLs based on rational closure, featuring
+an explicit typicality operator, has been implemented and compared with the naive
+implementation of DLN [48]. The comparison is carried out using the N-free test
+sets obtained from GO with the CI-to-DI transformation method. No optimiza-
+tion is applied. The computation of the ranking ranges approximately between 3.5
+minutes and 2.5 hours, while query time ranges between 8.87 sec and 81.15 sec.
+More precisely, query response times lie between those of our naive implementa-
+tion and those of Opt (optimistic computation alone), so Mod and the combined
+method are signiﬁcantly faster.
+
+Nonmonotonic description logics are related to Datalog± with nonmonotonic
+negation. Datalog± admits existential quantiﬁcation in rule heads, and in this way
+
+40
+
+can encode concept inclusions that have existential restrictions in the right-hand
+side. In general, the algorithms for reasoning in Datalog± are not guaranteed to
+terminate, so several restrictions on rule bases have been introduced to enforce
+termination and upper complexity bounds. Semantics, decidability and complex-
+ity of Datalog± with nonmonotonic negation have been extensively studied, see
+for example [49, 50, 51, 52, 53, 54, 55]. As far as we know, implementations
+are not currently available. The implementations of Datalog± and its extensions
+sometimes adopt optimization techniques developed for deductive databases, such
+as magic sets, that – like module extraction – have the purpose of focussing rea-
+soning on the symbols relevant to the query. Magic sets have been applied both to
+the implementation of (monotonic) Datalog± [56], and to the implementation of
+Datalog with nonmonotonic negation and aggregates [57]. Therefore, magic sets
+constitute an appealing candidate for optimized implementations of nonmono-
+tonic Datalog±.
+
+7. Conclusions
+
+In this paper we have introduced optimization techniques for nonmonotonic
+reasoning in DLN. Our experimental results (summarized below) show that, with
+such optimizations, nonmonotonic reasoning becomes feasible for large and very
+large real-world knowledge bases. To the best of our knowledge this is the ﬁrst
+work – in the area of description logics – where nonmonotonic reasoning is ap-
+plied to knowledge bases with a number of axioms ranging between ∼ 20, 000
+and ∼ 300, 000.
+
+First consider the nonmonotonic versions of FLY (>19K axioms) and GO
+(>28K axioms) obtained by transforming classical inclusions into defeasible in-
+clusions (CI-to-DI method).
+In all of these experiments the average query re-
+sponse time is below one second, and mostly below 0.5 seconds. Similar experi-
+ments based on SNOMED (>290K axioms) yield response times between 1.5 and
+4.6 seconds, that are compatible with a wide range of use cases.
+
+In another set of experiments, we have injected random DIs in FLY, GO, and
+SNOMED, thereby increasing their size up to 25%, and introducing random de-
+pendencies between different parts of the knowledge base. For the smaller on-
+tologies FLY and GO, response times are always below 1.5 minutes, and less than
+4 seconds in most test cases. For SNOMED, the hardest test cases (∼ 72K addi-
+tional axioms, 250 normality concepts in the knowledge base) took approximately
+1 hour and 45 minutes, while the simplest test cases (N-free) are completed within
+approximately 1 minute.
+
+41
+
+Summarizing, the results for DLN ontologies up to approximately 35K axioms
+show that the available technology can process subsumption queries with response
+times that are compatible with many practical applications, including interactive
+query answering. For the knowledge bases derived from SNOMED, that are one
+order of magnitude larger, response times may vary depending on the factors that
+most signiﬁcantly affect performance, such as the number of normality concepts
+occurring in the knowledge bases and the amount of logical dependencies between
+different concepts. In the test cases where the size and the structure of SNOMED
+are preserved, response times are compatible with interactive query answering,
+while response times in fully random test cases range from 11 seconds to almost
+two hours.
+
+The above results have been obtained with the following optimizations. The
+most general and effective optimizations consists of a module extractor for DLN
+(Mod for short), that can be effectively used to focus reasoning on a subset of
+the knowledge base that is relevant to the given query. Compared with the naive
+reasoner published in [15], the optimized version is at least one order of magnitude
+faster, and up to ∼ 103 times faster in some test cases.
+
+Typically, when no role ﬁllers are restricted to normal individuals, the knowl-
+edge base is N-free (i.e. it does not contain any occurrence of normality con-
+cepts). For N-free knowledge bases, we developed a second optimization tech-
+nique, called optimistic computation (Opt), that is a heuristics aimed at reduc-
+ing the number of retractions in the reasoning algorithm. The combination of
+optimistic computation with module extraction (MO), on average, brings a 23%
+speedup over module extraction alone.
+
+When the knowledge base is not N-free, the optimistic method is not applica-
+ble. However, in this case, the extractor for DLN is not idempotent and can be
+proﬁtably iterated (Mod*). The resulting response times are well over one order
+of magnitude faster than the non-iterated version, and this makes it possible to
+process large, non-N-free knowledge bases in practice.
+
+The problem of deﬁning correct module extraction techniques for nonmono-
+tonic logics is still open, in general. Even within the scope of DLN, our proofs do
+not cover module extraction techniques based on principles different from locality.
+Moreover, the possible applications of module extraction span beyond optimiza-
+tion. A general study of module extraction for nonmonotonic reasoning is an
+interesting subject for further research.
+
+42
+
+Appendix
+
+Test case Structure
+The randomly generated test cases have been analyzed as follows, to make sure
+that they are not trivial. For each normality concept in Σ we measure the height of
+the priority hierarchy of applicable DIs, and how many applicable DIs are overrid-
+den; the former quantity is related to the potential levels of overriding, while the
+latter is more directly related to the nonmonotonic behavior that actually occurs.
+A structural analysis of the test cases coming from Gene Ontology, Fly and
+SNOMED CT is shown in Figures 6, 7, and 8, respectively. As the DA rate
+grows, the ﬁgures report the percentage of overridden applicable DIs, plus the
+average and maximum height of the priority hierarchy of applicable DIs (hDIs,
+for brevity). The tables on the left are devoted to DIs obtained from strong in-
+clusions (CI-to-DI-rate=15%) whereas the ones on the right refers to fully syn-
+thetic DIs (Synthetic-DI-rate=15%). For all ﬁgures, every single reported value
+is obtained as the average over ten different non monotonic ontologies and ﬁfty
+different queries on each ontology, each of which involved the construction of a
+different translation KBΣ (as Σ depends on the query).
+
+As expected, each increment of the DA-rate (hence of disjointness axioms)
+causes an increment of the percentage of overridden DIs. This relation is rela-
+tively less evident for synthetic DIs, probably due to the further randomness intro-
+duced by fully random DI generation. The amount of overriding is reasonable: the
+percentage of overridden DIs ranges from 61.9% to 87.6% for GO, from 34.4%
+to 66.0% for FLY, and from 29.3% to 66.9% for SNOMED, depending on the
+amount of disjointness axioms (hence DI conﬂicts) contained in the KB.
+
+Furthermore, the reported results ﬁt well the structure of GO, FLY and SNOMED.
+
+The length of the longest path in GO’s classiﬁcation (i.e. the maximum possible
+hierarchy depth) is 15, and the average length 3.66. In the experiments concerning
+DIs obtained from CIs (see Figure 6, left) the average (resp. maximal) depth of
+the applicable DIs hierarchy range between 41% and 55% of the average (resp.
+26,6% and 40% of the maximal) path length in the original ontology, coherently
+with the random placement of normality concepts in the hierarchy. For fully syn-
+thetic DIs (Figure 6, right) these values are lower and vary between 34% and 42%
+of the average length, and between 20% and 33,3% of the maximum length.
+
+Analogously, the length of the longest path in FLY’s classiﬁcation is 16 (resp.
+27 in SNOMED’s classiﬁcation), and the average length 6.78 (resp. 9.02). The
+depth of the DI priority hierarchy (which is related to the interference between
+different DIs and, indirectly, the number of exception levels) ranges between 19%
+
+43
+
+DA-rate
+
+Overr./Appl. DIs
+
+Avg. (Max) hDIs
+
+DA-rate
+
+Overr./Appl. DIs
+
+Avg. (Max) hDIs
+
+5%
+
+10%
+
+15%
+
+20%
+
+25%
+
+61,86%
+
+70,71%
+
+68,45%
+
+75,63%
+
+80,28%
+
+2,03 (6)
+1,96 (6)
+2,01 (5)
+1,71 (5)
+1,54 (4)
+
+5%
+
+10%
+
+15%
+
+20%
+
+25%
+
+83,55%
+
+84,13%
+
+91,17%
+
+91,47%
+
+87,64%
+
+1,34 (4)
+1,40 (4)
+1,25 (3)
+1,30 (4)
+1,50 (4)
+
+Figure 6: Values characterizing the experiments with variable DA-rate in GO. CI-to-Di-rate=15%
+(left), Synthetic-DI-rate=15% (right).
+
+DA-rate
+
+Overr./Appl. DIs
+
+Avg. (Max) hDIs
+
+DA-rate
+
+Overr./Appl. DIs
+
+Avg. (Max) hDIs
+
+5%
+
+10%
+
+15%
+
+20%
+
+25%
+
+34,44%
+
+42,6%
+
+39,1%
+
+46,4%
+
+37,53%
+
+2,26 (8)
+2,6 (7)
+2,55 (6)
+2,44 (7)
+2,49 (7)
+
+5%
+
+10%
+
+15%
+
+20%
+
+25%
+
+37,95%
+
+55,56%
+
+57,03%
+
+57,32%
+
+65,98%
+
+2,17 (5)
+1,74 (3)
+1,81 (4)
+1,95 (5)
+1,83 (3)
+
+Figure 7: Values characterizing the experiments with variable DA-rate in FLY. CI-to-Di-rate=15%
+(left), Synthetic-DI-rate=15% (right).
+
+and 50% of the depth of FLY’s taxonomy and 15% and 44% of the depth of
+SNOMED’s taxonomy.
+
+References
+
+[1] A. L. Rector, Defaults, context, and knowledge: Alternatives for OWL-
+indexed knowledge bases, in: Paciﬁc Symposium on Biocomputing, World
+Scientiﬁc, 2004, pp. 226–237.
+
+[2] R. Stevens, M. E. Aranguren, K. Wolstencroft, U. Sattler, N. Drummond,
+M. Horridge, A. L. Rector, Using OWL to model biological knowledge, In-
+ternational Journal of Man-Machine Studies 65 (7) (2007) 583–594.
+
+[3] P. A. Bonatti, P. Samarati, Logics for authorization and security, in: Logics
+for Emerging Applications of Databases, Springer, 2003, pp. 277–323.
+
+[4] P. A. Bonatti, M. Faella, L. Sauro, Adding default attributes to EL++, in:
+
+W. Burgard, D. Roth (Eds.), AAAI, AAAI Press, 2011.
+
+44
+
+DA-rate
+
+Overr./Appl. DIs
+
+Avg. (Max) hDIs
+
+DA-rate
+
+Overr./Appl. DIs
+
+Avg. (Max) hDIs
+
+5%
+
+10%
+
+15%
+
+20%
+
+25%
+
+29,27%
+
+33,49%
+
+39,19%
+
+45,44%
+
+46,08%
+
+6,26 (12)
+5,61 (9)
+6,55 (10)
+6,34 (10)
+6,79 (11)
+
+5%
+
+10%
+
+15%
+
+20%
+
+25%
+
+48,38%
+
+53,92%
+
+57,03%
+
+58,28%
+
+66,91%
+
+3,17 (6)
+2,74 (4)
+2,81 (5)
+2,95 (5)
+2,38 (6)
+
+Figure 8: Values characterizing the experiments with variable DA-rate in SNOMED. CI-to-Di-
+rate=15% (left), Synthetic-DI-rate=15% (right).
+
+[5] P. A. Bonatti, M. Faella, L. Sauro, EL with default attributes and overriding,
+in: Int. Semantic Web Conf. (ISWC 2010), Vol. 6496 of LNCS, Springer,
+2010, pp. 64–79.
+
+[6] P. A. Bonatti, M. Faella, L. Sauro, Defeasible inclusions in low-complexity
+
+DLs, J. Artif. Intell. Res. (JAIR) 42 (2011) 719–764.
+
+[7] F. M. Donini, D. Nardi, R. Rosati, Autoepistemic description logics, in:
+
+IJCAI (1), 1997, pp. 136–141.
+URL
+html
+
+citeseer.ist.psu.edu/donini97autoepistemic.
+
+[8] F. M. Donini, D. Nardi, R. Rosati, Description logics of minimal knowledge
+and negation as failure, ACM Trans. Comput. Log. 3 (2) (2002) 177–225.
+
+[9] L. Giordano, V. Gliozzi, N. Olivetti, G. Pozzato, Reasoning about typicality
+in preferential description logics, in: Proc. of Logics in Artiﬁcial Intelli-
+gence, 11th European Conference, JELIA 2008, Vol. 5293 of Lecture Notes
+in Computer Science, Springer, 2008.
+
+[10] L. Giordano, V. Gliozzi, N. Olivetti, G. L. Pozzato, A non-monotonic de-
+scription logic for reasoning about typicality, Artif. Intell. 195 (2013) 165–
+202. doi:10.1016/j.artint.2012.10.004.
+URL https://doi.org/10.1016/j.artint.2012.10.004
+
+[11] L. Giordano, N. Olivetti, V. Gliozzi, G. L. Pozzato, ALC + T: a preferential
+extension of description logics, Fundam. Inform. 96 (3) (2009) 341–372.
+
+[12] L. Giordano, V. Gliozzi, N. Olivetti, G. L. Pozzato, Semantic characteriza-
+tion of rational closure: From propositional logic to description logics, Artif.
+
+45
+
+Intell. 226 (2015) 1–33. doi:10.1016/j.artint.2015.05.001.
+URL https://doi.org/10.1016/j.artint.2015.05.001
+
+[13] G. Casini, U. Straccia, Rational closure for defeasible description logics,
+in: T. Janhunen, I. Niemel¨a (Eds.), JELIA, Vol. 6341 of Lecture Notes in
+Computer Science, Springer, 2010, pp. 77–90.
+
+[14] P. A. Bonatti, Rational closure for all description logics, Artif. Intell. 274
+
+(2019) 197–223. doi:10.1016/j.artint.2019.04.001.
+URL https://doi.org/10.1016/j.artint.2019.04.001
+
+[15] P. A. Bonatti, M. Faella,
+
+for overriding in description logics, Artif.
+doi:10.1016/j.artint.2014.12.010.
+URL http://dx.doi.org/10.1016/j.artint.2014.12.010
+
+I. Petrova, L. Sauro, A new semantics
+Intell. 222 (2015) 1–48.
+
+[16] P. A. Bonatti, L. Sauro, On the logical properties of the nonmonotonic de-
+
+scription logic DLN, Artif. Intell. 248 (2017) 85–111.
+
+[17] P. A. Bonatti, I. M. Petrova, L. Sauro, Optimizing the computation of over-
+riding, in: The Semantic Web - ISWC 2015 - 14th International Semantic
+Web Conference, Bethlehem, PA, USA, October 11-15, 2015, Proceedings,
+Part I, 2015, pp. 356–372.
+
+[18] M. Pensel, A lightweight defeasible description logic in depth, Ph.D. thesis,
+
+TU Dresden (2019).
+
+[19] G. Casini, U. Straccia, T. Meyer, A polynomial time subsumption algorithm
+for nominal safe ELO⊥ under rational closure, Inf. Sci. 501 (2019) 588–620.
+doi:10.1016/j.ins.2018.09.037.
+URL https://doi.org/10.1016/j.ins.2018.09.037
+
+[20] G. Casini, T. Meyer, K. Moodley, I. J. Varzinczak, Towards practical defea-
+sible reasoning for description logics, in: T. Eiter, B. Glimm, Y. Kazakov,
+M. Kr¨otzsch (Eds.), Description Logics, Vol. 1014 of CEUR Workshop Pro-
+ceedings, CEUR-WS.org, 2013, pp. 587–599.
+
+[21] G. Casini, U. Straccia, Defeasible inheritance-based description logics, J.
+
+Artif. Intell. Res. (JAIR) 48 (2013) 415–473.
+
+46
+
+[22] F. Baader, C. Lutz, B. Suntisrivaraporn, CEL - a polynomial-time reasoner
+for life science ontologies, in: U. Furbach, N. Shankar (Eds.), IJCAR, Vol.
+4130 of Lecture Notes in Computer Science, Springer, 2006, pp. 287–291.
+
+[23] V. Delaitre, Y. Kazakov, Classifying ELH ontologies in SQL databases, in:
+
+OWLED, 2009.
+
+[24] J. Mendez, B. Suntisrivaraporn, Reintroducing cel as an owl 2 el reasoner,
+in: B. C. Grau, I. Horrocks, B. Motik, U. Sattler (Eds.), Proceedings of the
+2009 International Workshop on Description Logics (DL2009), Vol. 477 of
+CEUR-WS, 2009.
+
+[25] B. Glimm, I. Horrocks, B. Motik, R. Shearer, G. Stoilos, A novel approach
+
+to ontology classiﬁcation, J. Web Sem. 14 (2012) 84–101.
+
+[26] Y. Kazakov, Consequence-driven reasoning for Horn SHIQ Ontologies,
+in: Proceedings of the 21st International Jont Conference on Artiﬁcal
+Intelligence, IJCAI’09, Morgan Kaufmann Publishers Inc., San Francisco,
+CA, USA, 2009, pp. 2040–2045.
+URL
+1661771
+
+http://dl.acm.org/citation.cfm?id=1661445.
+
+[27] B. Sertkaya, In the search of improvements to the EL+ classiﬁcation algo-
+
+rithm, in: Description Logics, 2011.
+
+[28] D. Tsarkov, I. Horrocks, P. F. Patel-Schneider, Optimizing terminological
+reasoning for expressive description logics, J. Autom. Reasoning 39 (3)
+(2007) 277–316.
+
+[29] I. Horrocks, O. Kutz, U. Sattler, The even more irresistible SROIQ,
+in: P. Doherty, J. Mylopoulos, C. A. Welty (Eds.), Proceedings, Tenth
+International Conference on Principles of Knowledge Representation and
+Reasoning, Lake District of the United Kingdom, June 2-5, 2006, AAAI
+Press, 2006, pp. 57–67.
+URL
+php
+
+http://www.aaai.org/Library/KR/2006/kr06-009.
+
+[30] F. Baader, D. L. McGuiness, D. Nardi, P. Patel-Schneider, The Descrip-
+tion Logic Handbook: Theory, implementation and applications, Cambridge
+University Press, 2003.
+
+47
+
+[31] S. Rudolph, Foundations of description logics, in: A. Polleres, C. d’Amato,
+M. Arenas, S. Handschuh, P. Kroner, S. Ossowski, P. F. Patel-Schneider
+(Eds.), Reasoning Web. Semantic Technologies for the Web of Data - 7th In-
+ternational Summer School 2011, Galway, Ireland, August 23-27, 2011, Tu-
+torial Lectures, Vol. 6848 of Lecture Notes in Computer Science, Springer,
+2011, pp. 76–136. doi:10.1007/978-3-642-23032-5 2.
+URL https://doi.org/10.1007/978-3-642-23032-5\_2
+
+[32] U. Sattler, T. Schneider, M. Zakharyaschev, Which kind of module should I
+extract?, in: Proceedings of the 22nd International Workshop on Description
+Logics (DL 2009), Oxford, UK, July 27-30, 2009, 2009.
+URL http://ceur-ws.org/Vol-477/paper_33.pdf
+
+[33] C. Lutz, F. Wolter, Deciding inseparability and conservative extensions
+in the description logic EL, J. Symb. Comput. 45 (2) (2010) 194–228.
+doi:10.1016/j.jsc.2008.10.007.
+URL https://doi.org/10.1016/j.jsc.2008.10.007
+
+[34] R. Kontchakov, F. Wolter, M. Zakharyaschev, Can you tell the difference
+between DL-Lite ontologies?, in: G. Brewka, J. Lang (Eds.), Principles of
+Knowledge Representation and Reasoning: Proceedings of the Eleventh
+International Conference, KR 2008, Sydney, Australia, September 16-19,
+2008, AAAI Press, 2008, pp. 285–295.
+URL
+php
+
+http://www.aaai.org/Library/KR/2008/kr08-028.
+
+[35] S. Ghilardi, C. Lutz, F. Wolter, Did I damage my ontology? A case for
+conservative extensions in description logics, in: P. Doherty, J. Mylopoulos,
+C. Welty (Eds.), Proceedings of the Tenth International Conference on Prin-
+ciples of Knowledge Representation and Reasoning (KR’06), AAAI Press,
+2006, pp. 187–197.
+
+[36] C. Lutz, D. Walther, F. Wolter, Conservative extensions in expressive
+description logics, in: M. M. Veloso (Ed.), IJCAI 2007, Proceedings of the
+20th International Joint Conference on Artiﬁcial Intelligence, Hyderabad,
+India, January 6-12, 2007, 2007, pp. 453–458.
+URL
+IJCAI07-071.pdf
+
+http://dli.iiit.ac.in/ijcai/IJCAI-2007/PDF/
+
+48
+
+[37] F. Martin-Recuerda, D. Walther, Axiom dependency hypergraphs for fast
+modularisation and atomic decomposition, in: M. Bienvenu, M. Ortiz,
+R. Rosati, M. Simkus (Eds.), Proceedings of the 27th International Work-
+shop on Description Logics (DL’14), Vol. 1193 of CEUR Workshop Pro-
+ceedings, 2014, pp. 299–310.
+
+[38] B. C. Grau, I. Horrocks, Y. Kazakov, U. Sattler, Modular reuse of ontolo-
+gies: Theory and practice, J. Artif. Intell. Res. (JAIR) 31 (2008) 273–318.
+doi:10.1613/jair.2375.
+URL http://dx.doi.org/10.1613/jair.2375
+
+[39] A. Artale, D. Calvanese, R. Kontchakov, M. Zakharyaschev, The DL-lite
+
+family and relations, J. Artif. Intell. Res. (JAIR) 36 (2009) 1–69.
+
+[40] F. Baader, S. Brandt, C. Lutz, Pushing the EL envelope, in: Proc. of the
+19th Int. Joint Conf. on Artiﬁcial Intelligence, IJCAI-05, Professional Book
+Center, 2005, pp. 364–369.
+
+[41] E. Sandewall, Defeasible inheritance with doubt index and its axiomatic
+
+characterization, Artif. Intell. 174 (18) (2010) 1431–1459.
+
+[42] F. S. Y. Kazakov, M. Krotzsch, ELK reasoner: Architecture and evaluation,
+in: E. J.-R. I. Horrocks, M. Yatskevich (Ed.), Proceedings of the 1st In-
+ternational Workshop on OWL Reasoner Evaluation (ORE-2012), CEUR
+Workshop Proceedings, 2012.
+
+[43] Y. Kazakov, M. Kr¨otzsch, F. Simancik, The incredible ELK - from polyno-
+mial procedures to efﬁcient reasoning with ontologies, J. Autom. Reason.
+53 (1) (2014) 1–61. doi:10.1007/s10817-013-9296-3.
+URL https://doi.org/10.1007/s10817-013-9296-3
+
+[44] Y. Kazakov, P. Klinov, Incremental reasoning in EL+ without bookkeeping,
+
+in: Description Logics, 2013, pp. 294–315.
+
+[45] B. Glimm, I. Horrocks, B. Motik, G. Stoilos, Z. Wang, Hermit: An
+OWL 2 reasoner, Journal of Automated Reasoning 53 (3) (2014) 245–269.
+doi:10.1007/s10817-014-9305-1.
+URL http://dx.doi.org/10.1007/s10817-014-9305-1
+
+[46] A. A. Romero, M. Kaminski, B. C. Grau, I. Horrocks, Ontology module ex-
+traction via Datalog reasoning, in: B. Bonet, S. Koenig (Eds.), Proceedings
+
+49
+
+of the Twenty-Ninth AAAI Conference on Artiﬁcial Intelligence, January
+25-30, 2015, Austin, Texas, USA, AAAI Press, 2015, pp. 1410–1416.
+URL http://www.aaai.org/ocs/index.php/AAAI/AAAI15/
+paper/view/9842
+
+[47] G. Casini, T. Meyer, K. Moodley, R. Nortje, Relevant closure: A new
+form of defeasible reasoning for description logics, in: E. Ferm´e, J. Leite
+(Eds.), Logics in Artiﬁcial Intelligence - 14th European Conference, JELIA
+2014, Funchal, Madeira, Portugal, September 24-26, 2014. Proceedings,
+Vol. 8761 of Lecture Notes in Computer Science, Springer, 2014, pp. 92–
+106. doi:10.1007/978-3-319-11558-0 7.
+URL https://doi.org/10.1007/978-3-319-11558-0\_7
+
+[48] L. Giordano, V. Gliozzi, G. L. Pozzato, R. Renzulli, An efﬁcient reasoner
+for description logics of typicality and rational closure, in: Proceedings of
+the 30th International Workshop on Description Logics, Montpellier, France,
+July 18-21, 2017, 2017.
+
+[49] P. Ferraris, J. Lee, V. Lifschitz, Stable models and circumscription, Artif.
+
+Intell. 175 (1) (2011) 236–263. doi:10.1016/j.artint.2010.04.011.
+URL https://doi.org/10.1016/j.artint.2010.04.011
+
+[50] G. Gottlob, A. Hernich, C. Kupke, T. Lukasiewicz, Equality-friendly well-
+founded semantics and applications to description logics, in: J. Hoffmann,
+B. Selman (Eds.), Proceedings of the Twenty-Sixth AAAI Conference on
+Artiﬁcial Intelligence, July 22-26, 2012, Toronto, Ontario, Canada, AAAI
+Press, 2012.
+URL http://www.aaai.org/ocs/index.php/AAAI/AAAI12/
+paper/view/5100
+
+[51] A. Hernich, C. Kupke, T. Lukasiewicz, G. Gottlob, Well-founded semantics
+for extended datalog and ontological reasoning, in: R. Hull, W. Fan (Eds.),
+Proceedings of the 32nd ACM SIGMOD-SIGACT-SIGART Symposium on
+Principles of Database Systems, PODS 2013, New York, NY, USA - June 22
+- 27, 2013, ACM, 2013, pp. 225–236. doi:10.1145/2463664.2465229.
+URL https://doi.org/10.1145/2463664.2465229
+
+[52] G. Gottlob, A. Hernich, C. Kupke, T. Lukasiewicz, Stable model semantics
+for guarded existential rules and description logics, in: C. Baral, G. D.
+Giacomo, T. Eiter (Eds.), Principles of Knowledge Representation and
+
+50
+
+Reasoning: Proceedings of the Fourteenth International Conference, KR
+2014, Vienna, Austria, July 20-24, 2014, AAAI Press, 2014.
+URL
+paper/view/8011
+
+http://www.aaai.org/ocs/index.php/KR/KR14/
+
+[53] M. Alviano, A. Pieris, Default negation for non-guarded existential rules,
+in: T. Milo, D. Calvanese (Eds.), Proceedings of the 34th ACM Sym-
+posium on Principles of Database Systems, PODS 2015, Melbourne,
+Victoria, Australia, May 31 - June 4, 2015, ACM, 2015, pp. 79–90.
+doi:10.1145/2745754.2745758.
+URL https://doi.org/10.1145/2745754.2745758
+
+[54] M. Alviano, M. Morak, A. Pieris, Stable model semantics for tuple-
+generating dependencies revisited,
+in: E. Sallinger, J. V. den Buss-
+che, F. Geerts (Eds.), Proceedings of the 36th ACM SIGMOD-SIGACT-
+SIGAI Symposium on Principles of Database Systems, PODS 2017,
+Chicago,
+IL, USA, May 14-19, 2017, ACM, 2017, pp. 377–388.
+doi:10.1145/3034786.3034794.
+URL https://doi.org/10.1145/3034786.3034794
+
+[55] H. Wan, G. Xiao, C. Wang, X. Liu, J. Chen, Z. Wang, Query answering
+with guarded existential rules under stable model semantics,
+in: The
+Thirty-Fourth AAAI Conference on Artiﬁcial Intelligence, AAAI 2020, The
+Thirty-Second Innovative Applications of Artiﬁcial Intelligence Confer-
+ence, IAAI 2020, The Tenth AAAI Symposium on Educational Advances
+in Artiﬁcial Intelligence, EAAI 2020, New York, NY, USA, February 7-12,
+2020, AAAI Press, 2020, pp. 3017–3024.
+URL
+view/5695
+
+https://aaai.org/ojs/index.php/AAAI/article/
+
+[56] M. Alviano, N. Leone, M. Manna, G. Terracina, P. Veltri, Magic-sets for
+datalog with existential quantiﬁers, in: P. Barcel´o, R. Pichler (Eds.), Datalog
+in Academia and Industry - Second International Workshop, Datalog 2.0,
+Vienna, Austria, September 11-13, 2012. Proceedings, Vol. 7494 of Lecture
+Notes in Computer Science, Springer, 2012, pp. 31–43. doi:10.1007/978-3-
+642-32925-8 5.
+URL https://doi.org/10.1007/978-3-642-32925-8\_5
+
+[57] M. Alviano, N. Leone, P. Veltri, J. Zangari, Enhancing magic sets with an
+application to ontological reasoning, Theory Pract. Log. Program. 19 (5-6)
+
+51
+
+(2019) 654–670. doi:10.1017/S1471068419000115.
+URL https://doi.org/10.1017/S1471068419000115
+
+52
+
+

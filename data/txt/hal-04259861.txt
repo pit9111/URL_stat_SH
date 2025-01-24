@@ -1,0 +1,1365 @@
+Find-2-Find: Multitask Learning for Anaphora
+Resolution and Object Localization
+Cennet Oguz, Pascal Denis, Emmanuel Vincent, Simon Ostermann, Josef van
+
+Genabith
+
+To cite this version:
+
+Cennet Oguz, Pascal Denis, Emmanuel Vincent, Simon Ostermann, Josef van Genabith. Find-2-Find:
+Multitask Learning for Anaphora Resolution and Object Localization. 2023 Conference on Empirical
+Methods in Natural Language Processing, Dec 2023, Singapore, Singapore. ￿hal-04259861￿
+
+HAL Id: hal-04259861
+
+https://hal.science/hal-04259861
+
+Submitted on 26 Oct 2023
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Find2Find:
+Multitask Learning for Anaphora Resolution and Object Localization
+Cennet Oguz1, Pascal Denis2, Emmanuel Vincent3
+Simon Ostermann1, and Josef van Genabith1
+1German Research Center for Artificial Intelligence (DFKI), Saarland Informatics
+2Univ. Lille, Inria, CNRS, Centrale Lille, UMR 9189 CRIStAL, F-59000 Lille, France
+3Université de Lorraine, CNRS, Inria, LORIA, F-54000 Nancy, France
+{cennet.oguz, simon.ostermann, josef.van_genabith}@dfki.de
+{pascal.denis, emmanuel.vincent}@inria.fr
+
+Abstract
+
+In multimodal understanding tasks, visual and
+linguistic ambiguities can arise. Visual ambi-
+guity can occur when visual objects require
+a model to ground a referring expression in
+a video without strong supervision, while lin-
+guistic ambiguity can occur from changes in
+entities in action flows. As an example from the
+cooking domain, "oil" mixed with "salt" and
+"pepper" could later be referred to as a "mix-
+ture". Without a clear visual-linguistic align-
+ment, we cannot know which among several
+objects shown is referred to by the language
+expression “mixture”, and without resolved an-
+tecedents, we cannot pinpoint what the mixture
+is. We define this chicken-and-egg problem
+as visual-linguistic ambiguity. In this paper,
+we present Find2Find, a joint anaphora resolu-
+tion and object localization dataset targeting the
+problem of visual-linguistic ambiguity, consist-
+ing of 500 anaphora-annotated recipes with cor-
+responding videos. We present experimental re-
+sults of a novel end-to-end joint multitask learn-
+ing framework for Find2Find that fuses visual
+and textual information and shows improve-
+ments both for anaphora resolution and object
+localization as compared to a strong single-task
+baseline.
+
+1
+
+Introduction
+
+Deep neural networks have achieved enormous suc-
+cess in various language and computer vision tasks,
+such as multimodal understanding using video-text
+and image-text data (Malmaud et al., 2015; Alayrac
+et al., 2016; Zhou et al., 2018b; Miech et al., 2019;
+Zhukov et al., 2019). However, many current sys-
+tems require a large number of accurate annota-
+tions, including image-level labels, location-level
+labels (bounding boxes and key points), and pixel-
+level labels.
+
+A specific type of video data with naturally oc-
+curring semi-aligned texts are narrated instructional
+videos. Such videos are available in large quantities
+(e.g. on YouTube) and often chosen for learning
+
+Figure 1: Examples of visual and linguistic ambigui-
+ties. Figure 1) represents the visual ambiguity related to
+which specific pan (in Figure 1a) is referenced with the
+phrase the pan because many pans occur on the stove.
+Figure 2) shows the linguistic ambiguity with the use of
+the pronoun them (in Figure 2b).
+
+joint text-video embeddings in multimodal under-
+standing (Zhou et al., 2018b; Miech et al., 2019).
+They often contain a narration explaining the vi-
+sual content of the corresponding time frames in the
+video (Malmaud et al., 2015; Alayrac et al., 2016;
+Zhou et al., 2018b; Miech et al., 2019; Zhukov
+et al., 2019).
+
+Instructional videos often contain visual and lin-
+guistic ambiguities that can be easily resolved by
+humans but pose two unique key challenges for
+automatic text-image processing systems. The first
+challenge is visual ambiguity, occurring when it is
+necessary to ground a referring expression in an
+image with ambiguous visual referents. In Figure
+1 (1b), it is not clear from the picture which pan is
+referred to with the noun phrase the pan without a
+correct bounding box annotation. The second key
+challenge is linguistic ambiguity, instantiated for
+example by the use of anaphoric pronouns (Figure
+1, (2b) or null pronouns (Figure 2).
+
+In this work, we focus on modeling cases where
+both ambiguities are intertwined, a phenomenon
+we refer to as visual-linguistic ambiguity. Figure
+
+add red wine to the panadd the beef into a hot panboil pierogi in boiled waterfry them with onion and butter1??2(a)(b)???Figure 2: An example to display how visual-linguistic ambiguity occurs with a zero anaphor. The zero anaphor [ϕ]
+refers to two previous instructions as shown. The entities are aligned to the object with the arrows and the color
+codes.
+
+1 provides a motivating example: To find which
+pan in (1b) is denoted by the textual span the pan,
+we need to find its antecedent in the preceding
+text. The visual object localization of the textual
+antecedent the hot pan in (1a) then includes sup-
+plementary visual information about the correct
+pan: The referent is the hot pan with beef in it. In
+Figure 1, To find the correct location of the object
+referred to as them in (2b), we first need to find the
+textual antecedent to understand what them refers
+to. When identifying pierogi as antecedent, we can
+use the pierogi for the visual object localization of
+them.
+
+An even more complex case is null pronouns
+(Figure 2): To do object localization and anaphora
+resolution, the first requirement is the detection of
+the null pronoun, which then needs to be resolved
+and located in the image. A located visual object
+of a null pronoun then assists in finding the textual
+antecedent, and a resolved null pronoun helps to
+apply object localization.
+
+Our guiding idea in this work is that anaphora
+resolution, the task of connecting linguistic expres-
+sions such as the anaphor (i.e., the repeated refer-
+ence) and its antecedent (i.e., the previous mention
+in the document). (Poesio et al., 2018; Fang et al.,
+2022; Oguz et al., 2022), and object localization,
+the task of identifying the location of one or more
+objects in an image and drawing bounding boxes
+around their visual space (Tompson et al., 2015;
+Zhou et al., 2016; Choe et al., 2020), can jointly
+help to resolve visual-linguistic ambiguities. To
+test this we propose a multitask learning neural
+model for jointly resolving visual-linguistic ambi-
+guity.
+
+Our contributions are two-fold: First, we present
+a new dataset1 (Section 4), Find2Find, for the joint
+evaluation of anaphora resolution and object local-
+ization based on an extension of Chop&Change
+
+(Oguz et al., 2022). Our new data set contains 500
+recipes with annotated anaphora and associated ob-
+ject localization. Together with the new data set,
+we propose the new task of multimodal resolution
+of Visual-Linguistic Ambiguities. The task provides
+a unique opportunity for models to fuse text and
+vision information for solving anaphora resolution
+and object localization at the same time. Second,
+we present a new multitask learning system1 for
+modeling the two tasks of anaphora resolution and
+object localization jointly, using a fusion of visual
+and textual data. Our experiments show that infor-
+mation from each of the tasks mutually benefits
+performance on the other task. Our idea is based
+on the fact that in both tasks, the goal is to extract
+mentions from a given text: what connects object
+localization and anaphora resolution is that in vi-
+sual object localization, a corresponding language
+expression needs to be found, and in anaphora res-
+olution, accurate spans that resolve the anaphoric
+relations between the anaphor and the antecedents
+need to be identified.
+
+2 Related Work
+
+2.1 Anaphora Resolution
+
+Anaphora resolution (Poesio et al., 2018; Fang
+et al., 2022; Oguz et al., 2022) is the process of
+resolving the relations between an anaphor (i.e., a
+reference expression) and its antecedent (i.e., the
+previous mention of the same entity). The rela-
+tions between anaphor and antecedent mostly ap-
+pear in two different forms: coreference and bridg-
+ing. Coreference resolution (Clark and Manning,
+2016a; Lee et al., 2017) is the task of finding the lin-
+guistic expressions that refer to the same real-world
+entities in a document, whereas bridging resolution
+(Yu and Poesio, 2020; Kobayashi et al., 2022) fo-
+
+1https://github.com/OguzCennet/odar
+
+add butter and garlic to the pan...add chopped onions and carrots to the panmix  [∅].........cuses on entities with an associative relation that
+does not express the same entity but relates to it
+(e.g., a car and its engine). Most previous work
+and datasets (Yu et al., 2022) tackle coreference
+resolution and bridging resolution separately. An
+exception is Fang et al. (2021), Fang et al. (2022),
+and Oguz et al. (2022), which focus on documents
+with rich anaphoric relations for anaphora anno-
+tation and resolution of coreference and bridging
+with end-to-end neural networks (Lee et al., 2017).
+Anaphora resolution is composed of two sub-
+tasks: mention detection and antecedent selection.
+A typical neural-based method for anaphora res-
+olution starts initially with neural-based mention-
+ranking modeling (Clark and Manning, 2016a), us-
+ing distributional features of entities (Clark and
+Manning, 2016b) with predefined mentions. Lee
+et al. (2017) combine mention detection and an-
+tecedent selection in an end-to-end neural learning
+system. Yu and Poesio (2020) propose a multi-task
+learning system for coreference and bridging reso-
+lution with an end-to-end learning approach (Lee
+et al., 2017). Here, coreference and bridging reso-
+lution models learn the mention detection with the
+objective of coreference/bridging resolution: if the
+span is resolved then it is a mention.
+
+Various feature sets are used for anaphora reso-
+lution along with contextualized language features
+(Joshi et al., 2019, 2020), e.g., the token length
+of spans (Clark and Manning, 2016b), context-
+dependent boundary representations with a head-
+finding attention mechanism over the span (Lee
+et al., 2017), distance features of the anaphor and
+the antecedent based on word distance (Clark and
+Manning, 2016a) and sentence distance (Oguz
+et al., 2022) where additionally visual features are
+used for anaphora resolution in recipes for cook-
+ing videos. Our work is similar in spirit: however,
+unlike Oguz et al. (2022) we combine anaphora
+resolution with object localization tasks from com-
+puter vision in a joint multitask learning model to
+benefit both leveraging visual features of entities
+for anaphora resolution.
+
+2.2 Object Localization
+
+Object localization is the task of identifying the
+location of one or more objects in an image, e.g.
+Figure 3 (a,b,c). Object localization has been stud-
+ied in computer vision for a long time with vari-
+ous learning methods (Gokberk Cinbis et al., 2014;
+Zhou et al., 2018a; Huang et al., 2018).
+
+Figure 3: Different examples of object localization. The
+dashed lines in (b) and (c) represent the occurrence of
+annotation for only the test data whereas the straight
+lines (a) indicate that annotation is present for train and
+test.
+
+Multiple Instance Learning (MIL). MIL (Di-
+etterich et al., 1997) is a learning strategy that
+adresses the essence of the incomplete annota-
+tion problem, where only coarse-grained labels are
+available for learning. MIL has been used effec-
+tively for weakly-supervised learning in several
+computer vision works including object tracking
+(Babenko et al., 2010), object localization (Gok-
+berk Cinbis et al., 2014), image classification (Wu
+et al., 2015). Huang et al. (2018) extend MIL ref-
+erence awareness for visual grounding of instruc-
+tional videos. We extend MIL for object localiza-
+tion with anaphoric information to avoid the issue
+of ambiguous language references such as it, them
+(Zhou et al., 2018a; Huang et al., 2018).
+
+Weakly Supervised Object Localization The
+most common way to do object localization is
+supervised learning, which uses object-level cat-
+egories with bounding boxes, e.g., Figure 3 a.
+However, for a data-greedy neural learning sys-
+tem, object-level bounding box annotation is time-
+consuming and expensive. Weakly supervised ob-
+ject localization approaches avoid this problem and
+focus on learning object localization with image-
+level object labels (e.g., Figure 3 b) under the MIL
+paradigm (Deselaers et al., 2012; Prest et al., 2012;
+Gokberk Cinbis et al., 2014; Oquab et al., 2015).
+
+tomatoa person is showing a sweet potato and one big tomatosweet potato(a)(b)(c)Object localization with the MIL approach aims
+to match object labels with object bounding boxes
+(e.g., Figure 3 b). Studies on object localization
+with image descriptions rather than object labels
+take weak supervision further (Karpathy and Fei-
+Fei, 2015; Zhou et al., 2018a; Huang et al., 2018),
+as in Figure 3 c. For example, Huang et al. (2018)
+propose to extend object localization to localization
+based on context-dependent referring expressions,
+and (Kuo et al., 2022) offers a general-purpose
+model for object localization by using a wide range
+of referring expressions, localization or detection
+queries for zero, one, or multiple objects. Another
+challenge for object localization with image de-
+scriptions is the automatic extraction of object la-
+bels from image descriptions. Zhou et al. (2018a)
+extract object labels manually for training and test-
+ing object localization models whereas Huang et al.
+(2018) apply the pre-trained Stanford CoreNLP
+parser (Manning et al., 2014) for entity detection.
+
+To date, object localization studies have not ex-
+plored learning from to learn of mention extrac-
+tion from image descriptions, instead extracting
+the mentions by using parsing methods (Kiddon
+et al., 2015; Huang et al., 2017, 2018) or using the
+predefined mentions list (Zhou et al., 2018a) before
+the learning process. Thus, we claim object local-
+ization and anaphora resolution share a subtask of
+entity extraction like the mention detection process
+in anaphora resolution as explained in Section 2.1
+
+3 Task
+
+A recipe consists of instructions I where a cooking
+instruction Ii (e.g. add chopped onions and car-
+rots to the pan) consists of n nominal or null spans
+and one verbal predicate where n ≥ 1. A span xi
+of Ii might be an incorrect consecutive fragment
+add chopped or a gold span e, e.g., a noun phrase
+chopped onions, a pronoun it, or a null pronoun [ϕ]
+as in mix [ϕ]. Null pronouns are extremely common
+in recipe instructions (Kiddon et al., 2015; Huang
+et al., 2017). In our approach, we also have a video
+clip that contains the visual content of the instruc-
+tion Ii with the action and the entities included in
+the process. Following Zhou et al. (2018a); Huang
+et al. (2018), we evenly divide each video clip into
+three equal parts and randomly sample one image
+(one frame) Vi from each of the three sub-clips to
+capture the temporal changes of entities.
+
+Train
+
+Test
+
+9,316
+1,002
+314
+8,000
+4,633
+400
+
+2,842
+282
+129
+2,431
+1,422
+100
+
+Entity
+Null Pronoun
+
+Pronoun
+
+Noun Phrases
+
+Instruction
+Recipe
+
+Table 1: Annotated Data Statistics
+
+3.1 Anaphora Resolution
+
+The task of anaphora resolution is to assign each
+gold span (anaphor) ei where ei ∈ {xi,1, . . . , xi,1}
+of each instruction Ii to one or more gold spans (an-
+tecedent) yi ∈ {ϵ, I1, . . . , Ii−1, e1,1, . . . , ei−1,n},
+a dummy antecedent ϵ, all preceding instruc-
+tions I1, . . . , Ii−1 and all preceding gold spans
+e1,1, . . . , ei−1,n from the previous instructions
+I1, . . . , Ii−1. For a nominal span in Figure 1 1b, the
+anaphor span the pan refers to the antecedent a hot
+pan in a previous instruction. For a null pronouns
+example in Figure 2, the null pronouns ϕ refers
+to two previous instructions as the antecedents be-
+cause the null pronoun does not point to any entity
+and it is also not a new entity for the recipe, it is
+instead produced by the previous instructions.
+
+The selection of dummy ϵ as antecedent indi-
+cates that the anaphor is an incorrect sequence of
+consecutive words or a singular entity without an
+antecedent.
+
+3.2 Object Localization
+
+, .., vh×w
+
+, .., vh×w
+10
+
+An image V ∈ RH×W is represented as a bag
+of ten regions (e.g., the visualization of region
+proposals of the given positive frame in Figure
+4), vh×w
+10 with suitable side lengths of
+1
+window patches h and w where h < H and
+w < W . Given a span xi and ten region propos-
+als vh×w
+, the task of object localization
+1
+is to identify whether or not the region proposal
+belongs to the object of interest, i.e., the text xi
+when xi is a gold span (e.g., null pronoun [ϕ] or
+nominal spans) of the corresponding instruction Ii.
+Therefore, the task is to link the text span xi to a
+corresponding visual region proposal vi where xi is
+a gold span {ei,1, . . . , ei,n} of the instruction. We
+use the dot-product attention between the span xi
+and the region vi for ranking the visual-semantic
+matching.
+
+Figure 4: The architecture of the multitask learning framework of anaphora resolution and object localization.
+
+4 Data
+
+Anaphora Resolution Data. The YouCookII
+dataset (Zhou et al., 2018a,b) includes manually
+provided descriptions (i.e.,
+instructions) of ac-
+tions with the corresponding temporal boundaries
+(i.e. start and end timestamps) in 2,000 cooking
+videos. The videos provide visual input of the cor-
+responding objects to observe changes of the ob-
+jects clearly. Oguz et al. (2022) use the YouCookII
+dataset to propose a multimodal anaphora resolu-
+tion dataset, Chop&Change, with a novel annota-
+tion schema to address the state change of entities
+in cooking instructions of recipe videos. While the
+Chop&Change annotation schema captures three
+anaphoric relations (coreference, near-identity, and
+bridging), in our work here we concentrate on
+anaphora resolution ignoring relations and focusing
+on finding the antecedent. Table 1 shows that the
+Chop&Change dataset includes 264 training recipe
+documents and 89 test documents in total. For our
+work here, we increase the number of annotated
+recipes to 400 for train and 100 for test recipes by
+using the Chop&Change annotation schema. All
+annotated recipes are associated with respective
+videos. The structure of annotation is explained
+with an example in Appendix A.
+
+Object Localization Data. To construct our test
+set we examine Huang et al. (2018) who present
+a study on reference-aware visual grounding and
+provide an object localization dataset, FindIt, of 62
+YouCookII videos for the given entities in the pro-
+
+vided textual descriptions (i.e., instructions). After
+a deep examination of the FindIt dataset, we find
+that 30 videos of FindIt could be used with our
+annotated recipes. Since only 30 videos produce
+an insufficient test set for the evaluation of object
+localization, we annotated 70 more videos from
+the recipes we annotated for anaphora resolution.
+We extract the frames of the instruction clips by
+using the temporal boundaries. We obtain 3 video
+subsets of consecutive frames of the instruction to
+acquire the state changes of entities in time. We
+pick one frame with a clear visual content of each
+entity from the 3 subsets. Thus, each entity is rep-
+resented in a maximum of three frames for state
+changes. For evaluation, we annotate the visual
+object with a bounding box on the selected frames
+for each entity. In total, we have 5,688 images for
+100 recipes annotated for our object localization
+test set. Note that we do not annotate bounding
+boxes for the training data as we train our models
+in a weakly supervised setting.
+
+5 Methodology
+
+5.1 Model
+
+In this section, we explain the details of our
+anaphora resolution and object localization models.
+Additionally, we formulate the multitask learning
+approach of joint anaphora resolution and object
+localization (see Figure 4). In order to analyze a
+given text, it is important to resolve referring ex-
+pressions. Thus, text-based anaphora resolution is
+an important method of identifying the antecedent
+
+...Ij-1wash the spinach Ijlet them aside to drain......Iiadd the spinach to the potRegionCLIPSpanBERTFFNNMentionDetectionBlockspansregion proposals...AttentionFFNNAnaphoraResolutionBlockFFNNObjectLocalizationBlockregion-span pairs withspan weighted regionsthem, the spinachspan pairs withobject weighted spansvisualizationpositive frames negative frames recipe with a list of instructionsMention Extraction and RepresentationAnaphora ResolutionWeakly Supervised Object Localization (WSOL)span vectorsXjXiXirithe spinach, them... Previous Step of anaphora. However, here we also have object lo-
+calization, providing a bounding box for the visual
+content of language references. The tasks of object
+localization and anaphora resolution share informa-
+tion via the mention extraction and representation
+part of the model. Therefore, our mention repre-
+sentations are trained with anaphora resolution and
+object localization over the mention extraction and
+representation. The implementation details can be
+seen in Appendix B.
+
+As implied in the explanation of both tasks, be-
+fore resolving references in the previous context or
+on the image, referring expressions and language
+references in the text need to be identified, a task
+known as Mention Extraction. In the next Section,
+we first describe our approach to representing men-
+tions.
+
+5.1.1 Mention Extraction and Representation
+We consider all continuous token sequences with
+up to L words as a potential mention span and
+compute the corresponding span score. We use
+SpanBERT (Joshi et al., 2020) as a state-of-art rep-
+resentation for coreference resolution. We capture
+the linguistic dependencies between anaphor and
+antecedent in a recipe document by exploiting self-
+attention: we define SPANBERT(w1, . . . , wT ) to
+be the SpanBERT representation of a recipe, where
+w1 is the first token and wT refers to the last token
+of the recipe. SpanBERT captures the long-range
+dependencies between the antecedent and anaphor
+in the recipes. A span xi consists of zero or more to-
+kens of instruction Ii. We use the verb as a pointer
+for null pronouns. For example, mix is the token of
+the null pronoun ϕ in the instruction mix [ϕ] (Fig-
+ure 2). The vector representation gi of a given span
+xi is obtained by concatenating the contextualized
+SpanBERT word vectors of its boundary tokens
+and its width feature:
+gi = [x∗
+ϕ(i) = WIDTH(END(i) − START(i)).
+
+START(i), x∗
+
+END(i), ϕ(i)]
+
+START(i) and END(i) represent the starting and
+ending token indexes for gi, respectively. ϕ(i) is
+the width feature of the span where WIDTH(.) is
+the embedding function of the predefined bins of
+[1, 2, 3, 4, 8, 16] as defined by Clark and Manning
+(2016b).
+
+5.1.2 Weakly Supervised Object Localization
+Following prior work (Karpathy and Fei-Fei, 2015;
+Huang et al., 2017, 2018), we observe that sentence
+
+descriptions of pictures make frequent references
+to objects in the pictures and their attributes. How-
+ever, the references are not always clearly defined.
+Particularly in a video, the use of pronouns and el-
+lipses are extremely common (Kiddon et al., 2015;
+Huang et al., 2017). Our object localization model
+follows a Weakly Supervised Object Localization
+(WSOL) strategy (Huang et al., 2018; Zhou et al.,
+2018a; Choe et al., 2020): Only full image descrip-
+tions (Figure 3 (c)) are used for localization instead
+of a specific object-level label (as in bounding box
+and specific label pairs for each object in a picture
+like in Figure 3 (a)).
+
+Following the object region and text ranking ap-
+proach, we formulate the task of WSOL as map-
+ping the frame region vi to the text span xi. We
+use positive and negative frames where positive
+frames come from the video clip Vi of instruction
+Ii whereas negative frames are drawn from other
+videos without shared entities. We define posi to be
+a region vector set that includes the region propos-
+als vh×w
+from the positive image Vi, and
+1
+, .., vh×w
+negi to contain the region proposals vh×w
+10
+from the negative image, e.g., the negative and
+positive frames in Figure 4.
+
+, .., vh×w
+10
+
+1
+
+The aim of WSOL is to produce a scoring func-
+tion to maximize the joint probability of positive
+frame regions vi ∈ posi and minimize the joint
+probability of negative regions ri ∈ negi with the
+text span xi. We concatenate the mention repre-
+sentation vector gi of span xi and the visual ob-
+ject region vector ri of the region vi to obtain
+the WSOL input, [gi, ri], effectively fusing tex-
+tual and visual information in one input. We then
+prepare positive (FFNN(gi, ri) = 1) and negative
+(FFNN(gi, ri) = 0) samples to train a model with
+attention-based deep MIL (Ilse et al., 2018). Posi-
+tive examples depict exactly the action in question,
+whereas negative examples correspond to one of
+four special cases as described below:
+
+FFNN(gi, ri) =
+
+
+
+
+
+0 xi = ϵ, ∀ri
+0 xi /∈ {ei,1, . . . , ei,n}, ∀ri
+0 xi ∈ {ei,1, . . . , ei,n}, ri ∈ negi
+1 xi ∈ {ei,1, . . . , ei,n}, ri ∈ posi
+
+Our localization model uses the span representation
+gi that is extracted by the mention extraction and
+ten positive, i.e., posi, and ten negatives, i.e., negi,
+region representation vectors ri to learn the best
+region from posi for the given span gi. Thus, our
+mention detection model learns the span vector gi
+
+also based on the object localization objective (see
+also Figure 4). We define the label of FFNN(gi, ri)
+as 1 when the span xi is a gold span {ei,1, . . . , ei,n}
+and the region vector ri represent the positive re-
+gions posi.
+
+5.1.3 Anaphora Resolution
+
+Following Lee et al. (2017) and Oguz et al. (2022),
+we implement our anaphora resolution system as
+an end-to-end system with mention detection but
+now extended by object localization. For anaphora
+resolution, the representation of a span pair gij is
+obtained by concatenating the two span embed-
+dings [gi, gj] and their element-wise multiplication,
+gi · gj, among others:
+
+gij = [gi, gj, gi · gj, ϕdist(i, j)]
+
+where the feature vector ϕdist(i, j) is the distance
+DISTANCE(START(j) − START(i)) between the in-
+dex of the instruction span i and span j. DIS-
+TANCE(·) is an embedding function of the prede-
+fined bins of [1, 2, 3.., 30] as in Oguz et al. (2022).
+We use softmax(FFNN(gij)) to score the resolu-
+tion for anaphor gi and antecedent gj pairs.
+
+5.2 Evaluation
+
+Following Hou et al. (2018) and Yu and Poesio
+(2020), we assess the performance of our end-to-
+end anaphora resolution with the F1-score where
+precision is the result of dividing the number of
+correctly predicted pairs by the total number of
+predicted pairs and recall is computed by dividing
+the number of correctly predicted pairs by the total
+number of gold pairs.
+
+To evaluate object localization, we follow prior
+work (Fukui et al., 2016; Rohrbach et al., 2016;
+Huang et al., 2018) and compute accuracy as the
+ratio of phrases for which the predicted bounding
+box overlaps with the ground-truth by more than
+0.5 Intersection-over-Union (IoU).
+
+6 Experimental Setup
+
+6.1
+
+Input
+
+6.1.1 Cooking Instructions.
+
+To encode the recipes we use spanBERT (Joshi
+et al., 2020), a transformer model designed to better
+represent and predict spans of text. We use the
+concatenation of the boundary tokens to represent
+each span (Clark and Manning, 2016a,b; Lee et al.,
+2017; Kobayashi et al., 2022).
+
+6.1.2 Frame Regions of Instructions
+Image regions can be proposed by either off-the-
+shelf object localizers, e.g., region proposal net-
+works (Girshick et al., 2014; Ren et al., 2015), or
+dense sliding windows (e.g., random regions). Re-
+gion proposal networks and dense sliding window
+methods neglect language semantics. Therefore,
+we leverage the state-of-art method RegionCLIP
+(Zhong et al., 2022) which uses a CLIP model (Rad-
+ford et al., 2021) to match image regions with tem-
+plate captions to align these region-text pairs in the
+feature space. We select the first 20 region pro-
+posals of each entity with the highest objectness
+scores.
+
+6.2 Experiments
+
+6.2.1 Anaphora Resolution
+Candidate and Gold Spans. Without any prun-
+ing, we consider all continuous token sequences
+(Clark and Manning, 2016b; Lee et al., 2017) as
+potential spans for anaphor/antecedent candidates
+for the training and testing phases. Additionally,
+we consider gold spans for the training and testing
+phases in order to investigate the performance of
+anaphora resolution models without mention detec-
+tion noise.
+
+With and without Object Localization. To
+understand the effect of object localization on
+anaphora resolution we examine the anaphora reso-
+lution results with and without object localization.
+Here, we remove the object localization model and
+data from the training and testing phases of our
+anaphora resolution model.
+
+6.2.2 Object Localization
+With and without Anaphora Resolution. We
+investigate the object localization performance with
+and without anaphora resolution to understand the
+impact of anaphora resolution. We perform four
+different experiments for object localization.
+
+Random (Huang et al., 2018): Since we use the
+object region proposal with the highest objectness
+scores with the given ten region proposals, we first
+examine random selection with the highest object-
+ness score to show the complexity of object local-
+ization.
+
+(DVSA)
+Deep Visual-Semantic Alignment
+(Karpathy and Fei-Fei, 2015): This weakly
+supervised visual grounding method is based on
+image-based regions and given gold and candidate
+
+Figure 5: The examples of object localization results of random with the green bounding box, DVSA with the blue
+bounding box, and our multitask learning method with the red bounding box. The task is the object localization of
+the gold mention in bold font in the instructions.
+
+Methods
+Random
+
+DVSA w Gold Mentions
+
+AR w Cand. Mentions
+
+AR w Gold Mentions
+
+Nominal
+13.98
+19.90
+21.02
+21.17
+
+Null
+16.66
+-
+24.46
+25.98
+
+All
+14.07
+19.90
+20.79
+22.36
+
+Table 2: The Top-1 results of object localization with
+gold and candidate mentions. The column group named
+Nominal shows the results of object localization for
+nominal phrases, Null depicts the results of null pro-
+nouns, and All refers to the full dataset.
+
+mentions without anaphoric information, which
+uses multiple-instance learning. Thus, we consider
+DVSA as a baseline for weakly supervised object
+localization to our method without anaphora
+resolution. We examine the results of DVSA with
+gold and candidate mentions.
+
+AR-Cand. Mentions We train and test the ob-
+ject localization model with all continuous tokens
+(Clark and Manning, 2016b; Lee et al., 2017) as
+potential spans for anaphor/antecedent candidates.
+Candidate spans also increase the noise in the ob-
+ject label set because we consider all possible spans
+as labels of the objects.
+
+AR-Gold Mentions We show the results of ob-
+ject localization when we use gold mentions and
+anaphor information for training and testing.
+
+7 Results and Discussion
+
+7.1 Overview
+
+We investigate the anaphora resolution and object
+localization results of gold and candidate spans
+comparing the F1-scores and Top-1 scores with
+multitask learning using both tasks and single tasks.
+Overall, our results in Table 3 demonstrate that
+replacing single-task learning with our multitask
+joint learning approach improves anaphora reso-
+
+lution and object localization for both candidate
+and gold spans. The difference between the re-
+sults of candidate and gold spans demonstrates that
+the mention extraction model propagates errors to
+anaphora resolution and object localization (the
+sequential structure of model see Figure 4). For
+example, we have the candidate spans such as all
+n-grams words (bigrams words such as cook the,
+the bacon, bacon fat) of an instruction cook the
+bacon fat with the same visual features with bacon
+and fat in a pan. Thus, an incorrect mention of
+mention detection directly causes an error in object
+localization and anaphora resolution.
+
+7.2 Weakly Supervised Object Localization
+
+Overall, we observe an improvement in the perfor-
+mance of object localization with multitask learn-
+ing shown in Table 2. Table 2 shows that our joint
+multitask learning method outperforms DVSA even
+with candidate mention. Note that DVSA is not the
+component that is responsible for extracting the
+mentions for object localization. Thus, we do not
+analyze object localization for null pronouns and
+candidate mentions because DVSA ranks the lan-
+guage expression and region pairs and does not
+apply mention extraction. However, we attached
+the DVSA method for ranking the gold nominal
+mentions with the given region proposals.
+
+The results of object localization with null pro-
+nouns clearly demonstrate the benefits of anaphora
+resolution for object localization. For example, our
+model localizes the singular mention a jar in Fig-
+ure 5 (a), and the anaphor another piece of bread
+in Figure 5 (b) better than other methods. Thanks
+to the mention detection and representation of our
+multitask learning approach, our object localization
+model is capable of localization of null pronouns,
+e.g., Figure 5 (c,d) as our model learns to represent
+the null pronouns in the mention detection process
+as a mention. Thus, the results of null pronouns
+
+pour the dressing to a jarspread it to another piece of breadplace [∅] in a platerinse [∅](a)(b)(c)(d)Methods
+w/o Object Loc.
+Cand. Mentions
+
+Gold Mentions
+
+w Object Loc.
+Cand. Mentions
+
+Gold Mentions
+
+Nominal Anaphora Res.
+F1-score
+Recall
+Precision
+
+Zero Anaphora Res.
+Recall
+
+Precision
+
+F1-score
+
+Anaphora Res.
+Recall
+
+Precision
+
+F1-score
+
+54.76
+58.76
+
+46.65
+52.25
+
+50.38
+55.31
+
+73.38
+75.38
+
+68.76
+71.18
+
+71.00
+73.22
+
+63.03
+64.16
+
+54.06
+58.15
+
+58.20
+61.01
+
+52.03
+58.24
+
+50.49
+55.43
+
+51.25
+56.80
+
+77.68
+80.10
+
+69.97
+76.02
+
+73.63
+78.01
+
+62.46
+64.92
+
+56.19
+61.93
+
+59.16
+63.39
+
+Table 3: Results of the anaphora resolution with and without object localization for gold and candidate mentions.
+We show the results for the full test datasets in Anaphora Res. columns, for only null pronouns in Zero Anaphora
+Res., and the resolution results of anaphoric mentions for all nominal phrases in Nominal Anaphora Res. part.
+
+clearly evidence the contribution of anaphora reso-
+lution for object localization.
+
+7.3 Anaphora Resolution
+
+Multitask learning of anaphora resolution and
+object localization increases the performance of
+anaphora resolution. Table 3 shows > 2% improve-
+ments for anaphora resolution with gold mentions
+and more than 1% for candidate mentions with
+combined training and testing. When nominal and
+zero anaphora are investigated separately, the re-
+sults of nominal anaphora demonstrate an improve-
+ment on the results of gold mentions when object
+localization is included. Additionally, the results of
+zero anaphora show significant improvements with
+multitask learning for gold and candidate mentions.
+Thus, we observe a big part of the improvement for
+the combined experiments with object localization
+comes from the zero anaphora resolution samples.
+The benefit of object localization on anaphora reso-
+lution is also seen in candidate nominal mentions;
+it is however not as significant as in gold nominal
+mentions, as the errors of mention detection for
+candidate spans directly cause localization as well
+as anaphora resolution errors.
+
+The most common error in anaphora resolution
+is to find the closest antecedent in the entity chain.
+For example, for tomato−→ it −→ tomato, the first
+tomato is the antecedent of it, and it is the an-
+tecedent of the second tomato. However, the model
+fails to select the first tomato as the antecedent for
+the second one.
+
+8 Conclusion and Future Work
+
+In this work, we study the problem of visual-
+linguistic ambiguity in multimodal data and pro-
+pose the novel task of joint anaphora resolution
+and object localization. We create the Find2Find
+
+dataset for object localization and anaphora reso-
+lution with cooking recipes to improve the perfor-
+mance of both tasks by exploiting their commonali-
+ties. We implement a model for the joint learning of
+anaphora resolution and object localization, fusing
+visual and textual information, and show empiri-
+cally that a multitask learning paradigm mutually
+improves both tasks. Especially, the results of zero
+anaphora resolution indicate that object localiza-
+tion helps to avoid linguistic ambiguity of null pro-
+nouns. Our joint multitask learning approach does
+not apply the temporal features of evolving visual
+entities even though the temporal features of tex-
+tual recipes (Oguz et al., 2022) are included due
+to instruction order. In future work, we claim the
+temporal encoding of visual objects can improve
+the results of joint anaphora resolution and object
+localization.
+
+9 Acknowledgements
+
+We would like to thank Gokul Srinivasagan and
+David Meier for helping with the annotation of
+the object localization, Alina Leippert for help-
+ing with the annotation of the anaphora resolution.
+This research was funded by the joint IMPRESS
+(01|S20076) project between the French National
+Institute for Research in Digital Science and Tech-
+nology (Inria) and the German Research Center for
+Artificial Intelligence (DFKI).
+
+Limitations
+
+The first and most important limitation is the
+pre-trained region proposal network (RegionCLIP
+(Zhong et al., 2022)). Our object localization is
+highly dependent on the quality of the region pro-
+posals. Therefore, a better region proposal net-
+work delivers more improvements for our multitask
+learning.
+
+References
+
+Jean-Baptiste Alayrac, Piotr Bojanowski, Nishant
+Agrawal, Josef Sivic, Ivan Laptev, and Simon
+Lacoste-Julien. 2016. Unsupervised learning from
+narrated instruction videos. In Proceedings of the
+IEEE Conference on Computer Vision and Pattern
+Recognition, pages 4575–4583.
+
+Boris Babenko, Ming-Hsuan Yang, and Serge Belongie.
+2010. Robust object tracking with online multiple
+instance learning. IEEE transactions on pattern anal-
+ysis and machine intelligence, 33(8):1619–1632.
+
+Junsuk Choe, Seong Joon Oh, Seungho Lee, Sanghyuk
+Chun, Zeynep Akata, and Hyunjung Shim. 2020.
+Evaluating weakly supervised object localization
+methods right. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition
+(CVPR).
+
+Kevin Clark and Christopher D. Manning. 2016a. Deep
+reinforcement learning for mention-ranking corefer-
+ence models. In Proceedings of the 2016 Conference
+on Empirical Methods in Natural Language Process-
+ing, pages 2256–2262, Austin, Texas. Association
+for Computational Linguistics.
+
+Kevin Clark and Christopher D. Manning. 2016b. Im-
+proving coreference resolution by learning entity-
+In Proceedings
+level distributed representations.
+of the 54th Annual Meeting of the Association for
+Computational Linguistics (Volume 1: Long Papers),
+pages 643–653, Berlin, Germany. Association for
+Computational Linguistics.
+
+Thomas Deselaers, Bogdan Alexe, and Vittorio Ferrari.
+2012. Weakly supervised localization and learning
+International journal of
+with generic knowledge.
+computer vision, 100:275–293.
+
+Thomas G Dietterich, Richard H Lathrop, and Tomás
+Lozano-Pérez. 1997. Solving the multiple instance
+problem with axis-parallel rectangles. Artificial intel-
+ligence, 89(1-2):31–71.
+
+Biaoyan Fang, Timothy Baldwin, and Karin Verspoor.
+the
+2022. What does it take to bake a cake?
+RecipeRef corpus and anaphora resolution in pro-
+cedural text. In Findings of the Association for Com-
+putational Linguistics: ACL 2022, pages 3481–3495,
+Dublin, Ireland. Association for Computational Lin-
+guistics.
+
+Biaoyan Fang, Christian Druckenbrodt, Saber A
+Akhondi, Jiayuan He, Timothy Baldwin, and Karin
+Verspoor. 2021. ChEMU-ref: A corpus for model-
+ing anaphora resolution in the chemical domain. In
+Proceedings of the 16th Conference of the European
+Chapter of the Association for Computational Lin-
+guistics: Main Volume, pages 1362–1375, Online.
+Association for Computational Linguistics.
+
+Akira Fukui, Dong Huk Park, Daylen Yang, Anna
+Rohrbach, Trevor Darrell, and Marcus Rohrbach.
+
+2016. Multimodal compact bilinear pooling for vi-
+sual question answering and visual grounding. arXiv
+preprint arXiv:1606.01847.
+
+Ross Girshick, Jeff Donahue, Trevor Darrell, and Ji-
+tendra Malik. 2014. Rich feature hierarchies for ac-
+curate object detection and semantic segmentation.
+In Proceedings of the IEEE conference on computer
+vision and pattern recognition, pages 580–587.
+
+Ramazan Gokberk Cinbis, Jakob Verbeek, and Cordelia
+Schmid. 2014. Multi-fold mil training for weakly
+In Proceedings of
+supervised object localization.
+the IEEE conference on computer vision and pattern
+recognition, pages 2409–2416.
+
+Yufang Hou, Katja Markert, and Michael Strube. 2018.
+Unrestricted bridging resolution. Computational Lin-
+guistics, 44(2):237–284.
+
+De-An Huang, Shyamal Buch, Lucio Dery, Animesh
+Garg, Li Fei-Fei, and Juan Carlos Niebles. 2018.
+Finding “it”: Weakly-supervised, reference-aware
+visual grounding in instructional videos. In IEEE
+Conference on Computer Vision and Pattern Recog-
+nition (CVPR).
+
+De-An Huang, Joseph J Lim, Li Fei-Fei, and Juan Car-
+los Niebles. 2017. Unsupervised visual-linguistic
+reference resolution in instructional videos. In Pro-
+ceedings of the IEEE Conference on Computer Vision
+and Pattern Recognition, pages 2183–2192.
+
+Maximilian Ilse, Jakub Tomczak, and Max Welling.
+2018. Attention-based deep multiple instance learn-
+ing. In International conference on machine learning,
+pages 2127–2136. PMLR.
+
+Mandar Joshi, Danqi Chen, Yinhan Liu, Daniel S. Weld,
+Luke Zettlemoyer, and Omer Levy. 2020. Span-
+BERT: Improving pre-training by representing and
+predicting spans. Transactions of the Association for
+Computational Linguistics, 8:64–77.
+
+Mandar Joshi, Omer Levy, Luke Zettlemoyer, and
+Daniel Weld. 2019. BERT for coreference reso-
+lution: Baselines and analysis. In Proceedings of
+the 2019 Conference on Empirical Methods in Natu-
+ral Language Processing and the 9th International
+Joint Conference on Natural Language Processing
+(EMNLP-IJCNLP), pages 5803–5808, Hong Kong,
+China. Association for Computational Linguistics.
+
+Andrej Karpathy and Li Fei-Fei. 2015. Deep visual-
+semantic alignments for generating image descrip-
+In Proceedings of the IEEE conference on
+tions.
+computer vision and pattern recognition, pages 3128–
+3137.
+
+Chloé Kiddon, Ganesa Thandavam Ponnuraj, Luke
+Zettlemoyer, and Yejin Choi. 2015. Mise en place:
+Unsupervised interpretation of instructional recipes.
+In Proceedings of the 2015 Conference on Empiri-
+cal Methods in Natural Language Processing, pages
+982–992.
+
+Diederik P Kingma and Jimmy Ba. 2014. Adam: A
+method for stochastic optimization. arXiv preprint
+arXiv:1412.6980.
+
+Hideo Kobayashi, Yufang Hou, and Vincent Ng. 2022.
+Constrained multi-task learning for bridging resolu-
+tion. In Proceedings of the 60th Annual Meeting of
+the Association for Computational Linguistics (Vol-
+ume 1: Long Papers), pages 759–770, Dublin, Ire-
+land. Association for Computational Linguistics.
+
+Weicheng Kuo, Fred Bertsch, Wei Li, AJ Piergio-
+vanni, Mohammad Saffar, and Anelia Angelova.
+2022. Findit: Generalized localization with natural
+language queries. In Computer Vision–ECCV 2022:
+17th European Conference, Tel Aviv, Israel, Octo-
+ber 23–27, 2022, Proceedings, Part XXXVI, pages
+502–520. Springer.
+
+Kenton Lee, Luheng He, Mike Lewis, and Luke Zettle-
+moyer. 2017. End-to-end neural coreference reso-
+lution. In Proceedings of the 2017 Conference on
+Empirical Methods in Natural Language Processing,
+pages 188–197, Copenhagen, Denmark. Association
+for Computational Linguistics.
+
+Jonathan Malmaud, Jonathan Huang, Vivek Rathod,
+Nick Johnston, Andrew Rabinovich, and Kevin Mur-
+phy. 2015. What’s cookin’? interpreting cooking
+videos using text, speech and vision. arXiv preprint
+arXiv:1503.01558.
+
+Christopher D Manning, Mihai Surdeanu, John Bauer,
+Jenny Rose Finkel, Steven Bethard, and David Mc-
+Closky. 2014. The stanford corenlp natural language
+processing toolkit. In Proceedings of 52nd annual
+meeting of the association for computational linguis-
+tics: system demonstrations, pages 55–60.
+
+Antoine Miech, Dimitri Zhukov, Jean-Baptiste Alayrac,
+Makarand Tapaswi, Ivan Laptev, and Josef Sivic.
+2019. Howto100m: Learning a text-video embed-
+ding by watching hundred million narrated video
+clips. In Proceedings of the IEEE/CVF International
+Conference on Computer Vision, pages 2630–2640.
+
+Cennet Oguz, Ivana Kruijff-Korbayova, Emmanuel Vin-
+cent, Pascal Denis, and Josef van Genabith. 2022.
+Chop and change: Anaphora resolution in instruc-
+tional cooking videos. In Findings of the Association
+for Computational Linguistics: AACL-IJCNLP 2022,
+pages 364–374, Online only. Association for Compu-
+tational Linguistics.
+
+First Workshop on Computational Models of Refer-
+ence, Anaphora and Coreference, pages 11–22, New
+Orleans, Louisiana. Association for Computational
+Linguistics.
+
+Alessandro Prest, Christian Leistner, Javier Civera,
+Cordelia Schmid, and Vittorio Ferrari. 2012. Learn-
+ing object class detectors from weakly annotated
+video. In 2012 IEEE Conference on computer vision
+and pattern recognition, pages 3282–3289. IEEE.
+
+Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sas-
+try, Amanda Askell, Pamela Mishkin, Jack Clark,
+et al. 2021. Learning transferable visual models from
+natural language supervision. In International confer-
+ence on machine learning, pages 8748–8763. PMLR.
+
+Shaoqing Ren, Kaiming He, Ross Girshick, and Jian
+Sun. 2015. Faster r-cnn: Towards real-time object
+detection with region proposal networks. Advances
+in neural information processing systems, 28.
+
+Anna Rohrbach, Marcus Rohrbach, Ronghang Hu,
+Trevor Darrell, and Bernt Schiele. 2016. Ground-
+ing of textual phrases in images by reconstruction.
+In Computer Vision–ECCV 2016: 14th European
+Conference, Amsterdam, The Netherlands, October
+11–14, 2016, Proceedings, Part I 14, pages 817–834.
+Springer.
+
+Jonathan Tompson, Ross Goroshin, Arjun Jain, Yann
+LeCun, and Christoph Bregler. 2015. Efficient ob-
+ject localization using convolutional networks. In
+Proceedings of the IEEE Conference on Computer
+Vision and Pattern Recognition (CVPR).
+
+Jiajun Wu, Yinan Yu, Chang Huang, and Kai Yu. 2015.
+Deep multiple instance learning for image classifica-
+tion and auto-annotation. In Proceedings of the IEEE
+conference on computer vision and pattern recogni-
+tion, pages 3460–3469.
+
+Juntao Yu, Sopan Khosla, Ramesh Manuvinakurike,
+Lori Levin, Vincent Ng, Massimo Poesio, Michael
+Strube, and Carolyn Rosé. 2022. The CODI-CRAC
+2022 shared task on anaphora, bridging, and dis-
+In Proceedings of the
+course deixis in dialogue.
+CODI-CRAC 2022 Shared Task on Anaphora, Bridg-
+ing, and Discourse Deixis in Dialogue, pages 1–14,
+Gyeongju, Republic of Korea. Association for Com-
+putational Linguistics.
+
+Maxime Oquab, Léon Bottou, Ivan Laptev, and Josef
+Sivic. 2015. Is object localization for free?-weakly-
+supervised learning with convolutional neural net-
+works. In Proceedings of the IEEE conference on
+computer vision and pattern recognition, pages 685–
+694.
+
+Juntao Yu and Massimo Poesio. 2020. Multitask
+learning-based neural bridging reference resolution.
+In Proceedings of the 28th International Conference
+on Computational Linguistics, pages 3534–3546,
+Barcelona, Spain (Online). International Committee
+on Computational Linguistics.
+
+Massimo Poesio, Yulia Grishina, Varada Kolhatkar,
+Nafise Moosavi, Ina Roesiger, Adam Roussel, Fabian
+Simonjetz, Alexandra Uma, Olga Uryupina, Juntao
+Yu, and Heike Zinsmeister. 2018. Anaphora resolu-
+tion with the ARRAU corpus. In Proceedings of the
+
+Yiwu Zhong, Jianwei Yang, Pengchuan Zhang, Chun-
+yuan Li, Noel Codella, Liunian Harold Li, Luowei
+Zhou, Xiyang Dai, Lu Yuan, Yin Li, et al. 2022.
+Regionclip: Region-based language-image pretrain-
+ing. In Proceedings of the IEEE/CVF Conference
+
+on Computer Vision and Pattern Recognition, pages
+16793–16803.
+
+Bolei Zhou, Aditya Khosla, Agata Lapedriza, Aude
+Oliva, and Antonio Torralba. 2016. Learning deep
+features for discriminative localization. In Proceed-
+ings of the IEEE Conference on Computer Vision and
+Pattern Recognition (CVPR).
+
+Luowei Zhou, Nathan Louis, and Jason J. Corso. 2018a.
+Weakly-supervised video object grounding from text
+by loss weighting and object interaction. In BMVC.
+
+Luowei Zhou, Chenliang Xu, and Jason J. Corso. 2018b.
+Towards automatic learning of procedures from web
+instructional videos. In AAAI.
+
+Dimitri Zhukov, Jean-Baptiste Alayrac, Ramazan Gok-
+berk Cinbis, David Fouhey, Ivan Laptev, and Josef
+Sivic. 2019. Cross-task weakly supervised learn-
+ing from instructional videos. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition, pages 3537–3545.
+
+refers to the onions of the third instruction: the
+onions −→ the onion −→ the onions. Most of the er-
+rors of anaphora resolution for recipes occur when
+the model predicts the onions of the third instruc-
+tion as the antecedent of the anaphor the onions of
+the sixth instruction. Additionally, Figure 6 shows
+the null pronouns in the eighth instruction and the
+antecedents such as the fifth, sixth, and seventh
+instructions.
+
+B Implementation Details
+
+We use Adam (Kingma and Ba, 2014) for optimiza-
+tion and a learning rate of 0.001. We clip gradients
+element-wise at 5 and use 0.3 dropouts for regular-
+ization. We use Negative log-likelihood as a loss
+function for the both task of anaphora resolution
+and object localization.
+
+Figure 6: An example of the annotation of anaphora
+resolution for cooking instructions. The grey boxes rep-
+resent the singular mentions without any anaphoric rela-
+tions. The beginning of the arrows shows the anaphora
+whereas the ends point to the antecedent.
+
+A Anaphora Annotation
+
+Anaphora resolution is a challenging task for in-
+structional languages because of temporally evolv-
+ing entities (Oguz et al., 2022). For example, Fig-
+ure 6 demonstrates how the onions of the sixth
+instruction step refers to the onions of the fourth
+instruction and the onions of the fourth instruction
+
+add  the onionsboil potatoes and sweet potatoes  for  5-7 minutesheat  some oil  in  a pangive a further chop on  the onionsmix   [∅]shape  the mixture  into  small pattyfry  patties  in  a pan  with  some oil1.2.3.4.shred   the potatoes   and   sweet potatoes  to   a bowladd  garlic salt  ,  black pepper   and  chilli powder5.6.7.8.9.10.cook  the onions  in  it

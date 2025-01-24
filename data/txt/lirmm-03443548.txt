@@ -1,0 +1,791 @@
+Capturing Provenance to Improve the Model Training of
+PINNs: first handon experiences with Grid5000
+Rômulo M. Silva, Débora Pina, Liliane Kunstmann, Daniel de Oliveira,
+
+Patrick Valduriez, Alvaro L. G. A. Coutinho, Marta Mattoso
+
+To cite this version:
+
+Rômulo M. Silva, Débora Pina, Liliane Kunstmann, Daniel de Oliveira, Patrick Valduriez, et al.. Cap-
+turing Provenance to Improve the Model Training of PINNs: first handon experiences with Grid5000.
+CILAMCE-PANACM 2021 - XLII Ibero-Latin-American Congress on Computational Methods in En-
+gineering - III Pan-American Congress on Computational Mechanics, Nov 2021, Rio de Janeiro, Brazil.
+pp.1-7. ￿lirmm-03443548￿
+
+HAL Id: lirmm-03443548
+
+https://hal-lirmm.ccsd.cnrs.fr/lirmm-03443548
+
+Submitted on 23 Nov 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Capturing Provenance to Improve the Model Training of PINNs: first hand-
+on experiences with Grid5000
+
+Rˆomulo M. Silva1, D´ebora Pina2, Liliane Kunstmann2, Daniel de Oliveira3, Patrick Valduriez4, Alvaro L. G. A.
+Coutinho1, Marta Mattoso2
+
+1Dept. of Civil Engineering, Federal University of Rio de Janeiro
+Av. Athos da Silveira Ramos, 149, CT, Room B101, Rio de Janeiro, RJ 1941-909, Brazil
+romulo.silva@coc.ufrj.br, alvaro@coc.ufrj.br
+2Dept. of Computer and Systems Engineering, Federal University of Rio de Janeiro
+Avenida Hor´acio Macedo 2030, CT, Room H319, Rio de Janeiro, RJ 21941-914, Brazil
+dbpina@cos.ufrj.br, lneves@cos.ufrj.br, marta@cos.ufrj.br
+3Institute of Computing, Fluminense Federal University
+Rua Passo da P´atria, 156, Niter´oi/RJ, Brazil
+danielcmo@ic.uff.br
+4Inria, University of Montpellier, CNRS, LIRMM
+Campus Saint-Priest - Bˆatiment 5, 860 Rue de St Priest, 34095 Montpellier Cedex 5 France
+Patrick.Valduriez@inria.fr
+
+Abstract. The growing popularity of Neural Networks in computational science and engineering raises several
+challenges in configuring training parameters and validating the models. Machine learning has been used to ap-
+proximate costly computational problems in computational mechanics, discover equations by coefficient estima-
+tion, and build surrogates. Those applications are outside of the common usage of neural networks. They require a
+different set of techniques generally encompassed by Physics-Informed Neural Networks (PINNs), which appear
+to be a good alternative for solving forward and inverse problems governed by PDEs in a small data regime, espe-
+cially when it comes to Uncertainty Quantification. PINNs have been successfully applied for solving problems in
+fluid dynamics, inference of hydraulic conductivity, velocity inversion, phase separation, and many others. Never-
+theless, we still need to investigate its computational aspects, especially its scalability, when running in large-scale
+systems. Several hyperparameter configurations have to be evaluated to reach a trained model, often requiring
+fine-tuning hyperparameters, despite the existence of a few setting recommendations. In PINNs, this fine-tuning
+requires analyzing configurations and how they relate to the loss function evaluation. We propose provenance data
+capture and analysis techniques to improve the model training of PINNs. We also report our first experiences on
+running PINNs in Grid5000 using hybrid CPU-GPU computing.
+
+Keywords: Physics-informed Neural Networks, Eikonal Equation, Provenance, Hybrid Computing
+
+1
+
+Introduction
+
+Hey et al. [1] draw attention to the growing popularity of Neural Networks (NNs) in Computational Science
+and Engineering (CSE). In this area, machine learning (ML) has been used to approximate costly computational
+problems, discover equations by coefficient estimation, and for building surrogates [2]. Those are outside the
+common usage of NNs, requiring a different set of techniques. Moreover, the standard rules for hyperparameter
+tuning usually do not apply to such problems [3]. An emerging framework for NNs in CSE is the Physics-Informed
+Neural Networks (PINNs). PINNs are Deep Neural Networks (DNN) that aim to solve forward and inverse prob-
+lems characterized by Partial Differential Equations (PDEs) by inserting the governing equations of the underlying
+physics in the loss function.
+
+One of the challenges when working with PINNs is to reduce the training cost. For this scenario, it is essential
+to verify the evolution of the loss function over the epochs in many different situations. Moreover, it is necessary
+to associate the loss metrics to the hyperparameters’ configurations, for instance, learning rate, batch size, number
+of epochs, activation function, and optimizer. Improving the selection of these parameters is essential due to the
+time it takes to train a PINN, the search space of hyperparameters’ combinations, and the difficulty of tuning them,
+even with auto-tuning tools [4]. Another challenge is to make explicit the metrics that guided the model’s choice
+towards explainability.
+
+Provenance has been added to ML to assist hyperparameter analysis in environments like ModelHub [5], and
+ModelKB [6]. However, these solutions require that the ML algorithm runs in specific platforms other than those
+being used in PINNs. ML frameworks like TensorFlow and Keras are prevalent, and they can support PINNs, but
+
+Capturing Provenance to Improve the Model Training of PINNs: first hand-on experiences with Grid5000
+
+they have limited provenance data, which are stored in log files. Logs are difficult to query, limiting their ability
+for hyperparameter analysis at runtime. In addition, PINNs have specific loss function parameters, important for
+the fine-tuning, not captured in current solutions. This paper presents DNNProv as an alternative to generating
+provenance in PINNs. DNNProv captures provenance from NN coded in environments like TensorFlow and Keras
+with low overhead [7]. Provenance in DNNProv captures the metrics associated with the hyperparameters along
+the epochs during the training execution. Provenance captured is sent asynchronously to be ingested in a database
+ready for online queries. Initial experiments with DNNProv using a PINN for the Factored Eikonal Equation in the
+Grid5000 using hybrid computing (CPU-GPU) provide evidence of the flexibility, the efficiency of data capture,
+and data analysis.
+
+The remainder of this paper is structured as follows. Section 2 details the PINN scheme for solving an inverse
+problem governed by the Factored Eikonal Equation, Section 3 presents provenance in PINNs. Section 4 details
+the case study, and the experimental evaluation. Section 5 concludes.
+
+2 PINNs for the Factored Eikonal Equation
+
+2.1 PINNs in a Nutshell
+
+Consider the problem presented in Eqs. (1)-(3) whose solution is given by u(x) with x ∈ RN and u ∈ RS
+
+with its physical parameters λ [8],
+
+(cid:18)
+
+f
+
+x; u;
+
+∂u
+∂x1
+
+, ...,
+
+∂u
+∂xN
+
+;
+
+∂u2
+∂x1x1
+
+, ...,
+
+(cid:19)
+
+; λ
+
+= 0, ∀x ∈ Ω, Ω ⊂ RN ,
+
+∂u2
+∂x1xN
+u(x) = g(x), ∀x ∈ Γg, Γg ⊂ RN −1,
+∂u
+∂xN
+
+= 0, ∀x ∈ Γh, Γh ⊂ RN −1
+
+; λ
+
+(cid:19)
+
+(cid:18)
+
+h
+
+x;
+
+∂u
+∂x1
+
+, ...,
+
+(1)
+
+(2)
+
+(3)
+
+(1) is the governing PDE, Eq.
+
+in which Eq.
+(3)
+encapsulates both, Neumann and Robin boundary conditions. Furthermore, Ω denotes the internal domain, Γh and
+Γg denote the natural and essential boundaries, respectively.
+
+(2) represents the Dirichlet boundary conditions, while Eq.
+
+In general, PDEs are difficult to solve and require approximation to be solved numerically. One can try to
+approximate the differential operator, but it is also possible to approximate the function space of the solution u.
+The solution can be approximated using bases composed of monomial functions, piece-wise linear functions, or
+even by the space of the Neural Networks HN N .
+
+If we choose to approximate the solution u(x) by ˆu(x; θ) ∈ HN N in Eqs. (1)-(3) we obtain
+
+(cid:18)
+
+f
+
+x;
+
+∂ˆu(x; θ)
+∂x1
+
+, ...,
+
+∂ˆu(x; θ)
+∂xN
+
+;
+
+∂ˆu2(x; θ)
+∂x1x1
+
+, ...,
+
+∂ˆu2(x; θ)
+∂x1xN
+
+(cid:19)
+
+; λ
+
+= R(x; θ; λ)
+
+(4)
+
+where R(x; θ; λ) is called the residual of the PDE and θ are the parameters of the neural network.
+
+For solving Eq. (1) using ˆu(x; θ) as an approximation for its solution u(x), one should minimize the residual
+(Eq. (4)) at a set of residual points TR = {x1, x2, ..., xR} with TR ⊂ Ω and also satisfy the boundary conditions
+with a acceptable accuracy at a set of points TB ⊂ Γ. To measure how good is the approximation of the residual of
+the PDE we write,
+
+and for measuring the quality of the approximation of the boundary conditions
+
+LR(θ; TR) = M SE{R(x; θ; λ), 0},
+
+LBC(θ; TBC) = M SE
+
+h
+
+x;
+
+(cid:26)
+
+(cid:18)
+
+∂u
+∂x1
+
+, ...,
+
+∂u
+∂xN
+
+(cid:19)
+
+(cid:27)
+
+; λ
+
+, 0
+
++ M SE{ˆu(x; θ), g(x)},
+
+(5)
+
+(6)
+
+where M SE{ytrue(x), ypred(x)} denotes the Mean Squared Error between the vectors ytrue(x) and ypred(x).
+In addition, if one want to solve an inverse problem it may be required to incorporate the data through
+
+LD(θ; TD) = M SE{ˆupred(x), ˆudata(x)},
+
+(7)
+
+where TD is the set of points from which we can take measurements from our system, ˆudata denotes the measure-
+ments and ˆupred denotes the predictions at x ∈ TD.
+
+R. M. Silva, D. Pina, L. Kunstmann
+
+Notice that, Equation (6) involves not only the information about the boundary conditions, but also the initial
+conditions for time-dependent problems since the components of x denotes not only the spatial dimensions but
+also time. With these measures in hand, we can now write the final loss function for informing the physical laws
+to a neural network during its training phase,
+
+L(θ; T ) = wRLR(θ; TR) + wBCLBC(θ; TBC) + wDLD(θ; TD)
+
+(8)
+
+where wR, wBC and wD are the weights of the loss function, which play an essential role in the minimization of
+the loss function.
+
+Finally, for the solution of inverse problems, one may want to estimate the parameters λ as a set of physi-
+cal constants or even in the form of a function λ(x; θλ), which is easily achievable and implemented thanks to
+computing libraries such as TensorFlow and PyTorch.
+
+2.2 Factored Eikonal Equation
+
+The Eikonal equation is a first-order nonlinear equation relevant in many fields. It describes phenomena like
+wave propagation for acoustic and elastic media, as well as electromagnetic media [9]. Therefore, the Eikonal
+equation plays an important role in problems like optics, shortest path problems, image segmentation, and seismic
+and medical imaging. The Eikonal equation is given by,
+
+∥∇ϕ(x)∥2 =
+
+1
+v(x)
+
+, ∀x ∈ Ω.
+
+(9)
+
+where Ω ⊂ Rnsd , is the domain, nsd = 1, 2, 3 is the number of space dimensions, x = {x, y, z} is the position
+vector, and ∥.∥ stands for the L2-norm. Solving this equation for ϕ(x) for a given velocity field, v(x), and proper
+boundary conditions become feasible employing numerical methods as, for example, the Fast Marching Method
+[10], and the Fast Sweeping Method [11]. However, when point singularities are present, as, in seismic imaging,
+the Factored Eikonal Equation (FEE for short) is preferable, as pointed out in [12].
+In this case, the Eikonal
+equation solution can be factored as ϕ(xs, xr) = τ (xs, xr)ξ(xs, xr), where xs is the source position, xr is the
+receiver position, which can be any point that lies in the domain Ω. For the particular scenario where a point
+source is applied as boundary condition, ξ(xs, xr) = ∥xs − xr∥2 represents the solution of equation (9) for the
+case where a point source is applied in a domain such as v(x) = v(xr) = 1. Substituting the factorization of ϕ in
+(9), the resulting equation,
+
+τ 2∥∇xr ξ∥2
+
+2 + 2τ ξ∇xr τ · ∇xrξ + ξ2∥∇xr τ ∥2
+
+2 =
+
+1
+v(xr)2
+
+(10)
+
+is the FEE. Here, ∇xr is the gradient operator with respect to the receiver position. This formulation is advan-
+tageous in situations where ϕ(x) has point source singularities, which can be well captured by ξ(xs, xr), while
+τ (xs, xr) acts as a smooth correction at the neighborhood of the point source singularities [12]. Equation (10) is
+only solved for τ which has as boundary condition τ (xs, xr = xs) = 1
+
+v(xs) .
+
+Given the source position xs and the properties of the domain v(x) it is possible to solve Eq. (10) for the
+whole domain. This is called the forward problem. A way more challenging task is to find the properties of the
+domain v(x), given a set of scattered measurements of the travel times ϕ(xs, xr), which is the equivalent of solving
+the inverse problem. Figure 1 shows a simple scheme for using PINNs to solve an inverse problem governed by
+the FEE.
+
+3 Provenance for PINNs
+
+According to the W3C PROV recommendation [13], ”provenance is information about entities, activities, and
+people involved in producing a piece of data or thing, which can be used to form assessments about its quality,
+reliability, or trustworthiness”. Provenance represents the data derivation path, associating the data (entities) with
+the algorithms/programs (activities) that transform these data, in addition to registering the agents (humans, teams)
+associated with the entities and activities. As in any NN, the PINN data derivation path includes the activities: (i)
+Training and (ii) Adaptation. Provenance data is automatically captured during the PINN execution and stored in
+
+Capturing Provenance to Improve the Model Training of PINNs: first hand-on experiences with Grid5000
+
+xs
+
+xr
+
+σ
+
+σ
+
+σ
+
+σ
+
+σ
+
+σ
+
+σ
+
+σ
+
+xr
+
+ξ = ∥xr − xs∥2
+
+˜τ
+
+σ
+
+σ
+
+σ
+
+˜ϕ = ˜τ ξ
+
+D(xs, xr) = ˜ϕ(xs, xr) − ϕdata(xs, xr)
+
+BC(xs, xs) = ˜τ (xs, xs) − 1
+
+˜v(xs)
+
+R(xs, xr) = ˜τ 2∥∇xr ξ∥2
+
+2 + 2τ ξ∇xr ˜τ · ∇xr ξ + ξ2∥∇xr ˜τ ∥2
+
+2 − 1
+˜v2
+
+σ
+
+σ
+
+σ
+
+˜v
+
+Figure 1. PINN scheme for solving the inverse FEE. The ϕ(xs, xr) and v(xr) are approximated by two different
+neural networks and their approximations are denoted by ˜ϕ(xs, xr) and ˜v(xr). Those approximations are then fed
+to the loss components related to the data assimilation, boundary and initial conditions, and the PDE residual.
+
+a database that associates input data to activities, their parameters, and outputs. The input of the Training activity
+is the training dataset and the hyperparameters are, for example: the name of the optimizer, the learning rate,
+number of epochs, batch size and activation functions, and the output is a set of metrics that helps in the evaluation
+of results obtained during training, e.g., the loss function and its components, the elapsed time, and the date and
+time of the end of the execution of each epoch. The inputs of Adaptation are the dataset generated by Training
+and parameters for the adaptation. After an adaptation activity, its output can be a new learning rate and epoch
+values, which are also in the database with the date and time when the adaptation occurred, and the adaptation
+identification.
+
+Automatic provenance capture during the training of a PINN improves the quality and reliability of the model.
+As the training takes a long time, it is worth having access to the provenance of what has already been executed
+to decide on adapting hyperparameters. The evaluation of the several hyperparameters requires us to be aware
+of the relationship between metadata, e.g., the chosen hyperparameter values, performance data, environment
+configuration, model metrics, etc. Unlike in other NN provenance approaches, in the case of PINNs, specific
+loss function component values need to be tracked. This evaluation, through provenance data queries during the
+training activity, can support fine-tuning decisions, complementing auto-tuning solutions [4].
+
+DNNProv is a W3C PROV compliant software library that allows for online hyperparameters’ analysis
+through provenance data [7]. DNNProv captures typical ML hyperparameters with the flexibility to include other
+data. In this paper, DNNProv captures parameters relevant to fine-tune PINNs, like those in the loss function.
+The DNNProv services are used in ML-based workflows with different DL frameworks (e.g., Tensorflow, Theano)
+while being able to share and analyze captured provenance data using the same W3C PROV representation.
+
+4 Experiments
+
+This section presents how provenance data captured with DNNProv help improving the training of PINNs
+to solve an inverse FEE problem, the crosshole traveltime tomography. Fig. 2 shows that the PINN solution,
+using the FEE as the forward solver, is closer to the ground truth than the PyGIMli[14] solution. However, when
+querying the provenance database during the training, we notice room to improve the PINNs’ performance in
+several different training scenarios. In all experiments, the FEE PINN runs on GPUs, while DNNProv captures
+provenance data from the same GPU and sends them asynchronously to a database running on a CPU managed by
+the columnar relational database system MonetDB1. All the experiments use a CPU-GPU hybrid computing mode
+in the Inria’s Grid5000 computer system, a large-scale and flexible testbed for experiment-driven research, with a
+focus on parallel and distributed computing, including Cloud, HPC, and Big Data and AI [15].
+
+Several training runs were performed with the FEE PINN, with variations in the activation function (ReLU,
+Tanh, Sine, Sigmoid) and optimizer (Adam, RMSProp). We use provenance to monitor metrics by epoch during
+the PINN training and steer the training at runtime, inspecting how the evaluation metrics are evolving, including
+the loss, L, and its components, LBC, LR, and LD. Thus, we can change parameters and start training again if,
+for instance, the loss value is not meeting a chosen criteria. In this case, these adaptations are also registered with
+provenance data (time and date when it happened, and parameters used, such as decay rate and decay steps) since
+
+1https://www.monetdb.org/
+
+R. M. Silva, D. Pina, L. Kunstmann
+
+vRT (x)
+
+vtrue(x)
+
+0
+
+-10
+
+-20
+
+]
+
+m
+[
+y
+
+0
+
+-10
+
+-20
+
+]
+
+m
+[
+y
+
+4.0
+
+3.4
+
+2.8
+
+2.1
+
+1.5
+
+0
+
+-10
+
+-20
+
+]
+
+m
+[
+y
+
+2.8
+
+2.5
+
+2.2
+
+2.0
+
+1.7
+
+vP IN N (x)
+
+3.1
+
+2.8
+
+2.4
+
+2.0
+
+1.7
+
+0
+
+10
+x[m]
+
+20
+
+0
+
+10
+x[m]
+
+20
+
+0
+
+10
+x[m]
+
+20
+
+Figure 2. Crosshole traveltime tomography problem setup. (left): The ground truth velocity model corresponds
+to a background velocity model with vtrue(x) = 2.0[km/s] with two inclusions with vtrue(x) = 4.0[km/s]
+(top-left) and vtrue(x) = 1.5[km/s] (bottom-right). (middle): PyGIMLi[14] solution, R2 = 0.32. (right): PINN
+solution (present work), R2 = 0.52.
+
+they are essential for a posteriori data analysis. We may also want to discover if the training with adaptation at
+runtime is effective and learn for the next PINN configurations.
+
+During the online data analysis for current training (optimizer Adam and activation function Tanh), we submit
+a query such as “What are the elapsed time and loss for training each epoch?”, which the result is presented in
+Table 1. With this query, we can investigate, for example, if any epoch is taking longer than usual. In addition, with
+the loss value attribute selected along with the epoch identification, we can verify whether this value is improving
+over the epochs. Moreover, this query helps decision-making, such as tuning the optimizer or the learning rate.
+
+Table 1 shows the current training epochs, time, and parameters. Based on Table 1, we decide on a further
+evaluation, considering training with two hyperparameter combinations for the PINN, executing in parallel, one
+with the optimizer Adam and the other with the optimizer RMSProp, both with the activation function Sigmoid.
+Then, we submit another query to compare the two optimizers: “What is the elapsed time and training loss in the
+latest epoch for each combination?”, with the results shown in Table 2. From this query, we observe that Adam’s
+optimizer loss presents the best results. Therefore, we decide to stop the training with RMSProp. Consequently,
+the relationship between the provenance data and the hyperparameter’s configuration can help us fine-tune the
+hyperparameters’ values during the search for the most satisfactory configuration.
+
+Additionally, when we train a model, it is often helpful to lower the learning rate as the training progresses.
+Although decreasing the learning rate is a known technique, the registered values help trace the consequences of
+changes when analyzing different models. These data are also important when evaluating the impact of different
+parameters for decreasing the learning rate. We chose to use an exponential decay function and only one value
+for the decay rate and the decay steps. However, different values for these parameters can be tested. As these
+adaptations are saved, we can submit a query like “Retrieve the hyperparameters configuration and the lowest
+learning rate that was reached during the training.”. The results of this query are shown in Table 3. In addition to
+tuning, the provenance database contributes to the reproducibility and explainability of the model [5, 6].
+
+DNNProv can also be connected to data visualization tools, such as Kibana2 to create dashboards and other
+resources to improve the runtime data analysis. Figure 3 shows the training loss of different executions, presenting
+an overall perspective of each run. From Figure 3, we observe that the configuration with RMSProp and Sigmoid
+shows the worst results. Continuing the training until the loss decreases to 10−3, we see that it is a good decision
+to stop earlier the training for this configuration.
+
+Table 1. Query: “What are the elapsed time and loss for each training epoch?”
+
+Epoch Time (s)
+
+L
+
+LBC
+
+LR
+
+LD
+
+0
+
+10000
+
+20000
+
+30000
+
+3.157
+
+2.194
+
+2.125
+
+2.347
+
+1191.801
+
+0.0122093
+
+0.5859
+
+47.64812
+
+0.016
+
+0.011
+
+0.025
+
+0.0000047
+
+0.0015
+
+0.00058
+
+0.0000013
+
+0.0004
+
+0.00043
+
+0.0000018
+
+0.0011
+
+0.00097
+
+2https://www.elastic.co/kibana
+
+Capturing Provenance to Improve the Model Training of PINNs: first hand-on experiences with Grid5000
+
+Table 2. Query: “What is the elapsed time and training loss in the latest epoch for each combination?”
+
+Time (s)
+
+L
+
+LBC
+
+LR
+
+LD
+
+Optimizer Act Func
+
+2.193
+
+2.169
+
+0.438
+
+0.013
+
+0.0000392
+
+0.0009
+
+0.017
+
+RMSProp
+
+Sigmoid
+
+0.0000004
+
+0.0008
+
+0.0005
+
+Adam
+
+Sigmoid
+
+Table 3. Query: “Retrieve the hyperparameters configuration and the lowest learning rate that was reached during
+the training.” LRate stands for the learning rate.
+
+Function
+
+Decay Rate Decay Steps
+
+Initial LRate Lowest LRate
+
+Exponential decay
+
+0.99
+
+1000
+
+0.001
+
+0.00067
+
+Figure 3. Graphical view of the training loss
+
+Provenance capturing introduces overhead on the PINN execution. We measure this overhead for all the runs
+shown in Figure 3. The overhead corresponds to an increase of 4% over the total time, which is considered neg-
+ligible, given the hyperparameter fine-tuning benefits. Such low overhead is due to CPU-GPU hybrid-computing
+model, where the provenance management engine runs on the CPU and the PINN on the GPU.
+
+5 Conclusions
+
+In this paper, we propose using provenance capture to improve online data analysis while training PINNs.
+By automatically capturing provenance data with DNNProv, it is possible to analyze the chosen hyperparameter
+values related to the training stages and adjust them during the execution to achieve results with more quality. A
+case study has been conducted with an actual PINN application on Grid5000. Our experiments show how using the
+DNNProv approach for online provenance query data analysis, and monitoring can support decision-making with
+very low overhead. As future work, we plan to capture provenance with different PINN architectures and provide
+more data to assist the training better. Also, we intend to explore GPU-based databases to store the captured data.
+
+Acknowledgements. This work is funded by CNPq, FAPERJ (Center of Excellence in Digital Transformation
+and Artificial Intelligence of Rio de Janeiro State: Thematic Network in Renewable Energy and Climate Change),
+and Inria (HPDaSc associated team). We are indebted to Inria by providing us access to Grid5000. D. Pina, L.
+Kunstmann, and R. M. Silva are supported by the Coordenac¸ ˜ao de Aperfeic¸oamento de Pessoal de N´ıvel Superior
+- Brasil (CAPES) - Finance Code 001.
+
+R. M. Silva, D. Pina, L. Kunstmann
+
+Authorship statement. This section is mandatory and should be positioned immediately before the References
+section. The text should be exactly as follows: The authors hereby confirm that they are the sole liable persons
+responsible for the authorship of this work, and that all material that has been herein included as part of the present
+paper is either the property (and authorship) of the authors, or has the permission of the owners to be included here.
+
+References
+
+[1] T. Hey, K. Butler, S. Jackson, and J. Thiyagalingam. Machine learning and big scientific data. Philosophical
+Transactions of the Royal Society A, vol. 378, n. 2166, pp. 20190054, 2020.
+[2] J. D. Jakeman, M. Perego, and W. M. Severa. Neural networks as surrogates of nonlinear high-dimensional
+parameter-to-prediction maps. Technical report, Sandia National Lab.(SNL-NM), Albuquerque, NM (United
+States), 2018.
+[3] R. K. Tripathy and I. Bilionis. Deep uq: Learning deep neural network surrogate models for high dimensional
+uncertainty quantification. Journal of computational physics, vol. 375, pp. 565–588, 2018.
+[4] D. Wang, J. D. Weisz, M. Muller, P. Ram, W. Geyer, C. Dugan, Y. Tausczik, H. Samulowitz, and A. Gray.
+Human-ai collaboration in data science: Exploring data scientists’ perceptions of automated ai. Proceedings of
+the ACM on Human-Computer Interaction, vol. 3, n. CSCW, pp. 1–24, 2019.
+[5] H. Miao, A. Li, L. S. Davis, and A. Deshpande. Towards unified data and lifecycle management for deep
+learning. In 2017 IEEE 33rd International Conference on Data Engineering (ICDE), pp. 571–582. IEEE, 2017.
+[6] G. Gharibi, V. Walunj, S. Rella, and Y. Lee. Modelkb:
+towards automated management of the modeling
+lifecycle in deep learning. In Proceedings of the 7th International Workshop on Realizing Artificial Intelligence
+Synergies in Software Engineering, pp. 28–34. IEEE Press, 2019.
+[7] D. Pina, L. Kunstmann, de D. Oliveira, P. Valduriez, and M. Mattoso. Provenance supporting hyperparameter
+analysis in deep neural networks. In Provenance and Annotation of Data and Processes, pp. 20–38. Springer,
+2021.
+[8] L. Lu, X. Meng, Z. Mao, and G. E. Karniadakis. DeepXDE: A deep learning library for solving differential
+equations. SIAM Review, vol. 63, n. 1, pp. 208–228, 2021.
+[9] L. Debnath. First-Order Nonlinear Equations and Their Applications, pp. 227–256. Birkh¨auser Boston,
+Boston, 2012.
+[10] R. F. a. Stanley Osher. Level Set Methods and Dynamic Implicit Surfaces. Applied Mathematical Sciences
+153. Springer-Verlag New York, 1 edition, 2003.
+[11] H. Zhao. A fast sweeping method for eikonal equations. Mathematics of Computation, vol. 74, n. 250, pp.
+603–628, 2004.
+[12] S. Fomel, S. Luo, and H. Zhao. Fast sweeping method for the factored eikonal equation. Journal of Compu-
+tational Physics, vol. 228, n. 17, pp. 6440 – 6455, 2009.
+[13] L. Moreau and P. Groth. Provenance: an introduction to prov. Synthesis Lectures on the Semantic Web:
+Theory and Technology, vol. 3, n. 4, pp. 1–129, 2013.
+[14] C. R¨ucker, T. G¨unther, and F. M. Wagner. pyGIMLi: An open-source library for modelling and inversion in
+geophysics. Computers and Geosciences, vol. 109, pp. 106–123, 2017.
+[15] D. Balouek, A. Carpen Amarie, G. Charrier, F. Desprez, E. Jeannot, E. Jeanvoine, A. L`ebre, D. Margery,
+N. Niclausse, L. Nussbaum, O. Richard, C. P´erez, F. Quesnel, C. Rohr, and L. Sarzyniec. Adding virtualization
+In I. I. Ivanov, van M. Sinderen, F. Leymann, and T. Shan, eds, Cloud
+capabilities to the Grid’5000 testbed.
+Computing and Services Science, volume 367 of Communications in Computer and Information Science, pp.
+3–20. Springer International Publishing, 2013.
+
+

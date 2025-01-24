@@ -1,0 +1,2335 @@
+GAP: Differentially Private Graph Neural Networks
+with Aggregation Perturbation
+Sina Sajadmanesh, Ali Shahin Shamsabadi, Aurélien Bellet, Daniel
+
+Gatica-Perez
+
+To cite this version:
+
+Sina Sajadmanesh, Ali Shahin Shamsabadi, Aurélien Bellet, Daniel Gatica-Perez. GAP: Differen-
+tially Private Graph Neural Networks with Aggregation Perturbation. USENIX Security 2023 - 32nd
+USENIX Security Symposium, Aug 2023, Anaheim, United States. ￿hal-03905068￿
+
+HAL Id: hal-03905068
+
+https://inria.hal.science/hal-03905068
+
+Submitted on 17 Dec 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+2
+2
+0
+2
+
+v
+o
+N
+8
+1
+
+]
+
+G
+L
+.
+s
+c
+[
+
+3
+v
+9
+4
+9
+0
+0
+.
+3
+0
+2
+2
+:
+v
+i
+X
+r
+a
+
+GAP: Diﬀerentially Private Graph Neural Networks
+with Aggregation Perturbation
+
+Sina Sajadmanesh1,2 Ali Shahin Shamsabadi3 Aurélien Bellet4 Daniel Gatica-Perez1,2
+
+1Idiap Research Institute
+
+2EPFL 3The Alan Turing Institute
+
+4Inria
+
+Abstract
+
+In this paper, we study the problem of learning Graph Neural
+Networks (GNNs) with Diﬀerential Privacy (DP). We pro-
+pose a novel diﬀerentially private GNN based on Aggregation
+Perturbation (GAP), which adds stochastic noise to the GNN’s
+aggregation function to statistically obfuscate the presence of
+a single edge (edge-level privacy) or a single node and all its
+adjacent edges (node-level privacy). Tailored to the speciﬁcs of
+private learning, GAP’s new architecture is composed of three
+separate modules: (i) the encoder module, where we learn
+private node embeddings without relying on the edge infor-
+mation; (ii) the aggregation module, where we compute noisy
+aggregated node embeddings based on the graph structure; and
+(iii) the classiﬁcation module, where we train a neural network
+on the private aggregations for node classiﬁcation without
+further querying the graph edges. GAP’s major advantage
+over previous approaches is that it can beneﬁt from multi-hop
+neighborhood aggregations, and guarantees both edge-level
+and node-level DP not only for training, but also at inference
+with no additional costs beyond the training’s privacy budget.
+We analyze GAP’s formal privacy guarantees using Rényi
+DP and conduct empirical experiments over three real-world
+graph datasets. We demonstrate that GAP oﬀers signiﬁcantly
+better accuracy-privacy trade-oﬀs than state-of-the-art DP-
+GNN approaches and naive MLP-based baselines. Our code
+is publicly available at https://github.com/sisaman/GAP.
+
+1 Introduction
+
+Real-world datasets are often represented by graphs, such as
+social [36], ﬁnancial [42], transportation [8], or biological [25]
+networks, modeling the relations (i.e., edges) between a collec-
+tion of entities (i.e., nodes). Graph Neural Networks (GNNs)
+have achieved state-of-the-art performance in learning over
+such relational data in various graph-based machine learning
+tasks, such as node classiﬁcation, link prediction, and graph
+classiﬁcation [26, 47, 52]. Due to their superior performance,
+GNNs are now widely used in many applications, such as
+
+recommendation systems, credit issuing, traﬃc forecasting,
+drug discovery, and medical diagnosis [4, 14, 24, 30, 49].
+
+Privacy concerns. Despite their success, real-world deploy-
+ments of GNNs raise privacy concerns when graphs contain
+personal data: for instance, social or ﬁnancial networks involve
+sensitive information about individuals and their interactions.
+Recent works [19, 20, 33, 44] have extended the study of the
+privacy leakage of standard deep learning models to GNNs,
+showing the risk of information leakage regarding training
+data is even higher in GNNs, as they incorporate not only
+node features and labels but also the graph structure itself [9].
+Consequently, GNNs are vulnerable to various privacy at-
+tacks, such as node membership inference [20, 33] and edge
+stealing [19, 44]. For example, a GNN trained on a social net-
+work for friendship recommendation could reveal the existing
+relationships between the users via its predictions. As another
+example, a GNN trained on the social graph of COVID-19
+patients can be used by government authorities to predict the
+spread of the disease, but an adversary may recover private
+information about the participating patients.
+
+Problem and motivation. Motivated by these privacy con-
+cerns, we investigate the problem of designing privacy-
+preserving GNNs for private, sensitive graphs. Our goal is to
+protect the sensitive graph structure and other accompanying
+data using the framework of Diﬀerential Privacy (DP) [10].In
+the context of graphs, two diﬀerent variants of DP have been
+deﬁned: edge-level and node-level DP [37]. Informally, an
+edge-level 𝜖-DP algorithm have roughly the same output (as
+measured by 𝜖) if one edge is removed from the input graph.
+This ensures that the algorithm’s output does not reveal the
+existence of a particular edge in the graph. Correspondingly,
+node-level private algorithms conceal the presence of a partic-
+ular node together with all its associated edges and attributes.
+Clearly, node-level DP is a stronger privacy deﬁnition, but it
+is harder to attain because it requires the algorithm’s output
+distribution to hide much larger diﬀerences in the input graph.
+
+Challenges. As GNNs utilize the structural information in
+the graph data, protecting data privacy in such models is more
+
+ 
+ 
+ 
+ 
+ 
+ 
+Figure 1: Schema of an unfolded 2-layer GNN taking an example graph as input. At each layer, every node aggregates its neighbors’
+embedding vectors (initially node features, e.g. XA for node A), which is then updated using a neural net into a new vector (e.g.,
+HA). Removing an arbitrary edge (here, the edge from node B to F) excludes the source node (B) from the aggregation set of the
+destination node (F). At the ﬁrst layer, this will only alter the destination node’s embedding, but this change is propagated to the
+neighboring nodes in the next layer. Node embeddings that are aﬀected by the removal of edge (B,F) are indicated in red.
+
+challenging than in standard ones. As shown in Figure 1,
+one of these challenges is the interdependency between the
+node embeddings resulting from the GNN’s data aggregation
+mechanism. Speciﬁcally, a 𝐾-layer GNN iteratively learns
+node embeddings by aggregating information from every
+node’s 𝐾-hop neighborhood (i.e., from nodes that are at a
+distance at most 𝐾 in the graph). Hence, the embedding of
+a node is inﬂuenced not only by the node itself but also
+by all the nodes in its 𝐾-hop proximity. This fact voids the
+privacy guarantees of standard DP learning paradigms, such
+as DP-SGD [2], as the training loss of GNNs can no longer
+be decomposed into individual samples. Furthermore, the
+number of interdependent embeddings grows exponentially
+with 𝐾, hindering the ability of a DP solution to hide the
+output diﬀerences eﬀectively. Therefore, how to get more
+representational power from higher-order GNN aggregations
+while ensuring DP is an important challenge to address.
+
+Another major challenge is to guarantee inference privacy,
+i.e., preserving the privacy of graph data not only for training
+but also at inference time, when the trained GNN model is
+queried to make predictions for test nodes. Unlike conventional
+deep learning models, where the training data is not reused
+at inference time, the inference about any node in a 𝐾-layer
+GNN requires aggregating data from its 𝐾-hop neighborhood,
+which can reveal information about the neighboring nodes.
+Therefore, private graph data can still be leaked at inference
+time, even with privately trained model parameters. As a result,
+it is critical to ensure that both the training and inference stages
+of a GNN satisfy DP. This is illustrated in Figure 2.
+
+Our contributions. To address the above challenges, we
+propose GAP, a privacy-preserving GNN model satisfying
+edge-level privacy, which is also extensible to node-level
+privacy if combined with standard private learning algorithms
+such as DP-SGD. As perturbing an edge in the input graph
+can practically be viewed as changing a sample in a node’s
+neighborhood aggregation set, GAP preserves edge privacy via
+aggregation perturbation: we add calibrated Gaussian noise
+
+(a) Learning standard DNNs with DP
+
+(b) Learning GNNs with DP
+
+Figure 2: Comparison of DP learning with (a) conventional
+deep neural networks, and (b) graph neural networks. Given
+the trained model, the inference mechanism of a DNN is
+independent of the training data, so a DP learning algorithm
+implies a DP inference mechanism as well. With GNNs
+however, graph data is queried again at inference time, so
+the inference step requires speciﬁc attention to be made
+diﬀerentially private.
+
+to the output of the aggregation function, which can eﬀectively
+hide the presence of a single edge (edge-level privacy) or a
+group of edges (node-level privacy). To avoid accumulating
+privacy costs at every model update, we propose a custom
+GNN architecture (Figure 3) comprising three individual
+components: (i) the encoder module, where we pre-train an
+encoder to extract lower-dimensional node features without
+relying on the graph structure; (ii) the aggregation module,
+where we use aggregation perturbation to privately compute
+multi-hop aggregated node embeddings using the graph edges
+and the encoded features; and (iii) the classiﬁcation module,
+where we train a neural network on the aggregated data for
+node classiﬁcation without further querying the graph edges.
+Aggregation perturbation allows us to beneﬁt from higher-
+
+                 First LayerSecond LayerABDCEFLearning AlgorithmTraining DataTrained ModelTest DataInferenceMechanismDifferentially PrivateLabelsLearning AlgorithmInput GraphTrained GNNInferenceMechanismDifferentially PrivateNode LabelsDifferentially Privategraph-based learning tasks. A variety of GNN models and
+various architectures have been proposed, including Graph
+Convolutional Networks [26], Graph Attention Networks [41],
+GraphSAGE [16], Graph Isomorphism Networks [47], Jump-
+ing Knowledge Networks [48], and Gated Graph Neural Net-
+works [28]. For the latest advances and trends in GNNs, we
+refer the reader to the available surveys [1, 17, 46, 53, 56].
+
+Privacy attacks on GNNs. Several recent works have inves-
+tigated the possibility of performing privacy attacks against
+GNNs and quantiﬁed the privacy leakage of publicly released
+GNN models or node embeddings trained on private graph
+datasets. Zhang et al. [55] study the information leakage
+in graph embeddings and propose three diﬀerent inference
+attacks against GNNs: inferring graph properties (such as num-
+ber of nodes and edges), inferring whether a given subgraph
+is contained in the target graph, and graph reconstruction with
+similar statistics to the target graph. He et al. [19] propose a
+series of black-box link stealing attacks on GNN models, and
+show that an adversary can accurately infer a link between any
+pair of nodes in a graph used to train the GNN. Zhang et al. [54]
+study the connection between model inversion risk and edge
+inﬂuence, and show that edges with greater inﬂuence are more
+likely to be inferred. Wu et al. [44] also study the link stealing
+attack via inﬂuence analysis, and propose an eﬀective attack
+against GNNs based on the node inﬂuence information. The
+feasibility of the membership inference attack against GNNs
+has also been studied and several attacks with diﬀerent threat
+models have been proposed in the literature [3, 9, 20, 33].
+Overall, these works underline the privacy risks of GNNs
+trained on sensitive graph data and conﬁrm the vulnerability
+of these models to various privacy attacks.
+
+Diﬀerentially private GNNs. Recently, there have been at-
+tempts to use DP to provide formal privacy guarantees in
+various GNN learning settings. Sajadmanesh and Gatica-
+Perez [38] propose a locally private GNN model by con-
+sidering a distributed learning setting, where node features
+and labels are private but training the GNN is federated by
+a central server with access to graph edges. However, their
+method cannot be used in applications where the graph edges
+are private. Wu et al. [44] propose an edge-level DP learning
+algorithm for GNNs by perturbing the input graph directly
+using either randomized response (called EdgeRand) or the
+Laplace mechanism (called LapGraph). Then, a GNN is
+trained over the resulting noisy graph. However, their method
+cannot be extended trivially to the node-level privacy setting.
+Olatunji et al. [32] consider a centralized learning setting and
+propose a node-level private GNN by adapting the framework
+of PATE [34]. They train the student GNN model using public
+graph data, which is privately labeled using the teacher GNN
+models trained exclusively for each query node. However, their
+dependence on public graph data restricts the applicability of
+their method. Daigavane et al. [7] also propose a node-level
+private approach for training 1-layer GNNs by extending the
+
+Figure 3: Overview of GAP’s architecture: (1) The encoder
+is trained using only node features (X) and labels (Y). (2)
+The encoded features are given to the aggregation module to
+compute private 𝐾-hop aggregations (here, 𝐾 = 2) using the
+graph’s adjacency matrix (A). (3) The classiﬁcation module
+is trained over the private aggregations for label prediction.
+
+order, multi-hop aggregations by composing individual noisy
+aggregations, yet the proposed architecture signiﬁcantly re-
+duces the privacy costs as the perturbed aggregations are
+computed once on lower-dimensional embeddings, and reused
+during training and inference. GAP also provides inference
+privacy, as the inference of any node relies on the perturbed ag-
+gregations, which hide information about neighboring nodes.
+Due to reusing cached aggregations, the inference step does
+not incur additional privacy costs beyond that of training.
+
+Results. We analyze GAP’s formal privacy guarantees using
+Rényi Diﬀerential Privacy [29], and empirically evaluate its
+accuracy-privacy performance on three medium to large-scale
+graph datasets, namely Facebook, Reddit, and Amazon. We
+demonstrate that GAP’s accuracy surpasses the competing
+baselines’ at (very) low privacy budgets under both edge-level
+DP (e.g., 𝜖 ≥ 0.1 on Reddit) and node-level DP (e.g., 𝜖 ≥ 1 on
+Reddit), and observe that it always performs on par or better
+than a naive (privately trained) MLP model which does not
+utilize the graph’s structural information.
+
+2 Related Work
+
+Graph neural networks. Deep learning on graphs has
+emerged in the past few years to tackle diﬀerent kinds of
+
+MLPSoftmaxaggregateperturbnormalizeaggregateperturbnormalizenormalizeMLPMLPMLPcombineMLPAggregation ModuleClassification ModuleEncoder Module123Cache(a) Transductive Learning
+
+(b) Inductive Learning
+
+Figure 4: (a) Transductive learning: training and inference
+steps are conducted on the same graph, but diﬀerent nodes
+are used for training and testing. Here, the blue nodes (A, D,
+and E) are used for training and the red nodes (B, C, and F)
+for inference. (b) Inductive learning: training and inference
+steps are performed on diﬀerent graphs. Here, the left and
+right graphs are used for training and inference, respectively.
+
+standard DP-SGD algorithm and privacy ampliﬁcation by
+subsampling results to bounded-degree graph data. However,
+their approach fails to provide inference privacy and is lim-
+ited to 1-layer GNNs and thus cannot leverage higher-order
+aggregations.
+
+Comparison with existing methods. To our best knowledge,
+GAP is the ﬁrst approach providing both edge-level or node-
+level privacy guarantees based on the application requirements.
+Unlike existing methods, our approach does not rely on public
+data, can leverage multi-hop aggregations beyond ﬁrst-order
+neighbors, and guarantees inference privacy at no additional
+cost. In Section 7, we also show that GAP outperforms other
+baselines in terms of accuracy-privacy trade-oﬀ.
+
+3 Background and Problem Formulation
+
+3.1 Graph Neural Networks
+
+GNNs aim to learn a representation for every node in the
+input graph by incorporating the initial node features and the
+graph structure (edges). The learned node representations, or
+embeddings, can then be used for the downstream machine
+learning task. In this paper, we focus on node classiﬁcation,
+where the embeddings are used to predict the label of the
+graph nodes. Node-wise prediction problems can be tackled
+in either transductive or inductive setting. In the transductive
+setting, both training and testing are performed on the same
+graph, but diﬀerent nodes are used for training and testing.
+Conversely, in the inductive setting, training and testing are
+performed on diﬀerent graphs. This is illustrated in Figure 4.
+Let G = (V, E, X, Y) be an unweighted directed graph
+dataset consisting of sets of nodes V and edges E represented
+by a binary adjacency matrix A ∈ {0, 1} 𝑁 ×𝑁 , where 𝑁 = |V |
+denotes the number of nodes, and A𝑖, 𝑗 = 1 if there is a directed
+edge (𝑖, 𝑗) ∈ E from node 𝑖 to node 𝑗. Nodes are characterized
+by 𝑑-dimensional feature vectors stacked up in an 𝑁 × 𝑑
+matrix X, where X𝑣 denotes the feature vector of the 𝑣-th
+
+Figure 5: Typical 3-layer GNN for node classiﬁcation. Each
+layer 𝑖 takes the adjacency matrix A and previous layer’s node
+embedding matrix H(𝑖−1) (initially, node features X), and
+outputs a new embedding matrix H(𝑖) (ultimately, predicted
+class labels (cid:98)Y). Internally, the input embeddings H(𝑖−1) are
+aggregated based on the adjacency matrix A, and then fed to
+a neural network (Upd) to generate new embeddings H(𝑖) .
+
+node. Y ∈ {0, 1} 𝑁 ×𝐶 represents the labels of the nodes, where
+Y𝑣 is a 𝐶-dimensional one-hot vector denoting the label of
+the 𝑣-th node, and 𝐶 is the number of classes. Note that in the
+transductive learning setting, only a subset V𝑇 ⊂ V of the
+nodes is labeled, and thus Y𝑣 is a zero vector for all 𝑣 ∉ V𝑇 .
+A typical 𝐾-layer GNN consists of 𝐾 sequential graph
+convolution layers. Layer 𝑖 receives node embeddings from
+layer 𝑖 − 1 and outputs a new embedding for each node by
+aggregating the current embeddings of its adjacent neighbors
+followed by a learnable transformation, as deﬁned below:
+
+H(𝑖)
+
+𝑣 = upd
+
+(cid:16)
+
+agg
+
+(cid:16)
+
+{H(𝑖−1)
+𝑢
+
+: ∀𝑢 ∈ 𝔑𝑣 }
+
+(cid:17) ; 𝚯(𝑖) (cid:17)
+
+,
+
+where 𝔑𝑣 = {𝑢 : A𝑢,𝑣 ≠ 0} denotes the set of adjacent nodes
+to node 𝑣 (i.e., nodes with outbound edges toward 𝑣), and
+H(𝑖−1)
+is the embedding of an adjacent node 𝑢 at layer 𝑖 − 1.
+𝑢
+agg(·), is a (sub)diﬀerentiable, permutation invariant aggre-
+gator function, such as Sum, Mean, or Max. Finally, upd(·) is
+a learnable function, such as a multi-layer perceptron (MLP),
+parameterized by 𝚯(𝑖) that takes the aggregated vector and
+outputs the new embedding H(𝑖)
+𝑣 . For convenience, we deﬁne
+the matrix-based version of agg(·) and upd(·) by stacking the
+corresponding vectors of all the nodes into a matrix as:
+
+Agg(H, A) = [agg ({H𝑢 : ∀𝑢 ∈ 𝔑𝑣 }) : ∀𝑣 ∈ V]𝑇 ,
+Upd(M; 𝚯) = [upd (M𝑣 ; 𝚯) : ∀𝑣 ∈ V]𝑇 ,
+
+where we omitted the layer indicator superscripts for simplicity.
+Initially, we have H(0) = X (i.e., node features) as the input to
+the GNN’s ﬁrst layer. The last layer generates an output embed-
+ding vector for each node, which can be used in diﬀerent ways
+depending on the downstream task. For node classiﬁcation,
+a softmax layer is applied to the ﬁnal embeddings H(𝐾 ) to
+obtain the posterior class probabilities (cid:98)Y. The illustration of a
+typical 3-layer GNN is depicted in Figure 5.
+
+3.2 Diﬀerential Privacy
+
+Diﬀerential privacy (DP) [11] is the gold standard for for-
+malizing the privacy guarantees of algorithms that process
+
+ABDCEFIGJHBCDEAFGNN LayerGNN LayerGNN Layersensitive data. Informally, DP requires that the algorithm’s out-
+put distribution be roughly the same regardless of the presence
+of an individual’s data in the dataset. As such, an adversary
+having access to the data of all but the target individual cannot
+distinguish whether the target’s record is among the input data.
+The formal deﬁnition of DP is as follows.
+
+Deﬁnition 1 (Diﬀerential Privacy [11]). Given 𝜖 > 0 and
+𝛿 > 0, a randomized algorithm A satisﬁes (𝜖, 𝛿)-diﬀerential
+privacy, if for all possible pairs of adjacent datasets 𝑋 and
+𝑋 (cid:48) diﬀering by at most one record, denoted as 𝑋 ∼ 𝑋 (cid:48), and
+for any possible set of outputs 𝑆 ⊆ 𝑅𝑎𝑛𝑔𝑒(A), we have:
+
+Pr[A (𝑋) ∈ 𝑆] ≤ 𝑒 𝜖 Pr[A (𝑋 (cid:48)) ∈ 𝑆] + 𝛿.
+
+Here, the parameter 𝜖 is called the privacy budget (or privacy
+cost) and is used to tune the privacy-utility trade-oﬀ of the
+algorithm: a lower privacy budget leads to stronger privacy
+guarantees but reduced utility. The parameter 𝛿 is informally
+treated as a failure probability, and is usually chosen to be
+very small. DP has the following important properties that
+help us design complex algorithms from simpler ones [10]:
+
+• Robustness to post-processing: Any post-processing of the
+
+output of an (𝜖, 𝛿)-DP algorithm remains (𝜖, 𝛿)-DP.
+
+• Sequential composition: If an (𝜖, 𝛿)-DP algorithm is applied
+𝑘 times on the same data, the result is at most (𝑘𝜖, 𝑘𝛿)-DP.
+• Parallel composition: Executing an (𝜖, 𝛿)-DP algorithm on
+disjoint chunks of data yields an (𝜖, 𝛿)-DP algorithm.
+
+In this paper, we use an alternative deﬁnition of DP, called
+Rényi Diﬀerential Privacy (RDP) [29], which allows obtaining
+tighter sequential composition results:
+
+Deﬁnition 2 (Rényi Diﬀerential Privacy [29]). A random-
+ized algorithm A is (𝛼, 𝜖)-RDP for 𝛼 > 1, 𝜖 > 0 if for every
+adjacent datasets 𝑋 ∼ 𝑋 (cid:48), we have 𝐷 𝛼 (A (𝑋)(cid:107)A (𝑋 (cid:48))) ≤ 𝜖,
+where 𝐷 𝛼 (𝑃(cid:107)𝑄) is the Rényi divergence of order 𝛼 between
+probability distributions 𝑃 and 𝑄 deﬁned as:
+
+𝐷 𝛼 (𝑃(cid:107)𝑄) =
+
+1
+𝛼 − 1
+
+log E𝑥∼𝑄
+
+(cid:21) 𝛼
+
+.
+
+(cid:20) 𝑃(𝑥)
+𝑄(𝑥)
+
+As RDP is a generalization of DP, it can be easily converted
+back to standard (𝜖, 𝛿)-DP using the following proposition:
+
+Proposition 1. If A is an (𝛼, 𝜖)-RDP algorithm, then it also
+satisﬁes (𝜖 + log(1/ 𝛿)/𝛼−1, 𝛿)-DP for any 𝛿 ∈ (0, 1).
+
+A basic method to achieve RDP is the Gaussian mechanism,
+where Gaussian noise is added to the output of the algorithm
+we want to make private. Speciﬁcally, let 𝑓 : X → R𝑑 be the
+non-private algorithm taking a dataset as input and outputting a
+𝑑-dimensional vector. Let the sensitivity of 𝑓 be the maximum
+𝐿2 distance achievable when applying 𝑓 (·) to adjacent datasets
+𝑋 and 𝑋 (cid:48) as Δ 𝑓 = max𝑋 ∼𝑋 (cid:48) (cid:107) 𝑓 (𝑋) − 𝑓 (𝑋 (cid:48)) (cid:107)2. Then, adding
+Gaussian noise with variance 𝜎2 to 𝑓 as A (𝑋) = 𝑓 (𝑋) +
+N (𝜎2I𝑑), with I𝑑 being 𝑑 × 𝑑 identity matrix, yields an (𝛼, 𝜖)-
+RDP algorithm for all 𝛼 > 1 with 𝜖 = Δ2
+
+𝑓 𝛼/2𝜎2 [29].
+
+3.3 Problem Deﬁnition
+
+Let (cid:98)Y = F (X, A; 𝚯) be a GNN-based node classiﬁcation
+model with parameter set 𝚯 that takes node features X and
+the graph’s adjacency matrix A as input, and outputs the cor-
+responding predicted labels (cid:98)Y. To learn the model parameters
+𝚯, we minimize a standard classiﬁcation loss function (e.g.,
+cross-entropy) with respect to 𝚯 as follows:
+
+𝚯★ = arg min
+𝚯
+
+∑︁
+
+𝑣 ∈V𝑇
+
+ℓ((cid:98)Y𝑣 , Y𝑣 ),
+
+(1)
+
+where ℓ(·, ·) is the loss function, Y is the ground-truth labels,
+and V𝑇 ⊆ V is the set of labeled training nodes. After training,
+in the transductive setting, the learned GNN is used to infer
+the labels of unlabeled nodes in G:
+
+(cid:98)Y = F (X, A; 𝚯★),
+
+(2)
+
+Otherwise, in the inductive setting, a new graph dataset G𝑡𝑒𝑠𝑡
+is given to the learned GNN for label inference.
+
+The goal of this paper is to preserve the privacy of graph
+datasets for both the training step (Eq. 1) and the inference step
+(Eq. 2) using diﬀerential privacy. Note that preserving privacy
+in the inference step is critical as the adjacency information is
+still used in this step for obtaining the predicted labels.
+
+However, as graph datasets are diﬀerent from standard
+tabular datasets due to the existence of links between data
+records, one needs to adapt the deﬁnition of DP to graphs.
+As the semantic interpretation of DP relies on the deﬁnition
+of adjacent datasets, we ﬁrst deﬁne two diﬀerent notions
+of adjacency in graphs, namely edge-level and node-level
+adjacent graph datasets [18]:
+
+Deﬁnition 3 (Edge-level adjacent graphs). Two graphs G and
+G (cid:48) are edge-level adjacent if one can be obtained by removing
+a single edge from the other. Therefore, G and G (cid:48) diﬀer by at
+most one edge.
+
+Deﬁnition 4 (Node-level adjacent graphs). Two graphs G and
+G (cid:48) are node-level adjacent if one can be obtained by removing
+a single node (with its features, labels, and all attached edges)
+from the other. Therefore, G and G (cid:48) diﬀer by at most one node.
+
+Accordingly, the deﬁnition of edge-level and node-level
+DP follows from the above deﬁnitions: an algorithm A is
+edge-level (respectively, node-level) (𝜖, 𝛿)-DP if for every two
+edge-level (respectively, node-level) adjacent graph datasets
+G and G (cid:48) and any set of outputs 𝑆 ⊆ 𝑅𝑎𝑛𝑔𝑒(A), we have
+Pr[A (G) ∈ 𝑆] ≤ 𝑒 𝜖 Pr[A (G (cid:48)) ∈ 𝑆] + 𝛿.
+
+Intuitively, edge-level DP protects edges (which could rep-
+resent connections between people), while node-level DP
+protects nodes together with their adjacent edges (i.e., all
+information pertaining to an individual, including features,
+labels, and connections).
+
+4 Proposed Method: GAP
+
+In this section, we explain our proposed diﬀerentially private
+method, called GNN with Aggregation Perturbation (GAP),
+which guarantees both edge-level and node-level privacy for
+training and inference on sensitive graph data.
+
+4.1 Overview
+
+As mentioned in Section 1, the two primary challenges in the
+design of private GNNs come from the use of higher-order
+aggregations and the need to ensure inference privacy. To
+tackle these challenges, we propose a new architecture for
+GAP, which is diﬀerent from the conventional GNN archi-
+tectures presented in Section 3.1. The key distinction is that
+GAP decouples the graph-based aggregations from the neural
+network-based transformations, which is similar in spirit to
+the Inception model and scalable networks [13, 39, 45]. As
+illustrated in Figure 3, GAP is composed of the following
+three components:
+
+(i) Encoder Module (EM): This module encodes the input
+node features into a lower-dimensional representation
+without using the private graph structure.
+
+(ii) Aggregation Module (AM): This module takes the en-
+coded low-dimensional node features and recursively
+computes private multi-hop aggregations using the ag-
+gregation perturbation approach, i.e., by adding noise to
+the output of each aggregation step.
+
+(iii) Classiﬁcation Module (CM): This module takes the
+privately aggregated node features and predicts the corre-
+sponding labels without querying the edges any further.
+
+GAP’s privacy mechanism. Our proposed mechanism for
+preserving the privacy of graph edges in AM is the aggregation
+perturbation approach: we use the Gaussian mechanism to
+add stochastic noise to the output of the aggregation function
+proportional to its sensitivity. This approach is motivated by the
+fact that perturbing an edge in the input graph can practically be
+viewed as changing a sample in the neighborhood aggregation
+function of the edge’s destination node. Therefore, by adding
+an appropriate amount of noise to the aggregation function,
+we can eﬀectively hide the presence of a single edge, which
+ensures edge-level privacy, or a group of edges, which is
+necessary for node-level privacy. To fully guarantee node-
+level privacy, however, in addition to the edges, we need to
+also protect node features and labels, which is simply done by
+training EM and CM using standard DP learning algorithms
+such as DP-SGD. We discuss this point further in Section 5.
+
+Challenges addressed. Our GAP method can beneﬁt from
+multi-hop aggregations by composing individual noisy aggre-
+gation steps. As the sensitivity of a single-step aggregation
+is easily determined, AM applies the Gaussian mechanism
+
+immediately after each aggregation step, avoiding the grow-
+ing interdependency between node embeddings. GAP also
+provides inference privacy as the inference of a node relies
+on the aggregated data from its neighbors, which is privately
+computed by AM. As the subsequent CM only post-processes
+these private aggregations, GAP ensures inference-time pri-
+vacy. This is explained in more details in Section 5.
+
+In the rest of this section, we ﬁrst discuss each of the
+GAP’s components thoroughly and then describe the inference
+mechanism.
+
+4.2 Encoder Module
+
+GAP uses a multi-layer perceptron (MLP) model as an encoder
+to transform the original node features into an intermediate
+representation given to AM. The main goal of this module is to
+reduce the dimensionality of AM’s input, as the magnitude of
+the Gaussian noise injected into the aggregations grows with
+data dimensionality. Therefore, reducing the dimensionality
+helps achieve better aggregation utility under DP.
+
+Note that in order to save the privacy budget spent in AM,
+we do not train the encoder end-to-end with CM. Instead, we
+attach a linear softmax layer to the encoder MLP for label
+prediction, and then pre-train this model separately using node
+features and labels. Speciﬁcally, we use the following model:
+
+(3)
+
+(cid:98)Y = softmax (MLPenc (X; 𝚯enc) · W) ,
+where MLPenc is the encoder MLP with parameter set 𝚯enc,
+W is the weight matrix of the linear softmax layer, X is the
+original node features, and (cid:98)Y is the corresponding posterior
+class probabilities. In order to train this model, we minimize the
+cross-entropy (or any other classiﬁcation-related) loss function
+ℓ(·, ·) with respect to the model parameters 𝚯 = {𝚯enc, W}:
+
+𝚯★ = arg min
+𝚯
+
+∑︁
+
+ℓ((cid:98)Y𝑣 , Y𝑣 ),
+
+(4)
+
+𝑣 ∈V𝑇
+where Y is the ground-truth labels and V𝑇 ⊆ V is the set of
+training nodes. After pre-training, we use the encoder MLP to
+extract low-dimensional node features, X(0) , for AM:
+
+X(0) = MLPenc (X; 𝚯★
+
+enc).
+
+(5)
+
+Remark. As will be discussed in Section 4.3, this encoder pre-
+training approach signiﬁcantly reduces the model’s privacy
+costs as the private aggregations in AM no longer need to be
+updated with the encoder’s parameters. Besides, compared
+to the original features, this approach provides better node
+features to AM as the encoded representations incorporate
+label information as well.
+
+4.3 Aggregation Module
+
+The goal of AM is to privately release multi-hop aggregated
+node features using the aggregation perturbation method. Al-
+gorithm 1 presents our mechanism, the Private Multi-hop
+
+Aggregation (PMA). It relies on the Sum aggregation func-
+tion, which is simply equivalent to the multiplication of
+the adjacency matrix A by the input feature matrix X, as
+Agg(X, A) = A𝑇 · X. The PMA mechanism takes ˇX(0) , the
+row-normalized version of the encoder’s extracted features as:
+
+ˇX(0)
+
+𝑣 = X(0)
+
+𝑣 /(cid:107)X(0)
+
+𝑣 (cid:107)2, ∀𝑣 ∈ V.
+
+(6)
+
+It then outputs a set of 𝐾 normalized, privately aggregated node
+features ˇX(1) to ˇX(𝐾 ) corresponding to diﬀerent hops from 1
+to 𝐾. Speciﬁcally, given 𝜎 > 0, the PMA mechanism performs
+the following steps to recursively compute and perturb the
+aggregations in 𝑘-th hop from (𝑘 − 1)-th:
+
+1. Aggregation: First, we compute 𝑘-th non-private aggre-
+gations using the normalized aggregations at step 𝑘 − 1:
+
+X(𝑘) = A𝑇 · ˇX(𝑘−1) .
+2. Perturbation: Next, we perturb the aggregations using the
+Gaussian mechanism, i.e., by adding noise with variance
+𝜎2 to every row of X(𝑘) independently:
+
+(7)
+
+𝑣 = X(𝑘)
+(cid:101)X(𝑘)
+
+𝑣 + N (𝜎2I), ∀𝑣 ∈ V.
+
+(8)
+
+3. Normalization: Finally, it is essential to bound the ef-
+fect of each feature vector on the subsequent aggregations.
+Therefore, we again row-normalize the private aggregated
+features, such that the L2-norm of each row is 1:
+
+ˇX(𝑘)
+𝑣 = (cid:101)X(𝑘)
+
+𝑣 /||(cid:101)X(𝑘)
+
+𝑣
+
+||2, ∀𝑣 ∈ V.
+
+(9)
+
+Remark. The recursive computation of aggregations in the
+PMA mechanism has one advantage: each aggregation step
+acts as a denoising mechanism, averaging out the DP noise
+added in the previous step (to some extent). Therefore, part of
+the injected noise is dampened by the PMA mechanism itself,
+leading to better aggregation utility. This noise-reducing eﬀect
+of GNN aggregations is also observed in prior work [38].
+
+Eﬀect of EM. Note that EM plays a critical role in improving
+AM’s privacy-utility trade-oﬀ: First, it increases the utility of
+noisy aggregations by reducing the dimensionality of AM’s
+input, resulting in less noise added to the aggregations. Second,
+its pre-training strategy makes AM agnostic to model training,
+which remarkably reduces the total privacy costs as the PMA
+mechanism is called only once and its output is cached to
+be reused for entire training and inference. Technically, this
+implies that with 𝑇 training iterations, the Gaussian mechanism
+is composed only 𝐾 times, which would otherwise be 𝐾𝑇 in
+the case of end-to-end training. Since 𝐾 is small (1 ≤ 𝐾 ≤ 5)
+compared to 𝑇 (in the order of hundreds), this leads to a
+substantial reduction in the privacy budget.
+
+Algorithm 1: Private Multi-hop Aggregation
+
+Input
+
+:Graph G = ( V, E) with adjacency matrix A; initial
+normalized features ˇX(0) ; max hop 𝐾 ; noise variance 𝜎2;
+Output :Private aggregated node feature matrices ˇX(1) , . . . , ˇX(𝐾 )
+
+1 for 𝑘 ∈ {1, . . . , 𝐾 } do
+2
+
+X(𝑘) ← A𝑇 · ˇX(𝑘−1)
+(cid:101)X(𝑘) ← X(𝑘) + N ( 𝜎2I)
+for 𝑣 ∈ V do
+𝑣 ← (cid:101)X(𝑘)
+ˇX(𝑘)
+
+𝑣 /| |(cid:101)X(𝑘)
+
+𝑣
+
+3
+
+4
+
+5
+
+end
+
+6
+7 end
+8 return ˇX(1) , . . . , ˇX(𝐾 )
+
+// aggregate
+// perturb
+
+| |2
+
+// normalize
+
+without further relying on the graph edges. To this end, for
+each 𝑘 ∈ {0, 1, . . . , 𝐾 }, we ﬁrst obtain the 𝑘-hop representation
+H(𝑘) using a corresponding base MLP, denoted as MLP(𝑘)
+base:
+
+H(𝑘) = MLP(𝑘)
+
+base ( ˇX(𝑘) ; 𝚯(𝑘)
+
+base),
+
+(10)
+
+where 𝚯(𝑘)
+base. Next, we combine
+these representations to get an integrated node embedding H:
+
+base is the parameters of MLP(𝑘)
+
+H = Combine (cid:16)
+
+{H(0) , H(1) , . . . , H(𝐾 ) }; 𝚯comb
+
+(cid:17)
+
+,
+
+(11)
+
+where Combine is any diﬀerentiable combination strategy,
+with common choices being summation, concatenation, or
+attention, potentially with parameter set 𝚯comb. Finally, we
+feed the integrated representation into a head MLP, denoted
+as MLPhead, to get posterior class probabilities for the nodes:
+
+(cid:98)Y = MLPhead(H; 𝚯head),
+
+(12)
+
+where 𝚯head denotes the parameters of MLPhead. To train CM,
+we minimize a similar loss function as Eq. 4 but with respect to
+CM’s parameters: 𝚯 = {𝚯(0)
+base, 𝚯comb, 𝚯head}. The
+overall training procedure of GAP is presented in Algorithm 2.
+
+base, . . . , 𝚯(𝐾 )
+
+Remark. CM independently processes the information en-
+coded in the graph-agnostic node features ˇX(0) and the pri-
+vate, graph-based aggregated features ˇX(1) to ˇX(𝐾 ) , combin-
+ing them together to get an integrated node representation.
+Therefore, even if the DP noise overwhelms the signal in the
+higher-level aggregations, the information in the lower-level
+aggregations and/or the graph-agnostic features is still pre-
+served and exploited for classiﬁcation. As a result, regardless
+of the privacy budget, GAP is expected to always perform on
+par or better than pure MLP-based models that do not rely
+on the graph structure. We will empirically demonstrate this
+point in our experiments.
+
+4.4 Classiﬁcation Module
+Given the list of private aggregated features { ˇX(0) , . . . , ˇX(𝐾 ) }
+provided by AM, the goal of CM is to predict node labels
+
+4.5
+
+Inference Mechanism
+
+GAP is compatible with both the transductive and the inductive
+inference, as discussed below.
+
+Algorithm 2: GAP Training
+
+Input
+
+:Graph G = ( V, E) with adjacency matrix A; node
+features X; node labels Y; max hop 𝐾 ; noise variance 𝜎2;
+
+comb, 𝚯★
+
+head };
+
+Output :Trained model parameters
+enc, 𝚯★ (0)
+base, . . . , 𝚯★ (𝐾 )
+base , 𝚯★
+enc.
+
+{𝚯★
+
+1 Pre-train EM (Eq. 3) to obtain 𝚯★
+2 Use the pre-trained encoder (Eq. 5) to obtain encoded features X(0) .
+3 Row-normalize the encoded features (Eq. 6) to obtain ˇX(0) .
+4 Use Algorithm 1 to obtain private aggregations ˇX(1) , . . . , ˇX(𝐾 ) .
+5 Train CM (Eq. 10-12) to get 𝚯★ (0)
+enc, 𝚯★ (0)
+base, . . . , 𝚯★ (𝐾 )
+6 return {𝚯★
+
+base, . . . , 𝚯★ (𝐾 )
+comb, 𝚯★
+base , 𝚯★
+
+base , 𝚯★
+head }
+
+comb, 𝚯★
+
+head.
+
+Transductive setting. In this setting, both training and infer-
+ence are conducted on the same graph, but using diﬀerent
+nodes for training and inference steps (Figure 4a). As the
+entire graph is available at training time, AM computes the
+private aggregations of all the nodes, including both training
+and test ones. Therefore, at inference time, we only give the
+cached aggregations of the test nodes to the trained CM to
+predict their labels.
+
+Inductive setting. Here, we use a new graph for inference
+diﬀerent from the one used for training (Figure 4b). In this
+case, we ﬁrst extract low-dimensional node features for the
+new graph using the pre-trained encoder and then feed them
+to AM to obtain the private aggregations. Finally, we input the
+private aggregations to the trained CM to get the node labels.
+
+5 Privacy Analysis
+
+5.1 Edge-Level Privacy
+
+In the following, we provide a formal analysis of GAP’s
+edge-level privacy guarantees at training and inference stages.
+
+Training privacy. The following arguments establish the DP
+guarantees of the PMA mechanism and the GAP training
+algorithm. The detailed proofs can be found in Appendix A.
+
+Theorem 1. Given the maximum hop 𝐾 ≥ 1 and noise vari-
+ance 𝜎2, the PMA mechanism presented in Algorithm 1 satis-
+ﬁes edge-level (𝛼, 𝐾 𝛼/2𝜎2)-RDP for any 𝛼 > 1.
+
+Proposition 2. For any 𝛿 ∈ (0, 1), maximum hop 𝐾 ≥ 1, and
+noise variance 𝜎2, Algorithm 2 satisﬁes edge-level (𝜖, 𝛿)-DP
+with 𝜖 = 𝐾
+
+2𝐾 log (1/ 𝛿)/𝜎.
+
+√
+
+2𝜎2 +
+
+Proposition 2 shows that the privacy cost grows with the
+number of hops (𝐾), but is independent of the number of
+training steps thanks to our GAP architecture.
+
+Inference privacy. A major advantage of GAP is that querying
+the model at inference time preserves DP without consuming
+additional privacy budget. This is true for both the transductive
+and the inductive settings:
+
+• Transductive setting: In this setting, the inference is per-
+formed by feeding the privately trained CM with the cached
+aggregations of the test nodes, which have already been
+computed privately at training time. As this computation
+does not query the private graph structure and only post-
+processes the previous DP operations, due to the robustness
+of DP to post-processing, GAP provides inference privacy
+with no additional cost.
+
+• Inductive setting: In this case, ﬁrst the new graph’s node
+features are given to the encoder to obtain low-dimensional
+features, which are fed to AM to compute private aggrega-
+tions. Then, the private aggregations are given to CM to
+obtain the ﬁnal predictions. The only part where the private
+graph structure is queried is the AM, in which the PMA
+mechanism is applied to the new graph data, and thus the
+output is private. Furthermore, since the training and test
+graphs are disjoint, this application of the PMA mechanism
+is subject to the parallel composition of diﬀerentially pri-
+vate mechanisms, and thus it does not increase the privacy
+costs beyond that of training’s. The other parts, the encoder
+and CM, perform graph-agnostic computations and only
+post-process previous DP outputs, leading to GAP ensuring
+inference privacy without extra privacy costs.
+
+5.2 Node-Level Privacy
+
+Equipped with aggregation perturbation, the proposed GAP
+architecture guarantees edge-level privacy by default. However,
+it is readily extensible to provide node-level privacy guarantees
+as well, providing that we have bounded-degree graphs, i.e.,
+the degree of each node should be bounded above by a constant
+𝐷. This allows to bound the sensitivity of the aggregation
+function in the PMA mechanism when adding/removing a
+node, as in this case each node can inﬂuence at most 𝐷 other
+nodes. If the input graph has nodes with very high degrees, we
+can use neighbor sampling (as proposed in [7]) to randomly
+sample at most 𝐷 neighbors per node.
+
+For bounded-degree graphs, adding or removing a node
+corresponds (in the worst case) to adding or removing 𝐷
+edges. Therefore, our PMA mechanism also ensures node-
+level privacy, albeit with increased privacy costs compared to
+the edge-level setting (see Theorem 2 below).
+
+However, since the node features and labels are also private
+under node-level DP, both EM and CM need to be trained
+privately as they access node features/labels. To this end, we
+can simply use standard DP-SGD [2] or any other diﬀeren-
+tially private learning algorithm for pre-training the encoder
+as well as training CM with DP. In other words, steps 1 and
+5 of Algorithm 2 must be done with DP instead of regular
+non-private training. This way, since each of the three GAP
+modules become node-level private, the entire GAP model, as
+an adaptive composition of several node-level private mecha-
+nisms, satisﬁes node-level DP. The formal node-level privacy
+
+analysis of GAP’s training and inference is provided below.
+
+Training privacy. The node-level privacy guarantees of the
+PMA mechanism and the GAP training algorithm are as
+follows. Detailed proofs are deferred to Appendix A.
+
+Theorem 2. Given the maximum degree 𝐷 ≥ 1, maximum hop
+𝐾 ≥ 1, and noise variance 𝜎2, Algorithm 1 (PMA mechanism)
+satisﬁes node-level (𝛼, 𝐷𝐾 𝛼/2𝜎2)-RDP for any 𝛼 > 1.
+
+Proposition 3. For any 𝛼 > 1, let encoder pre-training (Step 1
+of Algorithm 2) and CM training (Step 5 of Algorithm 2) satisfy
+(𝛼, 𝜖1 (𝛼))-RDP and (𝛼, 𝜖5 (𝛼))-RDP, respectively. Then, for
+any 0 < 𝛿 < 1, maximum hop 𝐾 ≥ 1, maximum degree 𝐷 ≥ 1,
+and noise variance 𝜎2, Algorithm 2 satisﬁes node-level (𝜖, 𝛿)-
+DP with 𝜖 = 𝜖1(𝛼) + 𝜖5 (𝛼) + 𝐷𝐾 𝛼/2𝜎2 + log(1/ 𝛿)/𝛼−1.
+
+Note that in Proposition 3, we cannot optimize 𝛼 in closed
+form as we do not know the precise form of 𝜖1(𝛼) and 𝜖5 (𝛼).
+However, in our experiments, we numerically optimize the
+choice of 𝛼 on a per-case basis.
+
+Inference privacy. The arguments stated for edge-level infer-
+ence privacy also hold for node-level privacy. Note that in
+the inductive setting, the test graph should also have bounded
+degree for the node-level inference privacy guarantees to hold.
+
+vector will be. This implies that graphs with higher average
+degree per node can tolerate larger noise in the aggregation
+function, and thus GAP can achieve a better privacy-accuracy
+trade-oﬀ on such graphs. Conversely, GAP’s performance will
+suﬀer if the average degree of the graph is too low, requiring
+higher privacy budgets to achieve acceptable accuracy. Note
+however that this is an expected behavior: nodes with fewer
+inbound neighbors are more easily inﬂuenced by a change in
+their neighborhood compared to nodes with higher degrees,
+and thus the privacy of low-degree nodes is harder to preserve
+than high-degree ones. Furthermore, this limitation is not
+speciﬁc to GAP: it is shared by all DP algorithms, whose
+performance generally suﬀer from lack of suﬃcient data.
+
+Edge-level vs. node-level privacy. While GAP can work in
+either edge-level or node-level privacy settings, it must be
+emphasized that the former setting is suitable only for the use
+cases where the node-level information (e.g, features or labels)
+is not sensitive or is publicly available (e.g., the vertically
+partitioned graph setting described in [44]). Whenever node-
+level information is private as well (e.g., user proﬁles in a
+social network), however, edge-level privacy fails to provide
+appropriate privacy protection, and thus node-level privacy
+setting has to be enforced.
+
+6 Discussion
+
+7 Experiments
+
+Choice of aggregation function. In this paper, we used Sum
+as the default choice of aggregation function. Although other
+choices of aggregation functions are also possible, we empiri-
+cally found that Sum is the most eﬃcient choice to privatize,
+as its sensitivity does not depend on the size of the aggregation
+set (i.e., number of neighbors), which is itself a quantity that
+should be computed privately. For example, the calculation
+of both Mean and GCN [26] aggregation functions depend
+on the node degrees, and thus requires additional privacy
+budget to be spent on perturbing node degrees. In any case,
+Sum is recognized as one of the most expressive aggregation
+functions in the GNN literature [6, 47].
+
+Normalization instead of clipping. The PMA mechanism
+uses normalization to bound the eﬀect of each individual
+feature on the Sum aggregation function. While clipping is
+more common in the private learning literature (e.g., gradient
+clipping in DP-SGD [2]), we empirically found that normaliza-
+tion is a better choice for aggregation perturbation: CM is then
+trained on normalized data, which tends to facilitate learning.
+Normalizing the node embeddings is actually commonly done
+in non-private GNNs as well to stabilize training [16, 50].
+
+Limitations. As the PMA mechanism adds random noise
+to the aggregation function, its utility naturally depends on
+the size of the node’s aggregation set, i.e., the node’s degree.
+Speciﬁcally, with a certain amount of noise, the more inbound
+neighbors a node has, the more accurate its noisy aggregated
+
+In this section, we conduct extensive experiments to empiri-
+cally evaluate GAP’s privacy-accuracy performance and its
+resilience under privacy attacks. As GAP’s privacy guarantees
+are the same under both transductive and inductive settings,
+we only focus on the former, which has also more pertinent
+use cases (e.g., social networks).
+
+7.1 Datasets
+
+We evaluate the proposed method on three publicly available
+node classiﬁcation datasets, which are medium to large scale
+in terms of the number of nodes and edges:
+
+Facebook [40]. This dataset contains the anonymized Face-
+book social network between UIUC students collected in
+September 2005. Nodes represent Facebook users and edges
+indicate friendship. Each node (user) has the following at-
+tributes: student/faculty status, gender, major, minor, and hous-
+ing status, and the task is to predict the class year of users.
+
+Reddit [16]. This dataset consist of a set of posts from the
+Reddit social network, where each node represents a post
+and an edge indicates if the same user commented on both
+posts. Node features are extracted based on the embedding
+of the post contents, and the task is to predict the community
+(subreddit) that a post belongs to.
+
+Amazon [5]. The largest dataset used in this paper represents
+Amazon product co-purchasing network, where nodes
+
+Table 1: Overview of dataset statistics.
+
+7.3 Experimental Setup
+
+Dataset
+
+Nodes
+
+Edges
+
+Degree
+
+Features Classes
+
+Facebook
+Reddit
+Amazon
+
+26,406
+116,713
+1,790,731
+
+2,117,924
+46,233,380
+80,966,832
+
+62
+209
+22
+
+501
+602
+100
+
+6
+8
+10
+
+represent products sold on Amazon and an edge indicates
+if two products are purchased together. Node features are
+bag-of-words vectors of the product description followed by
+PCA, and the task is to predict the category of the products.
+
+We preprocess the datasets by limiting the classes to those
+having 1k, 10k, and 100k nodes on Facebook, Reddit, and
+Amazon, respectively. We then randomly split the remaining
+nodes into training, validation, and test sets with 75/10/15%
+ratios, respectively. Table 1 summarizes the statistics of the
+datasets after preprocessing.
+
+7.2 Competing Methods
+
+Edge-level private methods. The following methods are
+evaluated under edge-level privacy:
+• GAP-EDP: Our proposed edge-level DP algorithm.
+• SAGE-EDP: This is the method of Wu et al. [44] that uses
+the graph perturbation approach, with the popular Graph-
+SAGE architecture [16] as its backbone GNN model. We
+perturb the graph’s adjacency matrix using the Asymmetric
+Randomized Response (ARR) [21], which performs better
+than EdgeRand [44] by limiting the output sparsity.
+
+• MLP: A simple MLP model that does not use the graph
+edges, and thus provides perfect edge-level privacy (𝜖 = 0).
+
+Node-level private methods. We compare the following node-
+level private algorithms:
+• GAP-NDP: Our proposed node-level DP approach.
+• SAGE-NDP: This is the method of Daigavane et al. [7] that
+adapts the standard DP-SGD method for 1-layer GNNs, with
+the same GraphSAGE architecture as its backbone model.
+Since this method does not inherently ensure inference
+privacy, as suggested by its authors, we add noise to the
+aggregation function based on its node-level sensitivity at
+test time and account for the additional privacy cost.
+
+• MLP-DP: Similar to MLP, but trained with DP-SGD so as
+to provide node-level DP without using the graph edges.
+We do not consider the approach of [32] as it requires public
+graph data and is thus not directly comparable to the others.
+
+Non-private methods. To quantify the accuracy loss of pri-
+vate approaches, we use the following non-private methods
+(𝜖 = ∞):
+• GAP-∞: a non-private counterpart of the GAP method,
+
+where we do not perturb the aggregations.
+• SAGE-∞: a non-private GraphSAGE model.
+
+Model implementation details. For our GAP models (GAP-
+EDP, GAP-NDP, and GAP-∞), we set the number of MLPenc,
+MLPbase, and MLPhead layers to be 2, 1, and 1, respectively. We
+use concatenation as the Combine function (Eq. 11) and tune
+the number of hops 𝐾 in {1, 2, . . . , 5}. For the GraphSAGE
+models (SAGE-EDP, SAGE-NDP, and SAGE-∞), we use the
+Sum aggregation function and tune the number of message-
+passing layers in {1, 2, . . . , 5}, except for SAGE-NDP that only
+supports one message-passing layer. We use a 2-layer and a
+1-layer MLP as preprocessing and post-processing before and
+after the message-passing layers, respectively. For the MLP
+baselines (MLP and MLP-DP), we set the number of layers
+to 3. In addition, for both the GAP-NDP and SAGE-NDP
+methods, we use randomized neighbor sampling to bound
+the maximum degree 𝐷 and search for the best 𝐷 within
+{100, 200, 300, 400}. For all methods, we set the number of
+hidden units to 16 (including the dimension of GAP’s encoded
+representation) and use the SeLU activation function [27]
+at every layer. Batch-normalization is used for all methods
+except the node-level private ones (GAP-NDP, SAGE-NDP,
+and MLP-DP), for which batch-normalization is not supported.
+
+Training and evaluation details. We train the non-private
+and edge-level private methods using the Adam optimizer
+over 100 epochs with full-sized batches. For the node-level
+private algorithms (GAP-NDP, SAGE-NDP, MLP-DP), we
+use DP-Adam [15] with maximum gradient norm set to 1,
+and train each model for 10 epochs with a batch size of 256,
+2048, 4096 on Facebook, Reddit, and Amazon, respectively.
+For our GAP models (GAP-∞, GAP-EDP, and GAP-NDP), we
+use the same parameter setting for training both the encoder
+and classiﬁcation modules. We train all the methods with a
+learning rate of 0.01 and repeat each combination of possible
+hyperparameter values 10 times. We pick the best performing
+model based on validation accuracy, and report the average
+test accuracy with 95% conﬁdence interval calculated by
+bootstrapping with 1000 samples.
+
+Privacy accounting and calibration. Privacy budget ac-
+counting is done via the Analytical Moments Accountant [43].
+We numerically calibrate the noise scale (i.e., the noise stan-
+dard deviation 𝜎 divided by the sensitivity) of PMA (for
+GAP-EDP and GAP-NDP), ARR (for SAGE-EDP), DP-SGD
+(for GAP-NDP, SAGE-NDP, and MLP-DP) and the Gaussian
+mechanism (for inference privacy in SAGE-NDP) to achieve
+the desired (𝜖, 𝛿)-DP. We report results for several values of 𝜖,
+while 𝛿 is set to be smaller than the inverse number of private
+entities (i.e., edges for edge-level privacy, nodes for node-level
+privacy). For both GAP-NDP and SAGE-NDP, we use the
+same noise scale for perturbing the gradients (in DP-SGD)
+and the aggregations (in PMA and Gaussian mechanisms).
+
+Software and hardware. All the models are implemented in
+PyTorch [35] using PyTorch-Geometric (PyG) [12]. We use
+
+Table 2: Test accuracy of diﬀerent methods on the three
+datasets. The best performing method in each category — none-
+private, edge-level DP and node-level DP — is highlighted.
+
+Method
+
+𝜖
+
+Facebook
+
+Reddit
+
+Amazon
+
+e GAP-∞
+n
+o
+N
+
+SAGE-∞
+
+∞ 80.0 ± 0.48
+∞ 83.2 ± 0.68
+
+P GAP-EDP
+D
+e
+g
+d
+E
+
+SAGE-EDP
+MLP
+
+P GAP-NDP
+D
+e
+d
+o
+N
+
+SAGE-NDP
+MLP-DP
+
+4
+4
+0
+
+8
+8
+8
+
+76.3 ± 0.21
+50.4 ± 0.69
+50.8 ± 0.17
+
+63.2 ± 0.35
+37.2 ± 0.96
+50.2 ± 0.25
+
+99.4 ± 0.02
+99.1 ± 0.01
+
+98.7 ± 0.03
+84.6 ± 1.63
+82.4 ± 0.10
+
+94.0 ± 0.14
+60.5 ± 1.10
+81.5 ± 0.12
+
+91.2 ± 0.07
+92.7 ± 0.09
+
+83.8 ± 0.26
+68.3 ± 0.99
+71.1 ± 0.18
+
+77.4 ± 0.07
+27.5 ± 0.83
+73.6 ± 0.05
+
+the autodp library1 which implements analytical moments
+accountant, and utilize Opacus [51] for training the node-level
+private models with diﬀerential privacy. Experiments are
+conducted on Sun Grid Engine with NVIDIA GeForce RTX
+3090 and NVIDIA Tesla V100 GPUs, Intel Xeon 6238 CPUs,
+and 32 GB RAM.
+
+7.4 Experimental Results
+
+7.4.1 Trade-oﬀs between Privacy and Accuracy
+
+We ﬁrst compare the accuracy of our proposed methods against
+the non-private, edge-level private, and node-level private base-
+lines. We ﬁx the privacy budget to 𝜖 = 8 for the node-level
+private methods and 𝜖 = 4 for the edge-level private ones
+(except for MLP, which does not use the graph structure and
+thus achieves 𝜖 = 0). The results are presented in Table 2. We
+observe that in the non-private setting, the proposed GAP archi-
+tecture is competitive with SAGE, with only a slight decrease in
+accuracy on Facebook and Amazon. Under both edge-level and
+node-level privacy settings, however, our proposed methods
+GAP-EDP and GAP-NDP signiﬁcantly outperform their com-
+petitors. Particularly, under edge-level privacy, GAP-EDP’s
+accuracy is roughly 26, 14, and 15 points higher than the best
+competitor over Facebook, Reddit, and Amazon, respectively.
+Under node-level privacy, our proposed GAP-NDP method
+outperforms the best performing competitor by approximately
+13, 13, and 4 accuracy points, respectively.
+
+Next, to investigate how diﬀerent methods perform under
+diﬀerent privacy budgets, we vary 𝜖 from 0.1 to 8 for edge-
+level private methods and from 1 to 16 for node-level private
+algorithms and report the accuracy of the methods under each
+privacy budget. The result for both edge-level and node-level
+privacy settings is depicted in Figure 6.
+
+Under edge-level privacy (Figure 6, left side), we observe
+that GAP-EDP consistently outperforms its direct competitor,
+SAGE-EDP, especially at lower privacy costs. The relative
+gap between GAP-EDP and SAGE-EDP is inﬂuenced by the
+average degree of the dataset. For example, on Facebook and
+
+1https://github.com/yuxiangw/autodp
+
+Reddit with higher average degrees, SAGE-EDP requires a
+high privacy budget of 𝜖 ≥ 8 to achieve reasonable accuracy,
+but on Amazon, which has the lowest average degree, it cannot
+even beat the MLP baseline. In comparison, the accuracy of
+GAP-EDP approaches the non-private GAP-∞ at much lower
+privacy budgets, and always performs better than a vanilla MLP.
+This is because SAGE-EDP perturbs the adjacency matrix,
+which is extremely high-dimensional and sparse, while GAP-
+EDP perturbs the aggregated node embeddings, which has
+much lower dimensions and is not sparse compared to the
+adjacency matrix. The amount of accuracy loss with respect to
+the non-private method also depends on the average degree of
+the graph. For example, on Reddit at 𝜖 = 2, GAP-∞’s accuracy
+is only 1 point higher than GAP-EDP’s, while on Amazon at
+𝜖 = 8, GAP-EDP’s accuracy fall behind GAP-∞ by around
+5 points. These observations are in line with our discussion
+of Section 6.
+
+We can observe similar trends under node-level privacy (Fig-
+ure 6, right side). We see that our GAP-NDP method always
+performs on par or better than the MLP-DP baseline, and also
+signiﬁcantly outperforms SAGE-NDP under all the considered
+privacy budgets. We attribute this to two factors: ﬁrst, SAGE-
+NDP is limited to 1-layer models and thus cannot exploit
+higher-order aggregations; second, the naive noisy aggrega-
+tion patch for supporting inference privacy severely hurts the
+performance of SAGE-NDP. As expected, since the node-level
+private GAP-NDP hides more information (e.g., node features,
+labels, and all the adjacent edges to a node) than the edge-level
+private GAP-EDP, it requires larger privacy budgets to achieve
+a reasonable accuracy. Still, the accuracy loss with respect
+to the non-private method is higher in the node-level private
+method as we have further information loss due to neighbor-
+hood sampling (to bound the graph’s maximum degree) and
+gradient clipping (to bound the sensitivity in DP-SGD/Adam).
+
+7.4.2 Resilience Against Privacy Attacks
+
+As mentioned above, the node-level private methods require a
+higher privacy budget than the edge-level private ones as they
+attempt to hide much more information. In order to assess the
+practical implications of choosing rather large privacy budgets
+(e.g., 𝜖 = 8 in Table 2), we empirically measure the privacy
+guarantees of GAP-NDP and other node-level private methods
+by conducting node-level membership inference attack [20,33]
+as the most relevant adapted privacy attack to GNNs.
+
+Attack overview. The attack is modeled as a binary classiﬁca-
+tion task, where the goal is to infer whether an arbitrary node 𝑣
+is a member of the training set V𝑇 of the target GNN. The key
+intuition is that due to overﬁtting, GNNs give more conﬁdent
+probability scores to training nodes than to test ones, which
+can be exploited by the attacker to distinguish members of the
+training set. Having access to a shadow graph dataset coming
+from the same distribution as the target graph, the attacker
+ﬁrst trains a shadow GNN to mimic the behavior of the target
+
+Figure 6: Accuracy vs. privacy cost (𝜖) of edge-level private algorithms (left) and node-level private methods (right).
+
+GNN, but for which the membership ground truth is known.
+Then, the attacker trains an attack model over the probability
+scores of the shadow graph nodes and their corresponding
+membership labels. Finally, the attacker uses the trained attack
+model to infer the membership of the target graph nodes.
+
+Attack settings. We follow the TSTF (train on subgraph, test
+on full graph) approach of [33] for the node-level membership
+inference attack. Speciﬁcally, we consider a strong adversary
+with access to a shadow graph dataset with 1000 nodes per
+class, which are sampled uniformly at random from the target
+dataset. For the shadow model, we use the same architecture
+and hyperparameters as the target model (described in Sec-
+tion 7.3). Similar to prior work [33], we use a 3-layer MLP
+with 64 hidden units as the attack model, and use the area under
+the receiver operating characteristic curve (AUC) averaged
+over 10 runs as the evaluation metric.
+
+Results. Table 3 reports the mean AUC of the attack on
+diﬀerent node-level private methods trained with the same
+setting as in Figure 6 (right). As we see, the attack is quite
+eﬀective on the non-private methods (𝜖 = ∞), especially on
+Facebook and Amazon datasets. The success of the attack on
+each method mainly depends on its generalization gap (the
+diﬀerence between the training and test accuracy): the higher
+the generalization gap, the more conﬁdent the model is on the
+training nodes and the easier it is to distinguish them from the
+test nodes. Hence, the lower attack performance on the non-
+private SAGE method is due to its lower generalization gap
+compared to the other methods. Nevertheless, for all private
+GNN methods, we observe that DP with privacy budgets
+as large as 𝜖 = 16 can eﬀectively defend against the attack,
+reducing the AUC to about 50% (random baseline) on all
+datasets. This result is in line with the work of [22, 23, 31],
+showing that DP with large privacy budgets can still eﬀectively
+mitigate realistic membership inference attacks.
+
+7.4.3 Ablation Studies
+
+Eﬀectiveness of the encoder module (EM). In this experi-
+ment, we investigate the eﬀect of EM on the accuracy/privacy
+performance of the proposed methods, GAP-EDP and GAP-
+NDP. We compare the case in which EM is used as usual with
+
+Table 3: Mean AUC of node membership inference attack.
+
+Dataset Method
+
+𝜖 = 1 𝜖 = 2 𝜖 = 4 𝜖 = 8 𝜖 = 16 𝜖 = ∞
+
+GAP-NDP
+
+50.16 50.25 50.61 51.11 52.66
+Facebook SAGE-NDP 50.25 50.20 50.23 50.17 50.20
+50.32 50.72 52.13 53.44 54.77
+
+MLP-DP
+
+Reddit
+
+Amazon
+
+GAP-NDP
+50.04 50.39 51.20 52.23 52.54
+SAGE-NDP 49.97 49.97 49.95 50.00 49.98
+51.25 53.09 55.13 56.72 58.32
+MLP-DP
+
+GAP-NDP
+50.06 50.23 50.54 51.53 51.72
+SAGE-NDP 49.93 49.93 49.93 49.92 49.97
+50.30 50.58 51.43 52.31 53.34
+MLP-DP
+
+81.67
+62.49
+81.57
+
+54.97
+50.05
+71.35
+
+66.68
+59.41
+72.97
+
+the case where we remove EM and just input the original node
+features to the aggregation module. The results under diﬀerent
+privacy budgets are given in Figure 7. We can observe that in
+all cases, the accuracy of GAP-EDP and GAP-NDP is higher
+with EM than without it. For example, leveraging EM results
+in a gain of around 20, 2, and 5 accuracy points for GAP-EDP
+with 𝜖 = 1 on Facebook, Reddit, and Amazon datasets, respec-
+tively. GAP-NDP with EM also beneﬁts from a gain of more
+than 10, 10, and 5 points with 𝜖 = 4 on Facebook, Reedit, and
+Amazon datasets, respectively. As discussed in Section 4.2,
+the improved performance with EM is mainly due to the
+reduced dimensionality of the aggregation module’s input,
+which leads to adding less noise to the aggregations. Also, the
+eﬀect of EM is more signiﬁcant on GAP-NDP, as the amount
+of noise injected into the aggregations is generally larger for
+node-level privacy, hence dimensionality reduction becomes
+more critical to mitigate the impact of noise.
+
+Eﬀect of the number of hops. In this experiment, we inves-
+tigate how changing the number of hops 𝐾 aﬀects the accu-
+racy/privacy performance of our proposed methods, GAP-EDP
+and GAP-NDP. We vary 𝐾 within {1, 2, 3, 4, 5} and report
+the accuracy under diﬀerent privacy budgets: 𝜖 ∈ {1, 4} for
+GAP-EDP and 𝜖 ∈ {8, 16} for GAP-NDP. The result is de-
+picted in Figure 8. We observe that both of our methods can
+eﬀectively beneﬁt from allowing multiple hops, but there is a
+trade-oﬀ in increasing the number of hops. As we increment
+𝐾, the accuracy of both GAP-EDP and GAP-NDP method
+increase up to a point and then steady or decrease in almost
+
+0.10.20.51.02.04.08.0Privacy Cost ()406080100Accuracy (%)Facebook0.10.20.51.02.04.08.0Privacy Cost ()406080100RedditGAP-MLPGAP-EDPSAGE-EDP0.10.20.51.02.04.08.0Privacy Cost ()406080100Amazon124816Privacy Cost ()0255075100Accuracy (%)Facebook124816Privacy Cost ()0255075100RedditGAP-MLP-DPGAP-NDPSAGE-NDP124816Privacy Cost ()0255075100AmazonFigure 7: Eﬀect of the encoder module (EM) on the accu-
+racy/privacy performance of the edge-level private GAP-EDP
+(top) and the node-level private GAP-NDP (bottom).
+
+Figure 8: Eﬀect of the number of hops 𝐾 on the accu-
+racy/privacy performance of the edge-level private GAP-EDP
+(top) and the node-level private GAP-NDP (bottom).
+
+all cases. The reason is that with a larger 𝐾 the model is able
+to utilize information from more distant nodes (all the nodes
+within the 𝐾-hop neighborhood of a node) for prediction,
+which can increase the ﬁnal accuracy. However, as more hops
+are involved, the amount of noise in the aggregations is also
+increased, which adversely aﬀects the model’s accuracy. We
+can see that with the lower privacy budgets where the noise
+is more severe, both GAP-EDP and GAP-NDP achieve their
+peak accuracy at smaller 𝐾 values. But as the privacy budget
+increases, the magnitude of the noise is reduced, enabling the
+models to beneﬁt from larger 𝐾 values.
+
+Eﬀect of the maximum degree. We now analyze the eﬀect
+of 𝐷 on the performance of our node-level private method. We
+vary 𝐷 from 10 to 400 and report GAP-NDP’s accuracy under
+two diﬀerent privacy budgets 𝜖 ∈ {4, 16}. Figure 9 shows
+
+Figure 9: Eﬀect of the degree bound 𝐷 on the accuracy/privacy
+performance of the node-level private GAP-NDP method.
+
+that the accuracy keeps growing with 𝐷 on Reddit (which
+has a high average degree), while on Facebook and Amazon
+(lower average degrees) the accuracy increases with 𝐷 up
+to a peak point, and drops afterwards. This is due to the
+trade-oﬀ between having more samples for aggregation and
+the amount of noise injected: the larger 𝐷, the fewer neighbors
+are excluded from the aggregations (i.e., less information
+loss), but on the other hand, the larger the sensitivity of the
+aggregation function, leading to more noise injection. We also
+observe that the accuracy gain as a result of increasing 𝐷 gets
+bigger as the privacy budget is increased from 5 to 20, since a
+higher privacy budget compensates for the higher sensitivity
+by reducing the amount of noise.
+
+8 Conclusion
+
+In this paper, we presented GAP, a privacy-preserving GNN
+architecture that ensures both edge-level and node-level diﬀer-
+ential privacy for training and inference over sensitive graph
+data. We used aggregation perturbation, where the Gaussian
+mechanism is applied to the output of the GNN’s aggregation
+function, as a fundamental technique to achieve DP in our
+approach. We proposed a new GNN architecture tailored to
+the speciﬁcs of private learning over graphs, aiming to achieve
+better privacy-accuracy trade-oﬀs while tackling the intricate
+challenges involved in the design of diﬀerentially private
+GNNs. Experimental results over real-world graph datasets
+showed that our approach achieves favorable privacy/accuracy
+trade-oﬀs and signiﬁcantly outperforms existing methods.
+Promising future directions include: (i) investigating robust
+aggregation functions that provide speciﬁc beneﬁts for private
+learning; (ii) exploiting the redundancy of information in
+recursive aggregations to achieve tighter composition when
+the number of hops 𝐾 gets large, which might prove useful for
+speciﬁc applications; (iii) extending the framework to other
+tasks and scenarios, such as link-wise prediction or learning
+over dynamic graphs; and (iv) conducting an extended theoret-
+ical analysis of diﬀerentially private GNNs, such as proving
+utility bounds and characterizing their expressiveness.
+
+0.51.02.04.08.0Privacy Cost ()4050607080GAP-EDP Accuracy (%)FacebookW/ EMW/O EM0.51.02.04.08.0Privacy Cost ()9092949698100RedditW/ EMW/O EM0.51.02.04.08.0Privacy Cost ()657075808590AmazonW/ EMW/O EM124816Privacy Cost ()3040506070GAP-NDP Accuracy (%)FacebookW/ EMW/O EM124816Privacy Cost ()60708090100RedditW/ EMW/O EM124816Privacy Cost ()606570758085AmazonW/ EMW/O EM12345Number of Hops (K)65707580GAP-EDP Accuracy (%)Facebook=4=112345Number of Hops (K)97.097.598.098.599.0Reddit=4=112345Number of Hops (K)70758085Amazon=4=112345Number of Hops (K)55606570GAP-NDP Accuracy (%)Facebook=16=812345Number of Hops (K)9293949596Reddit=16=812345Number of Hops (K)76788082Amazon=16=80100200300400Maximum Degree (D)455055606570GAP-NDP Accuracy (%)Facebook=4=160100200300400Maximum Degree (D)80859095100Reddit=4=160100200300400Maximum Degree (D)74767880Amazon=4=16Acknowledgments
+
+This work was supported by the European Commission’s
+Horizon 2020 Program ICT-48-2020, under grant number
+951911, AI4Media project. It was also supported by the
+French National Research Agency (ANR) through grant ANR-
+20-CE23-0015 (Project PRIDE). Ali Shahin Shamsabadi
+acknowledges support from The Alan Turing Institute.
+
+Availability
+
+Our open-source implementation is publicly available on
+GitHub at https://github.com/sisaman/GAP.
+
+References
+
+[1] Sergi Abadal, Akshay Jain, Robert Guirado, Jorge López-
+Alonso, and Eduard Alarcón. Computing graph neural
+networks: A survey from algorithms to accelerators.
+ACM Computing Surveys (CSUR), 54(9):1–38, 2021.
+
+[2] Martin Abadi, Andy Chu, Ian Goodfellow, H Brendan
+McMahan, Ilya Mironov, Kunal Talwar, and Li Zhang.
+Deep learning with diﬀerential privacy. In Proceedings
+of the 2016 ACM SIGSAC conference on computer and
+communications security, pages 308–318, 2016.
+
+[3] Wu Bang, Yang Xiangwen, Pan Shirui, and Yuan
+Xingliang. Adapting membership inference attacks to
+gnn for graph classiﬁcation: Approaches and implica-
+tions. In 2021 IEEE International Conference on Data
+Mining (ICDM). IEEE, 2021.
+
+[4] Mark Cheung and José M. F. Moura. Graph neural
+networks for covid-19 drug discovery. In 2020 IEEE
+International Conference on Big Data (Big Data), pages
+5646–5648, 2020.
+
+[5] Wei-Lin Chiang, Xuanqing Liu, Si Si, Yang Li, Samy
+Bengio, and Cho-Jui Hsieh. Cluster-gcn: An eﬃcient
+algorithm for training deep and large graph convolutional
+networks. In Proceedings of the 25th ACM SIGKDD
+International Conference on Knowledge Discovery &
+Data Mining, pages 257–266, 2019.
+
+[6] Gabriele Corso, Luca Cavalleri, Dominique Beaini,
+Pietro Liò, and Petar Veličković. Principal neighbour-
+hood aggregation for graph nets. In Advances in Neural
+Information Processing Systems, 2020.
+
+[7] Ameya Daigavane, Gagan Madan, Aditya Sinha,
+Abhradeep Guha Thakurta, Gaurav Aggarwal, and Pra-
+teek Jain. Node-level diﬀerentially private graph neural
+networks. arXiv preprint arXiv:2111.15521, 2021.
+
+[8] Zulong Diao, Xin Wang, Dafang Zhang, Yingru Liu, Kun
+Xie, and Shaoyao He. Dynamic spatial-temporal graph
+convolutional neural networks for traﬃc forecasting.
+In Proceedings of the AAAI conference on artiﬁcial
+intelligence, volume 33, pages 890–897, 2019.
+
+[9] Vasisht Duddu, Antoine Boutet, and Virat Shejwalkar.
+Quantifying privacy leakage in graph embedding. In
+MobiQuitous 2020 - 17th EAI International Conference
+on Mobile and Ubiquitous Systems: Computing, Net-
+working and Services, MobiQuitous ’20, page 76–85,
+New York, NY, USA, 2020. Association for Computing
+Machinery.
+
+[10] Cynthia Dwork. Diﬀerential privacy: A survey of results.
+In International conference on theory and applications
+of models of computation, pages 1–19. Springer, 2008.
+
+[11] Cynthia Dwork, Frank McSherry, Kobbi Nissim, and
+Adam Smith. Calibrating noise to sensitivity in private
+data analysis. In Theory of cryptography conference,
+pages 265–284. Springer, 2006.
+
+[12] Matthias Fey and Jan E. Lenssen. Fast graph repre-
+sentation learning with PyTorch Geometric. In ICLR
+Workshop on Representation Learning on Graphs and
+Manifolds, 2019.
+
+[13] Fabrizio Frasca, Emanuele Rossi, Davide Eynard, Ben-
+jamin Chamberlain, Michael Bronstein, and Federico
+Monti. Sign: Scalable inception graph neural networks.
+In ICML 2020 Workshop on Graph Representation
+Learning and Beyond, 2020.
+
+[14] Nikolaos Gkalelis, Andreas Goulas, Damianos
+Galanopoulos, and Vasileios Mezaris. Objectgraphs:
+Using objects and a graph convolutional network for
+the bottom-up recognition and explanation of events
+in video. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages
+3375–3383, 2021.
+
+[15] Roan Gylberth, Risman Adnan, Setiadi Yazid, and
+T Basaruddin. Diﬀerentially private optimization al-
+gorithms for deep neural networks. In 2017 Interna-
+tional Conference on Advanced Computer Science and
+Information Systems (ICACSIS), pages 387–394. IEEE,
+2017.
+
+[16] William L Hamilton, Rex Ying, and Jure Leskovec. In-
+In
+ductive representation learning on large graphs.
+Proceedings of the 31st International Conference on
+Neural Information Processing Systems, pages 1025–
+1035, 2017.
+
+[17] William L Hamilton, Rex Ying, and Jure Leskovec. Rep-
+resentation learning on graphs: Methods and applica-
+tions. IEEE Data Engineering Bulletin, 2017.
+
+[18] Michael Hay, Chao Li, Gerome Miklau, and David Jensen.
+Accurate estimation of the degree distribution of private
+networks. In 2009 Ninth IEEE International Conference
+on Data Mining, pages 169–178. IEEE, 2009.
+
+[19] Xinlei He, Jinyuan Jia, Michael Backes, Neil Zhenqiang
+Gong, and Yang Zhang. Stealing links from graph
+neural networks. In 30th {USENIX} Security Symposium
+({USENIX} Security 21), 2021.
+
+[20] Xinlei He, Rui Wen, Yixin Wu, Michael Backes, Yun
+Shen, and Yang Zhang. Node-level membership in-
+ference attacks against graph neural networks. arXiv
+preprint arXiv:2102.05429, 2021.
+
+[21] Jacob Imola, Takao Murakami, and Kamalika Chaudhuri.
+Communication-Eﬃcient triangle counting under local
+diﬀerential privacy. In 31st USENIX Security Sympo-
+sium (USENIX Security 22), Boston, MA, August 2022.
+USENIX Association.
+
+[22] Matthew Jagielski, Jonathan R. Ullman, and Alina Oprea.
+Auditing diﬀerentially private machine learning: How
+private is private sgd? In Proceedings of the Advances
+in Neural Information Processing (NeurIPS), Virtual
+Event, December 2020.
+
+[23] Bargav Jayaraman and David Evans. Evaluating dif-
+ferentially private machine learning in practice.
+In
+28th USENIX Security Symposium (USENIX Security
+19), pages 1895–1912, Santa Clara, CA, August 2019.
+USENIX Association.
+
+[24] Weiwei Jiang and Jiayun Luo. Graph neural network
+for traﬃc forecasting: A survey. Expert Systems with
+Applications, page 117921, 2022.
+
+[25] Steven Kearnes, Kevin McCloskey, Marc Berndl, Vĳay
+Pande, and Patrick Riley. Molecular graph convolutions:
+moving beyond ﬁngerprints. Journal of computer-aided
+molecular design, 30(8):595–608, 2016.
+
+[26] Thomas N. Kipf and Max Welling. Semi-supervised
+In
+classiﬁcation with graph convolutional networks.
+International Conference on Learning Representations
+(ICLR), 2017.
+
+[27] Günter Klambauer, Thomas Unterthiner, Andreas Mayr,
+and Sepp Hochreiter. Self-normalizing neural networks.
+In Proceedings of the 31st international conference on
+neural information processing systems, pages 972–981,
+2017.
+
+[28] Yujia Li, Richard Zemel, Marc Brockschmidt, and Daniel
+Tarlow. Gated graph sequence neural networks.
+In
+Proceedings of ICLR’16, 2016.
+
+[29] Ilya Mironov. Rényi diﬀerential privacy. In 2017 IEEE
+30th Computer Security Foundations Symposium (CSF),
+pages 263–275. IEEE, 2017.
+
+[30] Alireza Mohammadshahi and James Henderson. Graph-
+to-graph transformer for transition-based dependency
+parsing.
+In Proceedings of the 2020 Conference on
+Empirical Methods in Natural Language Processing:
+Findings, pages 3278–3289, Online, November 2020.
+Association for Computational Linguistics.
+
+[31] Milad Nasr, Shuang Song, Abhradeep Thakurta, Nicolas
+Papernot, and Nicholas Carlini. Adversary instantiation:
+Lower bounds for diﬀerentially private machine learning.
+In Proceedings of the IEEE Symposium on Security and
+Privacy (S&P), San Francisco, CA, USA, May 2021.
+
+[32] Iyiola E Olatunji, Thorben Funke, and Megha Khosla.
+Releasing graph neural networks with diﬀerential privacy
+guarantees. arXiv preprint arXiv:2109.08907, 2021.
+
+[33] Iyiola E Olatunji, Wolfgang Nejdl, and Megha Khosla.
+Membership inference attack on graph neural networks.
+In 2021 Third IEEE International Conference on Trust,
+Privacy and Security in Intelligent Systems and Applica-
+tions (TPS-ISA), pages 11–20. IEEE, 2021.
+
+[34] Nicolas Papernot, Martín Abadi, Ulfar Erlingsson, Ian
+Goodfellow, and Kunal Talwar. Semi-supervised knowl-
+edge transfer for deep learning from private training data.
+arXiv preprint arXiv:1610.05755, 2016.
+
+[35] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer,
+James Bradbury, Gregory Chanan, Trevor Killeen, Zem-
+ing Lin, Natalia Gimelshein, Luca Antiga, Alban Des-
+maison, Andreas Kopf, Edward Yang, Zachary DeVito,
+Martin Raison, Alykhan Tejani, Sasank Chilamkurthy,
+Benoit Steiner, Lu Fang, Junjie Bai, and Soumith Chin-
+tala. Pytorch: An imperative style, high-performance
+deep learning library.
+In H. Wallach, H. Larochelle,
+A. Beygelzimer, F. d'Alché-Buc, E. Fox, and R. Gar-
+nett, editors, Advances in Neural Information Processing
+Systems 32, pages 8024–8035. Curran Associates, Inc.,
+2019.
+
+[36] Jiezhong Qiu, Jian Tang, Hao Ma, Yuxiao Dong, Kuansan
+Wang, and Jie Tang. Deepinf: Social inﬂuence predic-
+tion with deep learning.
+In Proceedings of the 24th
+ACM SIGKDD International Conference on Knowledge
+Discovery & Data Mining, pages 2110–2119, 2018.
+
+[37] Sofya Raskhodnikova and Adam Smith. Diﬀerentially
+private analysis of graphs. Encyclopedia of Algorithms,
+2016.
+
+[38] Sina Sajadmanesh and Daniel Gatica-Perez. Locally
+private graph neural networks. In Proceedings of the
+
+2021 ACM SIGSAC Conference on Computer and Com-
+munications Security, pages 2130–2145, 2021.
+
+[39] Christian Szegedy, Wei Liu, Yangqing Jia, Pierre Ser-
+manet, Scott Reed, Dragomir Anguelov, Dumitru Erhan,
+Vincent Vanhoucke, and Andrew Rabinovich. Going
+deeper with convolutions. In Proceedings of the IEEE
+conference on computer vision and pattern recognition,
+pages 1–9, 2015.
+
+[40] Amanda L Traud, Peter J Mucha, and Mason A Porter.
+Social structure of facebook networks. Physica A: Sta-
+tistical Mechanics and its Applications, 391(16):4165–
+4180, 2012.
+
+[41] Petar Veli č kovi ć, Guillem Cucurull, Arantxa Casanova,
+Adriana Romero, Pietro Lio, and Yoshua Bengio. Graph
+attention networks. arXiv preprint arXiv:1710.10903,
+2017.
+
+[42] Jianian Wang, Sheng Zhang, Yanghua Xiao, and Rui
+Song. A review on graph neural network methods in
+ﬁnancial applications. arXiv preprint arXiv:2111.15367,
+2021.
+
+[43] Yu-Xiang Wang, Borja Balle, and Shiva Prasad Ka-
+siviswanathan. Subsampled renyi diﬀerential privacy
+and analytical moments accountant. In Kamalika Chaud-
+huri and Masashi Sugiyama, editors, Proceedings of the
+Twenty-Second International Conference on Artiﬁcial
+Intelligence and Statistics, volume 89 of Proceedings of
+Machine Learning Research, pages 1226–1235. PMLR,
+16–18 Apr 2019.
+
+[44] Fan Wu, Yunhui Long, Ce Zhang, and Bo Li. Linkteller:
+Recovering private edges from graph neural networks
+via inﬂuence analysis. arXiv preprint arXiv:2108.06504,
+2021.
+
+[45] Felix Wu, Amauri Souza, Tianyi Zhang, Christopher
+Fifty, Tao Yu, and Kilian Weinberger. Simplifying graph
+convolutional networks. In International conference on
+machine learning, pages 6861–6871. PMLR, 2019.
+
+[46] Zonghan Wu, Shirui Pan, Fengwen Chen, Guodong Long,
+Chengqi Zhang, and S Yu Philip. A comprehensive
+survey on graph neural networks. IEEE Transactions on
+Neural Networks and Learning Systems, 2020.
+
+[47] Keyulu Xu, Weihua Hu, Jure Leskovec, and Stefanie
+Jegelka. How powerful are graph neural networks? In
+International Conference on Learning Representations,
+2019.
+
+[48] Keyulu Xu, Chengtao Li, Yonglong Tian, Tomohiro
+Sonobe, Ken-ichi Kawarabayashi, and Stefanie Jegelka.
+
+Representation learning on graphs with jumping knowl-
+edge networks. In Jennifer Dy and Andreas Krause, edi-
+tors, Proceedings of the 35th International Conference on
+Machine Learning, volume 80 of Proceedings of Machine
+Learning Research, pages 5453–5462, Stockholmsmäs-
+san, Stockholm Sweden, 10–15 Jul 2018. PMLR.
+
+[49] Rex Ying, Ruining He, Kaifeng Chen, Pong Eksombat-
+chai, William L Hamilton, and Jure Leskovec. Graph con-
+volutional neural networks for web-scale recommender
+systems.
+In Proceedings of the 24th ACM SIGKDD
+International Conference on Knowledge Discovery &
+Data Mining, pages 974–983, 2018.
+
+[50] Jiaxuan You, Zhitao Ying, and Jure Leskovec. Design
+space for graph neural networks. Advances in Neural
+Information Processing Systems, 33, 2020.
+
+[51] Ashkan Yousefpour, Igor Shilov, Alexandre Sablayrolles,
+Davide Testuggine, Karthik Prasad, Mani Malek, John
+Nguyen, Sayan Ghosh, Akash Bharadwaj, Jessica Zhao,
+Graham Cormode, and Ilya Mironov. Opacus: User-
+friendly diﬀerential privacy library in PyTorch. arXiv
+preprint arXiv:2109.12298, 2021.
+
+[52] Muhan Zhang and Yixin Chen. Link prediction based on
+graph neural networks. Advances in Neural Information
+Processing Systems, 31:5165–5175, 2018.
+
+[53] Z. Zhang, P. Cui, and W. Zhu. Deep learning on graphs:
+A survey. IEEE Transactions on Knowledge & Data
+Engineering, 34(01):249–270, jan 2022.
+
+[54] Zaixi Zhang, Qi Liu, Zhenya Huang, Hao Wang,
+Chengqiang Lu, Chuanren Liu, and Enhong Chen.
+Graphmi: Extracting private graph data from graph
+neural networks.
+In Zhi-Hua Zhou, editor, Proceed-
+ings of the Thirtieth International Joint Conference on
+Artiﬁcial Intelligence, ĲCAI-21, pages 3749–3755. In-
+ternational Joint Conferences on Artiﬁcial Intelligence
+Organization, 8 2021.
+
+[55] Zhikun Zhang, Min Chen, Michael Backes, Yun Shen,
+Inference attacks against graph
+and Yang Zhang.
+neural networks.
+In 31st USENIX Security Sympo-
+sium (USENIX Security 22), Boston, MA, August 2022.
+USENIX Association.
+
+[56] Jie Zhou, Ganqu Cui, Shengding Hu, Zhengyan Zhang,
+Cheng Yang, Zhiyuan Liu, Lifeng Wang, Changcheng
+Li, and Maosong Sun. Graph neural networks: A review
+of methods and applications. AI Open, 1:57–81, 2020.
+
+A Deferred Theoretical Arguments
+
+A.1 Proof of Theorem 1
+
+To prove Theorem 1, we ﬁrst establish the following lemma.
+
+Lemma 1. Let Agg(X, A) = A𝑇 · X be the summation ag-
+gregation function. Assume that the input feature matrix X
+is row-normalized, such that ∀𝑣 ∈ V : (cid:107)X𝑣 (cid:107)2 = 1. Then, the
+edge-level sensitivity of the aggregation function is ΔAgg = 1.
+
+Proof. Let A and A(cid:48) be the adjacency matrices of two arbitrary
+edge-level adjacent graphs. Therefore, there exist two nodes 𝑢
+and 𝑣 such that:
+
+(cid:40)A(cid:48)
+A(cid:48)
+
+𝑖, 𝑗 ≠ A𝑖, 𝑗 ,
+𝑖, 𝑗 = A𝑖, 𝑗 ,
+
+if 𝑖 = 𝑢 and 𝑗 = 𝑣,
+otherwise.
+
+(13)
+
+Without loss of generality, we can assume that A𝑣,𝑢 = 1 and
+A(cid:48)
+
+𝑣,𝑢 = 0. The goal is to bound the following quantity:
+
+(cid:107)Agg(X, A) − Agg(X, A(cid:48))(cid:107)𝐹 .
+
+Let M = Agg(X, A) be the aggregation function output on A,
+and
+
+𝑁
+∑︁
+
+M𝑖 =
+
+A 𝑗,𝑖X 𝑗 ,
+
+𝑗=1
+be the 𝑖-th row of M corresponding to the aggregated vector
+for the 𝑖-th node. Analogously, let M(cid:48) = Agg(X, A(cid:48)). Then:
+
+(cid:107)Agg(X, A) − Agg(X, A(cid:48))(cid:107)𝐹 = (cid:107)M − M(cid:48)(cid:107)𝐹
+
+= (
+
+𝑁
+∑︁
+
+𝑖=1
+
+(cid:107)M𝑖 − M(cid:48)
+
+𝑖 (cid:107)2
+
+2)1/2
+
+(A 𝑗,𝑖X 𝑗 − A(cid:48)
+
+𝑁
+∑︁
+
+(cid:107)
+
+𝑗=1
+
+𝑁
+∑︁
+= (cid:169)
+(cid:173)
+(cid:171)
+(cid:16)
+
+𝑖=1
+
+=
+
+(cid:107)A𝑣,𝑢X𝑣 − A(cid:48)
+
+𝑣,𝑢X𝑣 (cid:107)2
+2
+
+1/2
+
+𝑗,𝑖X 𝑗 )(cid:107)2
+2(cid:170)
+(cid:174)
+(cid:172)
+
+(cid:17) 1/2
+
+𝑣,𝑢)X𝑣 (cid:107)2
+
+= (cid:107)(A𝑣,𝑢 − A(cid:48)
+= (cid:107)X𝑣 (cid:107)2
+= 1,
+
+which concludes the proof.
+
+(cid:3)
+
+We can now prove Theorem 1.
+
+Proof. The PMA mechanism applies the Gaussian mecha-
+nism on the output of the summation aggregation function
+Agg(X, A) = A𝑇 · X. Based on Lemma 1, the edge-level sen-
+sitivity of Agg(·) is 1. Therefore, according to Corollary 3
+of [29], each individual application of the Gaussian mecha-
+nism is (𝛼, 𝛼/2𝜎2)-RDP. As PMA can be seen as an adaptive
+composition of 𝐾 such mechanisms, based on Proposition 1
+(cid:3)
+of [29], the total privacy cost is (𝛼, 𝐾 𝛼/2𝜎2)-RDP.
+
+A.2 Proof of Proposition 2
+
+Proof. Under edge-level DP, only the adjacency information
+is protected. In Algorithm 2, the only step where the graph’s
+
+adjacency is used is the application of the PMA mechanism
+(step 4), which according to Theorem 1 is (𝛼, 𝐾 𝛼/2𝜎2)-RDP.
+Since EM does not use the graph’s edges and the classi-
+ﬁcation module only post-process the private aggregated
+features without accessing the edges again, the total pri-
+vacy cost remains (𝛼, 𝐾 𝛼/2𝜎2)-RDP. Therefore, according
+to Proposition 1 it is equivalent to edge-level (𝜖, 𝛿)-DP with
+𝜖 = 𝐾 𝛼
+. Minimizing this expression over 𝛼 > 1
+2𝜎2 +
+gives 𝜖 = 𝐾
+(cid:3)
+2𝐾 log (1/ 𝛿)/𝜎.
+
+log(1/ 𝛿)
+𝛼−1
+√
+2𝜎2 +
+
+A.3 Proof of Theorem 2
+
+We ﬁrst prove Lemma 2 and Lemma 3, and then prove Theo-
+rem 2.
+
+Lemma 2. Given any graph G = (V, E, X), let
+
+agg ({X𝑢 : ∀𝑢 ∈ 𝔑𝑣 }) =
+
+∑︁
+
+X𝑢
+
+𝑢 ∈𝔑𝑣
+
+be the summation aggregation function over the neighborhood
+𝔑𝑣 of any arbitrary node 𝑣 ∈ V. Assume that the input feature
+matrix X is row-normalized, such that ∀𝑣 ∈ V : (cid:107)X𝑣 (cid:107)2 = 1.
+Then, the node-level sensitivity of agg(.) is Δagg = 1.
+
+Proof. Consider a node-level adjacent graph G (cid:48) = (V (cid:48), E (cid:48), X(cid:48))
+formed by adding a single node 𝑞 to G. Hence, we have
+𝑣 = X𝑣 for every node 𝑣 ∈ V. Let A and
+V (cid:48) = V ∪ {𝑞}, and X(cid:48)
+A(cid:48) be the adjacency matrices of G and G (cid:48) respectively. The
+goal is to bound the following:
+
+(cid:107)agg ({X𝑢 : ∀𝑢 ∈ 𝔑𝑣 }) − agg (cid:0){X(cid:48)
+
+𝑢 : ∀𝑢 ∈ 𝔑(cid:48)
+
+𝑣 }(cid:1) (cid:107)2 ≤ 1.
+
+(14)
+where 𝔑𝑣 = {𝑢 : A𝑢,𝑣 = 1} and 𝔑(cid:48)
+𝑢,𝑣 = 1} are the
+adjacent nodes to 𝑣 in G and G (cid:48), respectively. Fixing any
+arbitrary node 𝑣 ∈ V, we have the following two cases:
+
+𝑣 = {𝑢 : A(cid:48)
+
+1. If 𝑞 ∈ 𝔑(cid:48)
+
+𝑣 , then we have 𝔑𝑣 = 𝔑(cid:48)
+
+𝑣 \ {𝑞}. Therefore:
+
+(cid:107)agg ({X𝑢 : ∀𝑢 ∈ 𝔑𝑣 }) − agg (cid:0){X(cid:48)
+
+𝑣 }(cid:1) (cid:107)2
+𝑢 : ∀𝑢 ∈ 𝔑(cid:48)
+∑︁
+X(cid:48)
+X𝑢 −
+𝑢 (cid:107)2
+
+∑︁
+
+= (cid:107)
+
+𝑢 ∈𝔑𝑣
+= (cid:107)X𝑞 (cid:107)2 = 1.
+
+𝑢 ∈𝔑(cid:48)
+𝑣
+
+2. If 𝑞 ∉ 𝔑(cid:48)
+
+𝑣 , then we have 𝔑𝑣 = 𝔑(cid:48)
+
+𝑣 . Therefore:
+
+(cid:107)agg ({X𝑢 : ∀𝑢 ∈ 𝔑𝑣 }) − agg (cid:0){X(cid:48)
+
+𝑣 }(cid:1) (cid:107)2
+𝑢 : ∀𝑢 ∈ 𝔑(cid:48)
+∑︁
+X(cid:48)
+𝑢 (cid:107)2 = 0.
+X𝑢 −
+
+∑︁
+
+= (cid:107)
+
+Eq. 14 follows from the above two cases.
+
+(cid:3)
+
+𝑢 ∈𝔑𝑣
+
+𝑢 ∈𝔑(cid:48)
+𝑣
+
+Lemma 3. Given any graph G = (V, E, X) with adjacency ma-
+trix A and maximum degree bounded above by some constant
+𝐷 > 0, assume that the feature matrix X is row-normalized,
+such that ∀𝑣 ∈ V : (cid:107)X𝑣 (cid:107)2 = 1. Let agg ({X𝑢 : ∀𝑢 ∈ 𝔑𝑣 }) =
+(cid:205)𝑢 ∈𝔑𝑣
+X𝑢 be the summation aggregation function over the
+neighborhood 𝔑𝑣 of any arbitrary node 𝑣 ∈ V, and (cid:103)Agg(X, A)
+be a noisy aggregation mechanism which applies the Gaussian
+mechanism independently on the aggregated vector of every
+individual node as:
+(cid:103)Agg(X, A) = (cid:2)agg ({X𝑢 : ∀𝑢 ∈ 𝔑𝑣 }) + N (𝜎2I) : ∀𝑣 ∈ V(cid:3)𝑇 .
+Then (cid:103)Agg(.) is (𝛼, 𝐷 𝛼/2𝜎2)-RDP.
+Proof. According to Lemma 2, the node-level sensitivity of
+agg ({X𝑢 : ∀𝑢 ∈ 𝔑𝑣 }) is 1, and thus each individual noisy
+aggregation query is (𝛼, 𝛼/2𝜎2)-RDP. Although (cid:103)Agg is com-
+posed of 𝑁 = |V | such queries in total (one noisy aggregation
+per node), as G’s maximum degree is bounded above by 𝐷, the
+embedding X𝑢 of each node 𝑢 only contributes to maximum 𝐷
+out of 𝑁 queries. As these 𝑁 queries are chosen non-adaptively
+and the noise of the Gaussian mechanism is independently
+drawn for each query, the maximum privacy cost of (cid:103)Agg(.) is
+equivalent to 𝐷 compositions of (𝛼, 𝛼/2𝜎2)-RDP mechanisms,
+which based on Proposition 1 of [29] is (𝐷𝛼, 𝛼/2𝜎2)-RDP. (cid:3)
+
+Now, we prove Theorem 2.
+
+Proof. At each step of the PMA mechanism, the Gaussian
+mechanism is applied on every output row of the summa-
+tion aggregation function Agg(X, A) = A𝑇 · X. Based on
+Lemma 3, this mechanism is (𝛼, 𝛼𝐷/2𝜎2)-RDP. As PMA
+can be seen as an adaptive composition of 𝐾 such mecha-
+nisms, based on Proposition 1 of [29], the total privacy cost is
+(cid:3)
+(𝛼, 𝛼𝐷𝐾/2𝜎2)-RDP.
+
+A.4 Proof of Proposition 3
+
+Proof. Under node-level DP, all the information pertaining
+to an individual node, including its features, label, and edges,
+are private. The ﬁrst step of Algorithm 2 privately processes
+the node features and labels so as to satisfy (𝛼, 𝜖1(𝛼))-RDP.
+Steps 2 and 3 of the algorithm, however, expose the private
+node features, but then they are processed by steps 4 and
+5, which are (𝛼, 𝐷𝐾 𝛼/2𝜎2)-RDP (according to Theorem 2)
+and (𝛼, 𝜖5 (𝛼))-RDP, respectively. As a result, Algorithm 2
+can be seen as an adaptive composition of an (𝛼, 𝜖1 (𝛼))-
+RDP mechanism, an (𝛼, 𝐷𝐾 𝛼/2𝜎2)-RDP mechanism, and an
+(𝛼, 𝜖5 (𝛼))-RDP mechanism. Therefore, based on Proposition 1
+of [29], the total node-level privacy cost of Algorithm 2 is
+(𝛼, 𝜖1 (𝛼) + 𝐷𝐾 𝛼/2𝜎2 + 𝜖5 (𝛼))-RDP, which ensures (𝜖1 (𝛼) +
+𝜖5 (𝛼) + 𝐷𝐾 𝛼
+(cid:3)
+
+, 𝛿)-DP based on Proposition 1.
+
+2𝜎2 +
+
+log(1/ 𝛿)
+𝛼−1
+
+

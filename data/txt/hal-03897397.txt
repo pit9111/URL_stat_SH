@@ -1,0 +1,2138 @@
+Fine-Grained Modeling and Optimization for Intelligent
+Resource Management in Big Data Processing
+Chenghao Lyu, Qi Fan, Fei Song, Arnab Sinha, Yanlei Diao, Wei Chen, Li
+
+Ma, Yihui Feng, Yaliang Li, Kai Zeng, et al.
+
+To cite this version:
+
+Chenghao Lyu, Qi Fan, Fei Song, Arnab Sinha, Yanlei Diao, et al.. Fine-Grained Modeling and
+Optimization for Intelligent Resource Management in Big Data Processing. VLDB 2022 - 48th Inter-
+national Conference on Very Large Databases, Sep 2022, Sydney, Australia. ￿hal-03897397￿
+
+HAL Id: hal-03897397
+
+https://inria.hal.science/hal-03897397
+
+Submitted on 13 Dec 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Fine-Grained Modeling and Optimization for Intelligent
+Resource Management in Big Data Processing
+
+Chenghao Lyu†, Qi Fan‡, Fei Song‡, Arnab Sinha‡, Yanlei Diao†‡
+Wei Chen∗, Li Ma∗, Yihui Feng∗, Yaliang Li∗, Kai Zeng∗, Jingren Zhou∗
+† University of Massachusetts, Amherst; ‡ Ecole Polytechnique; ∗ Alibaba Group
+chenghao@cs.umass.edu,{qi.fan,fei.song,arnab.sinha,yanlei.diao}@polytechnique.edu
+{wickeychen.cw,mali.mali,yihui.feng,yaliang.li,zengkai.zk,jingren.zhou}@alibaba-inc.com
+
+ABSTRACT
+Big data processing at the production scale presents a highly com-
+plex environment for resource optimization (RO), a problem crucial
+for meeting performance goals and budgetary constraints of ana-
+lytical users. The RO problem is challenging because it involves a
+set of decisions (the partition count, placement of parallel instances
+on machines, and resource allocation to each instance), requires
+multi-objective optimization (MOO), and is compounded by the
+scale and complexity of big data systems while having to meet
+stringent time constraints for scheduling. This paper presents a
+MaxCompute based integrated system to support multi-objective
+resource optimization via ne-grained instance-level modeling and
+optimization. We propose a new architecture that breaks RO into a
+series of simpler problems, new ne-grained predictive models, and
+novel optimization methods that exploit these models to make ef-
+fective instance-level RO decisions well under a second. Evaluation
+using production workloads shows that our new RO system could
+reduce 37-72% latency and 43-78% cost at the same time, compared
+to the current optimizer and scheduler, while running in 0.02-0.23s.
+
+PVLDB Reference Format:
+Chenghao Lyu, Qi Fan, Fei Song, Arnab Sinha, Yanlei Diao, Wei Chen, Li
+Ma, Yihui Feng, Yaliang Li, Kai Zeng, Jingren Zhou. Fine-Grained Modeling
+and Optimization for Intelligent Resource Management in Big Data
+Processing. PVLDB, 15(11): XXX-XXX, 2022.
+doi:XX.XX/XXX.XX
+
+1 INTRODUCTION
+While big data query processing has become commonplace in en-
+terprise businesses and many platforms have been developed for
+this purpose [3, 6, 7, 9, 13, 28, 31, 41, 48, 55, 59, 63, 64], resource
+optimization in large clusters [15, 34–36] has received less attention.
+However, we observe from real-world experiences of running large
+compute clusters in the Alibaba Cloud that resource management
+plays a vital role in meeting both performance goals and budgetary
+constraints of internal and external analytical users.
+
+Production-scale big data processing presents a highly com-
+plex environment for resource optimization. We show an example
+
+This work is licensed under the Creative Commons BY-NC-ND 4.0 International
+License. Visit https://creativecommons.org/licenses/by-nc-nd/4.0/ to view a copy of
+this license. For any use beyond those covered by this license, obtain permission by
+emailing info@vldb.org. Copyright is held by the owner/author(s). Publication rights
+licensed to the VLDB Endowment.
+Proceedings of the VLDB Endowment, Vol. 15, No. 11 ISSN 2150-8097.
+doi:XX.XX/XXX.XX
+
+through the life cycle of a submitted job in MaxCompute [28], the
+big data query processing system at Alibaba, as shown in Fig. 1. A
+submitted SQL job is rst processed by a "Cost-Based Optimizer"
+(CBO) to construct a query plan in the form of a Directed Acyclic
+Graph (DAG) of operators. These operators are further grouped
+into several stages connected with data shue (exchanging) depen-
+dencies. As shown in Fig. 1, job 1 is composed of stage 1 (operators
+1-3), stage 2 (operators 4-8), and stage 3 (operators 9-15), and their
+boundaries are data shuing operations. To explore data paral-
+lelism, each stage runs over multiple machines and each machine
+runs an instance of a stage over a partition of the input data. To
+enable such parallel execution, a "History-Based Optimizer" (HBO)
+recommends a partition count (number of instances) for each stage
+and a resource plan (the number of cores and memory needed) for
+all instances of the stage based on previous experiences.
+
+During job execution, a Stage Dependency Manager will main-
+tain the stage dependencies of a job and pop out all the unblocked
+stages to the Fuxi scheduler [63]. The scheduler treats each stage
+as a task to be scheduled and maintains tasks in queues. For each
+stage, the Fuxi scheduler uses a heuristic-based approach to recom-
+mending a placement plan that sends instances to machines. After
+an instance is assigned to a machine, it will be executed using the
+resource plan that HBO has created for this instance, which is the
+same for all instances of the same stage.
+
+Challenges. MaxCompute’s large, complex big data processing
+environment poses a number of challenges to resource optimization.
+First, resource optimization involves a set of decisions that need
+to be made in the life cycle of a big data query: (1) the partition count
+of a stage; (2) the placement plan that maps the instances of a stage
+to the available machines; (3) the resource plan that determines the
+resources assigned to each instance on a given machine. All of these
+factors will have a signicant impact on the performance of the
+job, e.g., its latency and computing cost. Among the three issues,
+the partition count is best studied in the literature [15, 18, 34, 35].
+But this decision alone is not enough – both decisions 2 and 3
+can aect the performance a lot. While most of the existing work
+neglects the placement problem, due to the use of virtualization or
+container technology, a service provider like Alibaba Cloud does
+need to solve the placement problem in the physical clusters. As for
+the resource plan, it is determined by HBO from past experiences,
+without considering the latencies of the current instances in hand.
+However, such solutions are far from ideal: if one underestimates
+the resource needs, the job can miss its deadline. On the other hand,
+overestimation leads to wasted resources and higher costs on (both
+internal and external) users. A few systems addressed the placement
+
+(a) CDF for #stages / job
+
+(b) CDF for #instances / stage
+
+Figure 1: The lifecycle of a query job in MaxCompute
+
+(c) Timeline of 6716 instances in a stage
+Figure 2: Trace overview
+
+problem [15, 18] or the resource problem [36, 46] in isolation and
+in simpler system environments. We are not aware of any solution
+that can address all three problems in an integrated system.
+
+Second, the scale and complexity of our production clusters
+make the above decisions a challenging problem. Most notably, our
+clusters can easily extend to tens of thousands of machines, while
+all the resource optimization decisions must be made well under
+a second. An algorithm for the placement problem with quadratic
+complexity [18] may work for a small cluster of 10 machines and a
+small number of jobs, as in the original paper, but not for the scale
+of 10’s thousands of machines and millions of jobs. Furthermore, the
+optimal solutions to both the placement and resource plans depend
+on the workload characteristics of instances, available machines,
+and current system states. It is nontrivial to characterize all the data
+needed for resource optimization, let alone the question of using
+all the data to derive optimal solutions well under a second.
+
+Third, our use cases clearly indicate that resource optimization is
+a multi-objective optimization (MOO) problem. A real example we
+encountered in production is that after the user changed to allocate
+10x more resources (hence paying 10x the cost), the latency of a
+job was reduced only by half, which indicates ineective use of
+resources and a poor tradeo between latency and cost. Over such
+a complex processing system, the user has no insights into how
+latency and cost trade-o. Therefore, there is a growing demand that
+the resource optimizer makes the decisions automatically to achieve
+the best tradeo between multiple, often competing, objectives.
+Most existing work on resource optimization focuses on a single
+objective, i.e., job latency [15, 18, 19, 34, 35, 46, 61]. Only a few recent
+systems [36, 40] oer a multi-objective approach to the resource
+optimization problem. Still, their solutions do not suit the complex
+structure of big data queries, which we detail below.
+
+Fourth, to enable multi-objective resource optimization, the sys-
+tem must have a model for each objective to predict its value
+under any possible solution that the optimizer would consider.
+Existing models, derived from domain knowledge [17, 18, 34] or
+machine learning methods [23, 26, 37, 65], have been used to im-
+prove SQL query plans [25, 45] or to improve selectivity estima-
+tion [11, 20, 21, 32, 33, 38, 50–54, 56, 57, 66]. But a key observation
+made in this work is that existing models do not suit the needs of
+resource optimization of big data queries because they perform only
+
+coarse-grained modeling: by capturing only end-to-end query la-
+tency or operator latency across parallel instances, these models
+may yield highly variable performance as they often involve large
+numbers of stages and parallel instances. Running optimization
+on highly-variable models gives undesirable results while missing
+opportunities for instance-level recommendations.
+
+Example 1. Fig. 2(a) and 2(b) show that in a production trace of
+0.62 million jobs, there are 1.9 million stages in total, with up to
+64 stages in each job, and 121 million instances, with up to 81430
+instances in a stage. For a particular stage with 6716 instances,
+Fig. 2(c) shows that the latencies of dierent instances vary a lot.
+If a performance model captures only the overall stage latency,
+i.e., the maximum instance latency, when the resource optimizer
+is asked to reduce latency, it will assign more resources uniformly
+to all the instances (as they are not distinguishable by the model).
+The extra resources do not contribute to the stage latency for those
+short-running instances, while incurring a higher cost. Instead, an
+optimal solution would be only to assign more resources to long-
+running instances while reducing resources for short-running ones.
+Such decisions require ne-grained instance-level models as well
+as instance-specic resource plans.
+
+Contributions. Based on the above discussion, our work aims
+to support multi-objective resource optimization via ne-grained
+instance-level modeling and optimization, and devises new system
+architecture and algorithms to enable fast resource optimization
+decisions, well under a second, in the face of 10’s thousands of machines
+and 10’s thousands of instances per stage. By way of addressing the
+above challenges, our work makes the following contributions.
+
+1. New architecture of a resource optimizer (Section 3). To enable
+all the resource optimization (RO) decisions of a stage within a
+second, we propose a new architecture that breaks RO into a se-
+ries of simpler problems. The solutions to these problems leverage
+existing cost-based optimization (CBO) and history-based optimiza-
+tion (HBO), while xing their suboptimal decisions using a new
+Intelligent Placement Advisor (IPA) and Resource Assignment Ad-
+visor (RAA), both of which exploit ne-grained predictive models
+to enable eective instance-level recommendations.
+
+2. Fine-grained models (Section 4). To suit the complexity of our
+big data system, our ne-grained instance-level models capture all
+relevant aspects from the outputs of CBO and HBO, the hardware,
+
+Job2. stage1RP: (0.8 , 8G)P: 100Job1. stage2RP: (1 core , 4G)P: 40Query JobQuery ParserResource Plan (RP): [DOP, num of cores, memory size, …]Placement Plan (PP): […]Job1.Stage2RP: [40, 8, 8G, …]PP: []Job2.Stage1RP: [100, 16, 16G]PP: []Scheduler…Task QueueExecutorJob1.Stage1RP: [20, 4, 4G, …]PP: []Cost-based Optimizer (CBO)History-based Optimizer(HBO)Stage DependencyManagerInst. 1Inst. 2Inst. M…Job1.Stage1Placement PlanPlacement AdvisorJob1.stage1(20, 1 core, 2G mem)Job1.stage3(100 insts,2 cores,4G mem)Job1.stage2(40, 1 core, 2G mem)123456789101112131415Job1 --Physical Operator Tree (POT)Query JobsSQL ParserCost-based OptimizerSyntax TresLogical PlanHistory-based OptimizerPhysical OperatorTree (POT)POT & Resource Plan(RP) &Partition Count (P)…Job2.stage1Job1.stage2Job1.stage1PlacementAdvisorExecutionBBB(4 cor, 16g mem),(40%, 50%, …)(2 cor, 10g mem),(60%, 70%, …)Machine Type1…(4 cor, 16g mem),(40%, 50%, …)(2 cor, 10g mem),(60%, 70%, …)Machine Type2(2 cor, 10g mem),(60%, 70%, …)(8 cor, 12g mem),(30%, 60%, …)(8 cor, 12g mem),(30%, 60%, …)(8 cor, 12g mem),(30%, 60%, …)(8 cor, 12g mem),(30%, 60%, …)Machine Type3Cluster Manager-Capacity Monitor-System State MonitorCluster……Stage & RP & PClusterManagerATask QueueSchedulerJob1. stage1RP: (0.5 core , 2G)P: 20Inst. 1Inst. 2Inst. 20…A stagewith20 instancesPlacement Plan (PP) maps instances to machinesResource Plan (RP) assigns CPU and memory to an instance on a machineRPRPRPRPRPRPPP12345Job1.stage1(0.5 core, 2G), 20Job1.stage3RP: (1 cores, 4G) P: 10Job1.stage2(1 core, 4G), 40123456789101112131415A jobwith 3 stagesStage Dependency ManagerJob 1Popped: {Stage1, Stage2}Finished: {} Blocked: {Stage3}Job 2Job 3Stage1Stage2Stage3Job1.stage1(0.5 core, 2G), 20Job1.stage3RP: (1 cores, 4G) P: 10Job1.stage2(1 core, 4G), 401234567891011121314151248163264Num. of Stages in a Job0%50%100%ProportionWorkloadsABC100101102103104105Num. of Instances in a Stage0%50%100%ProportionWorkloadsABC020406080100120Seconds02000400060006716 Instancesmaximum latency=114sand machine states, and embed these heterogenous channels of
+information in a number of deep neural network architectures.
+
+3. Optimizing placement and resource plans (Section 5). We design
+a new stage optimizer that employs a new IPA module to derive
+a placement plan to reduce the stage latency, and a novel RAA
+model to derive instance-specic resource plans to further reduce
+latency and cost in a hierarchical MOO framework. Both methods
+are proven to achieve optimality with respect to their own set of
+variables, and are optimized to run well under a second.
+
+4. Evaluation (Section 6). Using production workloads of 0.6M
+jobs and 1.9M stages and a simulator of the extended MaxCompute
+environment, our evaluation shows promising results: (1) Our best
+model achieved 7-15% median error and 9-19% weighted mean abso-
+lute percentage error. (2) Compared to the HBO and Fuxi scheduler,
+IPA reduced the latency by 10-44% and the cloud cost by 3-12% while
+running in 0.04s. (3) IPA + RAA further achieved the reduction of
+37-72% latency and 43-78% cost while running in 0.02-0.23s.
+
+2 RELATED WORK
+ML-based query performance prediction. Recent work has de-
+veloped various Machine Learning (ML) methods to predict query
+performance. QPPNet [26] builds separate neural network models
+(neural units) for individual query operators and constructs more
+extensive neural networks based on the query plan structure. Each
+neural unit learns the latency of the subquery rooted in a given
+operator. TLSTM [37] constructs a uniform feature representation
+for each query operator and feeds the operator representations into
+a TreeLSTM to learn the query latency. Both approaches, however,
+are tailored only for a single machine with an isolated runtime envi-
+ronment and xed resources. Hence, they are not directly applicable
+to our RO problem in large-scale complex clusters.
+
+ModelBot2 [23] trains ML models for ne-grained operating
+units decomposed from a DBMS architecture to enable a self-driving
+DBMS. However, it is designed for a local DMBS but not big data
+systems as in our work. GPredictor [65] predicts the latency of con-
+current queries in a single machine with a graph-embedding-based
+model. It further improves accuracy by using proling features
+such as data-sharing, data-conict and resource competition from
+the local DBMS. In our work, however, concurrency information
+regarding the operators from dierent queries is unavailable due
+to the container technology in large clusters [28, 48, 59, 64].
+
+ML-based models have been used for dierent purposes. NEO [25]
+learns a DNN-based cost model for (sub)queries and uses it to
+build a value-based Reinforcement Learning (RL) algorithm for
+improving query execution plans. Vaidya et al. [45] train ML mod-
+els from query logs to improve query plans for parametric queries.
+Phoebe [67] uses ML models for improving checkpointing decisions.
+Many recent works [11, 20, 21, 32, 33, 38, 50–54, 56, 57, 66] have
+applied ML-based approaches to improve cardinality estimation.
+
+A nal, yet important, comment on the above systems is that
+
+they do not address the RO problem like in our work.
+
+Performance tuning in DBMS and big data systems. Perfor-
+mance tuning systems require a dedicated, often iterative, tuning
+session for each workload, which can take long to run (e.g., 15-45
+minutes [46, 61]). As such, they are not designed for production
+workloads that need to be executed on demand. In addition, they
+
+aim to optimize a single objective, e.g., query latency. Among search-
+based methods, BestCong [69] searches for good congurations
+by dividing high-dimensional conguration space into subspaces
+based on samples, but it cold-starts each tuning request. Classy-
+Tune [68] solves the optimization problem by classication, which
+cannot be easily extended to the MOO setting. Among learning-
+based methods, Ottertune [46] builds a predictive model for each
+query by leveraging similarities to past queries, and runs Gaussian
+Process exploration to try other congurations to reduce latency.
+CDBTune [61] uses Deep RL to predict the reward (a weighted sum
+of latency and throughput) of a given conguration and explores a
+series of congurations to optimize the reward. ResTune [62] uses
+a meta-learning model to learn the accumulated knowledge from
+historical workloads to accelerate the tuning process for optimizing
+resource utilization without violating SLA constraints.
+
+Task scheduling in big data systems. Fuxi [63] and Yarn [48]
+make the scheduling decisions based on locality information, while
+Trident [13] improves Yarn by considering the locality in dierent
+storage tiers. However, these systems treat each task as a blackbox
+and make scheduling decisions without knowing the task charac-
+teristics, such as the query plan structures and performance pre-
+dictions. Hence, they cannot nd optimal solutions to the machine
+placement and/or resource allocation problems.
+
+Resource optimization in big data systems. In cluster com-
+puting, a resource optimizer (RO) determines the optimal resource
+conguration on demand and with low latency as jobs are submitted.
+RO for parallel databases [18] determines the best data partitioning
+strategy across dierent machines to minimize a single objective,
+latency. Its time complexity of solving the placement problem is
+quadratic to the number of machines (9 machines in [18]), which is
+not aordable on today’s productive scale (>10K machines). Mor-
+pheus [15] codies user expectations as SLOs and enforces them
+using scheduling methods. However, its optimization focuses on
+system utilization and predictability, but not minimizing the cost
+and latency of individual jobs as in our work. PerfOrator [34] solves
+a single-objective (latency) optimization problem via an exhaustive
+search of the solution space while calling its model for predicting
+the performance of each solution. WiseDB [24] manages cloud re-
+sources based on a decision tree trained on performance and cost
+features from minimum-cost schedules of sample workloads, while
+such schedules are not available in our case. Li et al. [19] mini-
+mize end-to-end tuple processing time using deep RL and requires
+dening scheduling actions and the associated reward, which is not
+available in our problem. Recent work [17] proposes a heuristic-
+based model to recommend a cloud instance (e.g., EC2 instance)
+that achieves cost optimality for OLAP queries, which is dierent
+from our resource optimization problem.
+
+CLEO [35, 49] learns the end-to-end latency model of query op-
+erators, and based on the model, minimizes the latency of a stage
+(involving multiple operators) by tuning the partition count. It has
+a set of limitations: First, its modeling target concerns the latency
+of multiple instances over dierent machines, which can be highly
+variable (e.g., due to uneven data partitions or scheduling delays)
+and hard to predict. Second, CLEO’s latency model does not permit
+instance-level recommendations for the placement and resource
+allocation problems. Third, its optimization supports a single ob-
+jective, and determines only the partition count in a stage, but not
+
+other RO decisions. Bag et al. [2] propose a plan-aware resource
+allocation approach to save resource usage without impacting the
+job latency but not minimize latency and cost like in our work.
+
+UDAO [36, 60] tunes Spark congurations to optimize for mul-
+tiple objectives. However, it works only on the granularity of an
+entire query and neglects its internal structure. Such coarse-grained
+modeling of latency is unlikely to be accurate for complex big data
+queries, which leads to poor results of optimization. TEMPO [40]
+considers multiple Service-Level Objectives (SLOs) of SQL queries
+and guarantees max-min fairness when they cannot be all met. But
+its MOO works for entire queries, but not ne-grained MOO that
+suits the complex structure of big data systems.
+
+Multi-objective optimization (MOO). MOO for SQL [14, 16,
+42–44] nds Pareto-optimal query plans by eciently searching
+through a large set of them. The problem is fundamentally dier-
+ent from RO, including machine placement and resource tuning
+problems. MOO for workow scheduling [16] assigns operators
+to containers to minimize total running time and money cost. But
+its method is limited to searching through 20 possible numbers of
+containers and solving a constrained optimization for each option.
+Theoretical MOO solutions suer from a range of performance
+issues when used in a RO: Weighted Sum [27] is known to have poor
+coverage of the Pareto frontier [29]. Normalized Constraints [30]
+lacks in eciency due to repeated recomputation to return more so-
+lutions. Evolutionary Methods [8] approximately compute a Pareto
+set but suer from inconsistent solutions. Multi-objective Bayesian
+Optimization [5, 12] explores the potential Pareto-optimal points
+iteratively by extending the Bayesian approach, but lacks the e-
+ciency due to a long-running time. Progressive frontier [36] is the
+rst MOO solution suitable for RO, oering good coverage, e-
+ciency, and consistency. However, none of them consider complex
+structures of big data queries and require modeling end-to-end
+query latency, which does not permit instance-level optimization.
+
+3 SYSTEM OVERVIEW
+In this section, we provide the background on MaxCompute [28],
+the big data query processing system at Alibaba, and our proposed
+extended architecture for resource optimization.
+
+3.1 Background on MaxCompute
+In MaxCompute, a submitted user job is represented hierarchically
+using stages and operators, which will then be executed by parallel
+instances. As shown in Fig. 1, a job is a Directed Acyclic Graph
+(DAG) of stages, where the edges between stages are inter-machine
+data exchange (shuing) operations. A stage is a DAG of operators,
+where edges are intra-machine pipelines without data shuing.
+The input data of each stage is partitioned over dierent machines,
+where each partition is run as an instance of the stage in a container.
+Fig. 1 shows the functionality of query optimizers and the sched-
+
+uler in the lifecycle of a submitted job.
+
+Cost-Based Optimizer (CBO): MaxCompute’s Cost-Based Op-
+timizer (CBO) is a variant of the Cascades optimizer [10]. It follows
+traditional SQL optimization based on cardinality and cost estima-
+tion and generates a Physical Operator Tree (POT), which is a DAG
+of stages where each stage is a DAG of operators.
+
+History-Based Optimizer (HBO): To facilitate resource opti-
+mization, a History-Based Optimizer (HBO) gives an initial attempt
+
+to recommend a partition count (number of instances) for each
+stage and a resource plan (the number of cores and memory needed)
+for all instances of the stage based on previous experiences. This
+history-based approach is known to be suboptimal because it does
+not consider the machines to run these queries and their current
+states. Both hardware characteristics and system states aect the
+latencies of instances, and an optimal solution should try to mini-
+mize the maximum latency of parallel instances, in addition to cost
+objectives. Moreover, HBO needs expensive engineering eorts,
+especially when workloads change and the system upgrades. We
+will address these issues in our new system design.
+
+Scheduler: During job execution, the granularity of scheduling
+is a stage: a stage that has all dependencies met is handed over
+to the Fuxi scheduler [63]. Fuxi uses a heuristic approach to rec-
+ommending a placement plan that sends instances to machines,
+and each instance is assigned to a container on a machine with a
+previously-determined resource plan for CPU and memory. These
+decisions, however, are made without being aware of the latency of
+each instance. As such, an instance with a potential longer running
+time (e.g., due to larger input size) may be sent to a heavily loaded
+machine while another instance with less data may be sent to an
+idle machine, leading to overall poor stage latency (the maximum
+of instance latencies). A detailed example is given later in Fig. 6.
+
+Workload and Cluster complexity. Production clusters take
+workloads with a vast variety of characteristics. Workload A from
+an internal department includes 1 - 64 stages in each job. A stage
+may involve 2 - 249 operators and be executed by 1 - 42K instances,
+where an instance could take sub-seconds up to 1.4 hours to run.
+Further, production clusters consist of heterogeneous machines. For
+example, we observed 5 dierent hardware types when executing
+workload A, where each hardware type includes 30 - 7K machines.
+Moreover, the system states in each machine vary over time. Take
+CPU utilization for example. The average CPU utilization varies
+from 32%-83%, and the standard deviation ranges from 6%-23%.
+Finally, each machine could run multiple containers, and a container
+runs an instance with a quota of CPU and memory based on a
+resource plan. For workload A, we observed 17 dierent resource
+plans for containers. Since there is no perfect isolation between
+containers and the host OS [47], containers with the same resource
+plan could perform dierently on machines with dierent hardware
+or system states, making the running environment more complex.
+
+3.2 System Design for Resource Optimization
+We next show our design for resource optimization by extending
+the MaxCompute architecture. Our work aims to support multi-
+objective resource optimization (MORO). Here, we can support any
+user objectives (as long as we can obtain training data for them). For
+ease of composition, our discussion below focuses on minimizing
+both the stage latency (maximum latency among its instances) and
+the cloud cost (a weighted sum of CPU-hour and memory-hour),
+the two common objectives of our users.
+
+To achieve MORO, the resource optimizer needs to make three
+decisions: (1) the partition count of a stage; (2) the placement plan
+(PP) that maps the instances of a stage to the available machines;
+(3) the resource plan (RP) that determines the resources (the number
+of cores and memory size) assigned to each instance on a given
+machine. Our design is guided by two principles:
+
+Figure 3: Extended system architecture for resource optimization
+
+Simplicity and Eciency. An optimal solution to MORO may
+require examining all possibilities of dividing the input data into m
+instances and arranging them to run on some of the n machines,
+each using one of the r possible resource congurations. In pro-
+duction clusters, both m and n could be 10’s of thousands, while all
+the RO decisions must be made well under a second. Hence, it is
+infeasible to run an exhaustive search for optimal solutions.
+
+Our design principle is to break MORO into a series of sim-
+pler problems, each of which can run very fast. First, we keep the
+History-Based Optimizer (HBO) that uses past experiences to rec-
+ommend a partition count for a stage and an initial resource plan
+for its instances. There is a merit of learning such congurations
+from past best-performing runs of recurring jobs (which dominate
+production workloads). While the recommendations may not be
+optimal, they serve as a good initial solution. Second, given the out-
+put of HBO, we design an Intelligent Placement Advisor (IPA)
+that determines the placement plan (PP), mapping the instances to
+machines, by predicting latencies of individual instances. Third, our
+Resource Assignment Advisor (RAA) will ne-tune the resource
+plan (RP) for each instance, after it is assigned to a specic machine,
+to achieve the best tradeo between stage latency and cost. We give
+a theoretical justifcation of our approach in Section 5.
+
+Fine-grained Modeling and Hierarchical MOO. As discussed
+earlier, instance-level recommendations for PP and RP are key to
+minimizing latency and cost. To do so, we design a ne-grained
+model that predicts the latency of each instance based on the work-
+load characteristics, hardware, machine states, and resource plan
+in use. The model will be used in IPA to develop the PP that min-
+imizes the maximum instance latency (while using the same RP
+for all instances). The instance-level model will be further used in
+RAA to improve the RP by solving a hierarchical MOO problem:
+We rst compute the instance-level MOO solutions that minimize
+the latency and cost of each individual instance. We then combine
+the instance-level MOO solutions into stage-level MOO solutions,
+and recommend one of them that determines the instance-specic
+resources with the best tradeo between stage latency and cost.
+
+Fig. 3 presents the detailed architecture that extends MaxCom-
+pute with three new components (colored in purple): The trace
+collector collects runtime traces, including the query traces (the
+query plan and operator features such as cardinality), instance-
+level traces (input row number and data size of an instance, and the
+resource plan assigned to it), and machine-level traces (machine
+system states and hardware type). The model server featurizes
+
+the collected traces and internally learns an instance-level latency
+model. The internal model gets updated periodically by retraining
+or ne-tuning when the new traces are ready. It will serve as an
+instance-level latency predictor for resource optimization of on-
+line queries. The Stage-level Optimizer (SO) consists of the IPA
+and RAA, as described above. For a stage to be scheduled, it calls
+the predictive model to estimate the latency of each instance on
+any available machine, and determines the PP by minimizing stage
+latency and then the RP by minimizing both stage latency and cost.
+
+4 FINE-GRAINED MODELING
+In this section, we present how to build ne-grained instance-level
+models that can be used to minimize both latency and cost of each
+stage. To suit the complexity of big data systems, our models capture
+all relevant systems aspects to support the resource optimizer to
+make eective recommendations.
+
+4.1 Multi-Channel Coverage
+It is nontrivial to predict the latency of a single instance due to many
+factors in big data systems. Those factors include the characteristics
+of the (sub)query plan running in the instance, data characteristics,
+resources in use, current system states, and hardware properties.
+Each factor alone could aect the latency of an instance, and the
+coeects of multiple factors can make the latency pattern more
+complex. Therefore, we propose the idea of multi-channel inputs
+(MCI) to capture all of the above factors in our model.
+
+Multi-channel Inputs. For a given stage, we extract features
+from all available runtime traces including the query plan, resource
+plan, instance-level metrics, hardware prole, and system states.
+We design multi-channel inputs (MCI) to group the features into
+ve channels that characterize dierent factors. Fig. 4 shows the
+overview of the MCI design for the instances of a stage.
+
+Channel 1: Stage-oriented features (query plan). Channel 1 intro-
+duces the stage-oriented features that are shared among instances
+in a stage. It captures the operator characteristics in an operator
+feature matrix (see Fig. 4) and operator dependencies in a DAG
+structure (Fig. 5). The characteristics of each operator are featur-
+ized by three common feature types (CT1-CT3) and the customized
+features (CFs). CT1 identies the operator type and is represented
+as a categorical variable. CT2 captures the statistics from CBO
+and HBO, including the cardinality, selectivity, average row size,
+partition count, and cost estimation. CT3 captures the IO-related
+
+Query JobsSQL ParserCost-based OptimizerSyntax TresLogical PlanHistory-based OptimizerPOT & Default RP & PStage & RP & P123Periodical PathABCOffline Path1011Online Path…91DScheduler-Task Queue (a queue of stages)…Job2.stage1Job1.stage2Job1.stage1Stage-levelOptimizerTrace CollectorExecutionFeature ExtractorPlacement AdvisorInstance LatencyPredictorIPABBB(4 cor, 16G mem),(40%, 50%, …)(2 cor, 10G mem),(60%, 70%, …)Machine Type1…(4 cor, 16G mem),(40%, 50%, …)(2 cor, 10G mem),(60%, 70%, …)Machine Type2(2 cor, 10G mem),(60%, 70%, …)(8 cor, 12G mem),(30%, 60%, …)(8 cor, 12G mem),(30%, 60%, …)(8 cor, 12G mem),(30%, 60%, …)(8 cor, 12G mem),(30%, 60%, …)Machine Type3Cluster Manager-Capacity Monitor-System State MonitorCluster……PP & Tuned RP4Stage &Default RP &P &Capacity MatrixSystem State Matrix5678Cluster Manager-Capacity Monitor-System State MonitorAC1011DIPA: Intelligent Placement AdvisorRAA: Resource Assignment AdvisorInstance-level MOO SolverStage-level MOO OptimizerRAAPlacement Plan  (PP)Resource Plan Advisor9Stage Optimizer (SO)Architecture (v9 20220701)Model Server-Data preparation -MCI-based modeling -Periodical model retrainingJob1.stage1(0.5 core, 2G), 20Job1.stage3RP: (1 cores, 4G) P: 10Job1.stage2(1 core, 4G), 40123456789101112131415A jobwith 3 stagesA jobwith 3 stagesStage Dependency ManagerJob 1Popped: {Stage1, Stage2}Finished: {} Blocked: {Stage3}Job 2Job 3Stage1Stage2Stage3Job1.stage1(0.5 core, 2G), 20Job1.stage3RP: (1 cores, 4G) P: 10Job1.stage2(1 core, 4G), 40123456789101112131415Figure 4: The multi-channel coverage from basic features
+
+Figure 5: MCI-based model-
+ing framework
+
+properties, including the location of data (local disk or network) and
+strategies for shuing. CFs are tailored for the unique properties
+of operators, and each feature belongs to one particular operator.
+Channels 2-5: Instance-oriented features. Channel 2-5 character-
+izes individual instances (Fig. 4). Channel 2, instance meta, includes
+an instance’s input row number and input size captured from the
+underlying storage system after the data partition is determined.
+Channel 3, resource plan, featurizes properties of the container that
+runs an instance, in terms of the CPU cores and memory size. Chan-
+nel 4, machine system states, records the CPU utilization, memory
+utilization, and IO activities of a machine to capture its running
+states. Since the system states represented by count-based measure-
+ments could be innite, we discretize the system states to reduce
+the computation complexity. Channel 5, hardware type, uses the
+machine model to distinguish a set of hardware types.
+
+Augmented Channel 1: Additional Instance Meta (AIM). In big
+data systems, CBO produces the query plan without considering
+the characteristics of individual instances. Therefore, instances in a
+stage share the same query plan features (Ch1), even though their
+input row numbers can dier signicantly. A model built on such
+features may have diculty distinguishing those instance latencies.
+To address this issue, for each instance, we seek to enrich its
+query plan features with instance-level characteristics. More specif-
+ically, we augment the query plan channel of an instance by adding
+additional instance meta (AIM) features for each operator. AIM con-
+sists of the estimated operator input/output cardinality and costs of
+an individual instance. It is derived using the stage-level selectivity
+(Ch1), the instance meta (Ch2), and the cost model in CBO.
+
+Take job1.stage3 in Fig. 4 for example. We rst get the instance-
+level input cardinality of operators 9 and 10 from Ch2, and calculate
+their output cardinality accordingly with the operator selectivity.
+Then, we derive the instance-level cardinality of the remaining oper-
+ators according to the operator dependency. Finally, we calculate the
+instance-level operator costs by reusing CBO’s cost model. Specif-
+ically, we substitute the stage-level cardinality with the instance-
+level cardinality, set the partition count to one, and call the CBO’s
+cost model to derive the operator costs for an instance.
+
+Note that the above approach assumes that instances in a stage
+share the same selectivities. Although it may not always be true, our
+evaluation results show that the model built under this assumption
+could approximate the best performance in a realistic setting.
+
+Finally, recent ML models of DBMSs [26, 39] also learn data char-
+acteristics by encoding/embedding tables. In a production system,
+however, many tables are not reachable due to access control for
+security reasons, and the overhead of representing a distributed ta-
+ble is much higher than in a single machine. Therefore, we assume
+the data characteristics are already digested by CBO in our work.
+
+4.2 MCI-based Models
+Now we propose our MCI-based models to learn instance latency.
+
+MCI-based Modeling Framework. In the output of MCI, fea-
+tures in the query plan channel are represented as a DAG (Fig. 5),
+while the instance-oriented features are in the tabular form. To
+incorporate these heterogeneous data structures in model building,
+we design two model components, as shown in Fig. 5. The plan
+embedder constructs a plan embedding of the plan features in the
+form of an arbitrary DAG structure. It rst encodes the operators
+into a uniform feature space by padding zeros for the unmatched
+customized features. To embed the query plan, it then applies a
+Graph Transformer Networks (GTN) [58] due to its ability to learn
+the DAG context in heterogeneous graphs with dierent types of
+nodes. The latency predictor is a downstream model that concate-
+nates the plan embedding with other instance-oriented features
+(channels 2-5) into a big vector, and feeds the vector to a Multilayer
+Perceptron (MLP) to predict the instance-level latency.
+
+Modeling Tools in Our Framework. Besides GTN, our modeling
+framework can accommodate other models designed for DBMSs,
+with necessary extensions to our graph-based MCIs. Thus, we can
+leverage dierent models and examine their pros and cons in our
+system. Due to space limitations, our extensions of QPPNet [26]
+and TLSTM [37] are deferred to [22] .
+
+5 STAGE-LEVEL OPTIMIZATION
+In this section, we present our Stage-level Optimizer (SO) that mini-
+mizes both stage latency and cost based on instance-level models.
+During execution, once a stage is handed to the scheduler, two
+decisions are made: the placement plan (PP) that maps instances to
+machines, and the resource plan (RP) that determines the CPU and
+memory resources of each instance on its assigned machine. The
+current Fuxi scheduler [63] decides a PP for m instances as follows:
+(1) Identify the key resource (bottleneck) in the current cluster,
+
+9101112131415IDNameOperator Feat.9StreamlineRead1(CT1, CT2, CT3, CF)910StreamlineRead2(CT1, CT2, CT3, CT)1011SortedAgg1(CT1, CT2, CT3, CT)1112Filter2(CT1, CT2, CT3, CT)1213MergeJoin1(CT1, CT2, CT3, CT)1314HashAgg1(CT1, CT2, CT3, CT)1415TableSink1(CT1, CT2, CT3, CT)15Instance id12…mInput num.510K514K…1.2MInput size (MB)394398…796Planned CPU11…1Planned Mem4G4G…4GMachine Cpu utils93%88%…81%Machine Mem utils64%58%…47%Machine IO bytes/s.82G.64G…1.01GMachine IO reqs/s71K61K…79KMachine TypeF53F53…F53Ch2: Instance MetaCh3: Resource PlanCh4: Machine System StatesCh5: Hardware TypeDAG StructureOperator Feature MatrixCh1: Query PlanStage-oriented Instance-orientedFeat. DescriptionOperatorTypeThe type of the operator InputCardThe total input cardinality from childrenoperatorsOutputCardThe output cardinality of the operatorAvgRowSizeThe size (in bytes) of each tupleSelectivity The estimated selectivity of the operatorPartition CountA guessed partition count by CBOCostCPUThe estimated CPU cost of the operatorCostMemThe estimated memory cost of the operatorCostNetworkThe estimated network cost of the operatorCostDiskThe estimated disk cost of the operatorCostThe weighted cost of above four costsDataReadModeThe media(s) of data source of the operatorShuffleReadAlgoThe algorithms for shuffle read till the operatorDataWriteModeThe media(s) of data sink of the operatorShuffleWriteAlgoThe algorithms for shuffle write till the operatorSR.limitThe limit used by the operator “StremlineRead”SR.offsetThe offset used by the operator “StremlineRead”……CT1CT2CT3CFsCheck the full list of Customized Features (CFs) in the appendix of our tech reportCT1|CT2|CT3 stands for  Common feature Type 1/2/3, used by all operatorsCF stands for Customized Features, each belonging to one specific operator.Job1.stage3AIM: Additional Instance MetaInstance-level: [InputCard, outputCard, CostCPU, CostMem, CostNetwork, CostDisk, Cost] (CT1, CT2, AIM,CT3, CF)9(CT1, CT2, AIM,CT3, CF)10Ch1: Query planPlan Embedder(GTN)plan embeddingLatency Predictor (MLP)latencyencencencencCh2Ch3Ch4Ch5(CT1, CT2, AIM,CT3, CF)11(CT1, CT2, AIM,CT3, CF)12(CT1, CT2, AIM,CT3, CF)13(CT1, CT2, AIM,CT3, CF)14(CT1, CT2, AIM,CT3, CF)159101112131415IDNameOperator Feat.9StreamlineRead1(CT1, CT2, CT3, CF)910StreamlineRead2(CT1, CT2, CT3, CT)1011SortedAgg1(CT1, CT2, CT3, CT)1112Filter2(CT1, CT2, CT3, CT)1213MergeJoin1(CT1, CT2, CT3, CT)1314HashAgg1(CT1, CT2, CT3, CT)1415TableSink1(CT1, CT2, CT3, CT)15Instance id12…mInput num.510K514K…1.2MInput size (MB)394398…796Planned CPU11…1Planned Mem4G4G…4GMachine Cpu utils93%88%…81%Machine Mem utils64%58%…47%Machine IO bytes/s.82G.64G…1.01GMachine IO reqs/s71K61K…79KMachine TypeF53F53…F53Ch2: Instance MetaCh3: Resource PlanCh4: Machine System StatesCh5: Hardware TypeDAG StructureOperator Feature MatrixCh1: Query PlanStage-oriented Instance-orientedFeat. DescriptionOperatorTypeThe type of the operator InputCardThe total input cardinality from childrenoperatorsOutputCardThe output cardinality of the operatorAvgRowSizeThe size (in bytes) of each tupleSelectivity The estimated selectivity of the operatorPartition CountA guessed partition count by CBOCostCPUThe estimated CPU cost of the operatorCostMemThe estimated memory cost of the operatorCostNetworkThe estimated network cost of the operatorCostDiskThe estimated disk cost of the operatorCostThe weighted cost of above four costsDataReadModeThe media(s) of data source of the operatorShuffleReadAlgoThe algorithms for shuffle read till the operatorDataWriteModeThe media(s) of data sink of the operatorShuffleWriteAlgoThe algorithms for shuffle write till the operatorSR.limitThe limit used by the operator “StremlineRead”SR.offsetThe offset used by the operator “StremlineRead”……CT1CT2CT3CFsCheck the full list of Customized Features (CFs) in the appendixCT1|CT2|CT3 stands for  Common feature Type 1/2/3, used by all operatorsCF stands for Customized Features, each belonging to one specific operator.Job1.stage3AIM: Additional Instance MetaInstance-level: [InputCard, outputCard, CostCPU, CostMem, CostNetwork, CostDisk, Cost] (CT1, CT2, AIM,CT3, CF)9(CT1, CT2, AIM,CT3, CF)10Ch1: Query planPlan Embedder(GTN)plan embeddingLatency Predictor (MLP)latencyencencencencCh2Ch3Ch4Ch5(CT1, CT2, AIM,CT3, CF)11(CT1, CT2, AIM,CT3, CF)12(CT1, CT2, AIM,CT3, CF)13(CT1, CT2, AIM,CT3, CF)14(CT1, CT2, AIM,CT3, CF)15Figure 6: Example of IPA
+
+Figure 7: Example of RAA
+
+Figure 8: Example of RAA path
+
+e.g., CPU or IO. (2) Pick m machines with top-m lowest resource
+watermarks. (3) Assign instances, in order of their instance id, to
+the m machines, and use the same resource plan for each instance
+as suggested by HBO. However, its negligence of latency variance
+among instances leads to suboptimal decisions for PP and RP:
+
+Example 2. Figure 6 shows how Fuxi gets a suboptimal placement
+plan in a toy example of sending a stage of 2 instances (i1, i2) to
+a cluster of 3 available machines (m1, m2, m3). Assume that the
+instance latency is proportional to its input row number on the
+same machine, and the current key resource in the cluster is the CPU.
+In this example, Fuxi rst picks m1 and m2 as machines with the
+top-2 lowest CPU utilization (watermarks) and assigns i1 to m1 and
+i2 to m2 respectively. The stage latency, i.e., the maximum instance
+latency, is 24s. However, the optimal placement plan could achieve
+a 16s stage latency by assigning i1 to m3 and i2 to m1. Further,
+using the same resources for i1 and i2 is not ideal. Instead, an
+optimal resource plan would be adding resources to i2 and reducing
+resources for i1 so as to reduce both latency and cost, indicating
+the need for instance-specic resource allocation.
+
+5.1 MOO Problem and Our Approach
+To derive the optimal placement and resource plans, we begin by
+providing the mathematical denition of multi-objective optimiza-
+tion (MOO) and present an overview of our approach.
+
+Instance-level MOO. First, consider a given instance to be run on
+a specic machine. We use f1, ..., fk to denote the set of predictive
+models of the k objectives and θ to denote a resource congura-
+tion available on that machine. Then the instance-level multiple-
+objective optimization (MOO) problem is dened as:
+
+Denition 5.1. Multi-Objective Optimization (MOO).
+
+f θ = f (θ ) =
+
+arg min
+
+θ
+
+s.t .
+
+f1(θ )
+
+
+
+
+...
+
+
+
+
+fk (θ )
+
+
+
+
+θ ∈ Σ ⊆ Rd
+
+where Σ denotes the set of all possible resource congurations.
+
+i ≤ f (cid:48)(cid:48)
+
+i and ∃j ∈ [1, k], f (cid:48)
+
+A point f (cid:48) ∈ Rk Pareto-dominates another point f (cid:48)(cid:48) i ∀i ∈
+[1, k], f (cid:48)
+. A point f ∗ is Pareto Opti-
+j < f (cid:48)(cid:48)
+j
+mal i there does not exist another point f (cid:48) that Pareto-dominates
+it. Then, the Pareto Set f = [f θ 1
+, ...] includes all the Pareto
+optimal points in the objective space Φ ⊆ Rk , under the congura-
+tions [θ 1, θ 2, . . .], and is the solution to the MOO problem.
+
+, f θ 2
+
+Stage-level MOO. We next consider the stage-level MOO problem
+over multiple instances. Consider m instances, (x1, ..., xm ), and
+n machines, (y1, ..., yn ). We use ˜xi to denote the characteristics
+of xi based on its features of Ch1 and Ch2 in its multi-channel
+representation, and ˜yj to denote the features of Ch4 and Ch5 of
+machine yj . Then consider two sets of variables, B and Θ:
+
+(1) B ∈ Rm×n is the binary assignment matrix, where Bi, j = 1
+
+when xi is assigned to yj , and (cid:205)
+
+j Bi, j = 1, ∀i = 1...m.
+
+(2) Θ = [Θ1, Θ2, ..., Θm ], denotes the collection of resource con-
+gurations of m instances, where ∀i ∈ [1, . . . , m], Θi ∈ Σ∗
+i ⊆
+Rd , and Σ∗
+i is set of possible congurations of d resources
+(e.g., d = 2 for CPU and memory resources) for instance i.
+
+Given these variables, suppose that f is the instance-level latency
+prediction model, i.e., f ( ˜xi , Θi , ˜yj ) gives the latency when xi is run-
+ning on yj using the resource conguration Θi . Then the stage-level
+latency can be written as, Lst aдe = maxi, j Bi, j f ( ˜xi , Θi , ˜yj ). The
+stage cost is the weighted sum of cpu-hour and memory-hour and
+can be written as, Cst aдe = (cid:205)
+i ), where w
+is the weight vector over d resources and w · ΘT
+is the dot product
+i
+between w and Θi . Other objectives can be written in a similar
+fashion. Then we have the Stage-level MOO Problem:
+
+i, j Bi, j f ( ˜xi , Θi , ˜yj )(w · ΘT
+
+Denition 5.2. Stage-Level MOO Problem.
+
+arg min
+B,Θ
+
+s.t .
+
+L(B, Θ) = maxi, j Bi, j f ( ˜xi , Θi , ˜yj )
+C(B, Θ) = (cid:205)
+...
+
+i, j Bi, j f ( ˜xi , Θi , ˜yj )(w · ΘT
+i )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Bi, j ∈ {0, 1}, ∀i = 1...m, ∀j = 1...n
+(cid:205)
+(cid:205)
+
+j Bi, j = 1, ∀i = 1...m
+. . . , (cid:205)
+i ≤ U 1
+i Bi, j Θ1
+j ,
+
+i Bi, j Θd
+i
+
+≤ U d
+j
+
+, ∀j = 1...n
+
+where Uj ∈ Rd is the d-dim resource capacities on machine yj .
+Existing MOO Approaches. Given the above denition of stage-
+level MOO, one approach is to call existing MOO methods [8, 27, 30,
+36] to solve it directly. However, this approach is facing a host of
+issues: (1) The parameter space is too large. In our problem setting,
+both m and n can reach 10’s of thousands. Hence, both B ∈ Rm×n
+and Θ = [Θ1, Θ2, ..., Θm ], ∀i, Θi ∈ Rd , involve O(mn) and O(md)
+variables, respectively, which challenge all MOO methods. (2) There
+are also constraints specied in Def. 5.2. Most MOO methods do not
+handle such complex constraints and hence may often fail to return
+feasible solutions. We will demonstrate the performance issues of
+this approach in our experimental study.
+
+L!!CPU: 40%IO: busy!"CPU: 60%IO: busy!#CPU: 80%IO: idle"!(100rows)8s(#$)12s10s(#$)""(200 rows)16s(#%)24s(#%)20sFuxi=> Stage latency = 24s1)Key resource type: CPU2)Pick machines: $$, $%3)Assign instances: #$→$$,#%→$%IPA=> Stage latency = 16s 1)Predict the L matrix2)Compute the BPL list: #$=8),#%=16)3)Assign the instance with the largest BPL: #%→$$4)Update the BPL list: #$=10)5)continue 3 until BPL list is empty: #$→$&RPLatCost-##1505-#)5520RPLatCost-)#3004-))1005'!='!"!!,'!"!"'!"!!=!*+,*'!"!"=**,"+'#='#""!,'#"""'#""!=#++,,'#"""=!++,*Inst1-MOOInst2-MOOΘ!=-!",-#"Θ#=-!!,-#"Θ$=-!!,-#%0&3=(100,25)0&4=(150,10)0&5=(300,9)Θ#=-!!,-#"0&4=(150,10)RAA1) Get Inst-MOO solutions2) Get Stage-MOO solutions3) WUN Recommendation:Θ'=-!#,-#%0&6=(300,24)Random Choice:RecommendedRandom ChoiceDominatesA*RPLatCostB)#-)#3004B))-))1005B)+-)+8010B).-).7520A,RPLatCostB##-##1505B#)-#)5520A0RPLatCostB+#-+#805B+)-+)708B++-++5010-$[;<=]Θ/=-##,-)#,-+#0-7=300,14Θ/=-##,-)),-+#0-7=150,15Θ/=-#),-)),-+#0-7=100,30Θ/=-#),-)+,-+#0-7=80,35Θ/=-#),-).,-+#0-7=80,45Θ/=-#),-).,-+*0-7=75,48RAA Path-%-%-&-%12356412345A,RPLatCostB##-##1505B#)-#)5520A*RPLatCostB)#-)#3004B))-))1005Inst1-MOOInst2-MOOΘ)=-##,-)*0-4=150,10RAA => Stage latency = 150s, Cost = 101) Get the Instance-level MOO solutionsΘ.=-#),-),0-6=300,24Random Choice:RecommendedRandom ChoiceDominatesInst1-MOOInst2-MOOInst3-MOO2) Get the stage-level MOO solutions3) WUN Recommendation:C1DStage LatencyStage Cost0-3[-#),-))]100250-4-##,-))150100-5-##,-)#3009A*RPLatCostB)#-)#3004B))-))1005B)+-)+8010B).-).7520A,RPLatCostB##-##1505B#)-#)5520A0RPLatCostB+#-+#805B+)-+)708B++-++5010-$[;<=]C1=D,,,D*,,D0,0-7=300,14C1=D,,,D**,D0,0-7=150,15C1=D,*,D**,D0,0-7=100,30C1=D,*,D*0,D0,0-7=80,35C1=D,*,D*2,D0,0-7=80,45C1=D,*,D*2,D0*0-7=75,48RAA Path-%-%-&-%12356412345A,RPLatCostB##-##1505B#)-#)5520A*RPLatCostB)#-)#3004B))-))1005Inst1-MOOInst2-MOOΘ)=-##,-)*0-4=150,10RAA => Stage latency = 150s, Cost = 101) Get the Instance-level MOO solutionsΘ.=-#),-),0-6=300,24Random Choice:RecommendedRandom ChoiceDominatesInst1-MOOInst2-MOOInst3-MOO2) Get the stage-level MOO solutions3) WUN Recommendation:E3CStage LatencyStage Cost0-3[-#),-))]100250-4-##,-))150100-5-##,-)#3009Our MOO Approach. To solve the complex stage-level MOO prob-
+lem while meeting stringent time constraints, we devise a novel
+MOO approach that proceeds in two steps:
+
+Step 1 (IPA): Take the resource conguration Θ0 returned from
+the HBO optimizer as the default and assign it uniformly to all
+instances, Θi = Θ0, ∀i ∈ [1, ..., m]. Then minimize over B in Def. 5.2
+by treating Θ0 as a constant.
+Step 2 (RAA): Given the solution from step 1, B∗, we now minimize
+over the variables Θ in Def. 5.2 by treating B∗ as a constant.
+
+The intuition behind our approach is that if we start with a decent
+choice of Θ0, as returned by HBO, we hope that step 1 will reduce
+stage latency via a good assignment of instances to machines by
+considering machine capacities and instance latencies. Then step 2
+will ne-tune the resources assigned to each instance on a specic
+machine to reduce stage latency, cost, as well as other objectives. We
+next present our IPA and RAA methods that implement the above
+steps, respectively, prove their optimality based on their respective
+denitions, and optimize them to run well under a second.
+
+5.2 Intelligent Placement Advisor (IPA)
+
+Problem Setup. IPA determines the placement plan (PP) by way
+of minimizing the stage latency. We assume that the total available
+resources in a cluster are more than a stage’s need – this assumption
+is likely to be met in a production system with 10’s of thousands of
+machines1. We further suppose that all the instances of a stage can
+start running simultaneously and hence the stage latency equals
+the maximum instance latency.
+
+IPA begins by feeding the MCI features of the stage to the la-
+tency model and builds a latency matrix, L ∈ Rm×n , to include the
+predictions of running the instances on all available machines, i.e.,
+Li, j is the latency of running instance xi on machine yj . By setting
+Li, j = f ( ˜xi , Θ0, ˜yj ), ignoring the constant Θ0, and focusing on the
+stage latency objective in Def. 5.2, we obtain:
+
+arg min
+
+B
+
+s.t.
+
+(cid:2) L(B) = maxi, j Bi, j Li, j
+(cid:213)
+
+Bi, j = 1, ∀i and
+
+(cid:213)
+
+Bi, j ≤ βj , ∀j
+
+(cid:3)
+
+(3)
+
+j
+
+i
+
+Here, we add the constraint (cid:205)
+i Bi, j ≤ βj to meet the resource ca-
+pacity constraint of each machine and a diverse placement preference
+(soft constraint) of sending instances to dierent machines to re-
+duce resource contention. Let βj denote the maximum number of
+instances a machine yj can take based on its capacity constraint
+(Uj ∈ Rd ) and diversity preference. We have
+
+βj = min{(cid:98)U 1
+
+j /Θ1
+
+0(cid:99), (cid:98)U 2
+
+j /Θ2
+
+0(cid:99), ..., (cid:98)U d
+
+j /Θd
+
+0 (cid:99), α }
+
+where α is a parameter that denes the maximum number of in-
+stances each machine can take based on the diverse placement
+preference. Basically, a smaller α shows a stronger preference of
+the diverse placement for a stage and we have α >= (cid:100)m/n(cid:101).
+
+From Eq. (3), given that the variable B is a binary matrix, it is an
+
+NP-hard Integer Linear Programming (ILP) problem [4].
+
+IPA Method. We design a new solution to IPA based on the fol-
+lowing intuition: Since the stage latency is the maximum instance
+
+1Otherwise, there is a scheduling delay for the stage with the admission control.
+
+Algorithm 1: IPA Approach
+
+// Init
+
+// get the instance and machine index pairs of the largest BPL
+
+it , jt = argmax(BP Ll is t )
+
+1: L = cal_latency(model, X, Y), S = cal_max_num_inst().
+2: Y ∗ = Y , X ∗ = X , and P = { }.
+3: BP Ll is t = cal_bpl(L, X ∗, Y ∗).
+4: repeat
+5:
+6:
+7:
+8:
+9:
+end if
+10:
+if Sjt
+11:
+end if
+12:
+13: until X ∗ is empty
+14: return P
+
+P = P (cid:208){xit → yjt }, X ∗ = X ∗ − {xit }, Sjt
+if Y ∗ is ∅ and X ∗ is not ∅ then
+
+return { }
+
+== 0 then Y ∗ = Y ∗ − {yjt }, Recalculate the BP Ll is t .
+
+= Sjt − 1.
+
+// No solution found
+
+latency, intuitively, the placement plan wants to reduce the latency
+of the longer-running instances by sending them to the machines
+where they can run faster, potentially at the cost of compromising
+the latency of other short-running instances.
+
+Our IPA method works as follows: We rst prioritize the in-
+stances by their best possible latency (BPL), where BPL is dened as
+the minimum latency that an instance can achieve among all avail-
+able machines. Then we keep sending the instance of the largest
+BPL to its matched machine and updating the BPL for instances
+when a machine cannot take more instances. The full procedure is
+given in Algorithm 1. The time complexity is O(m(m +n) +d) using
+parallelism and vectorized computations in the implementation.
+
+Optimality Result. Our proof of the IPA result is based on the fol-
+lowing column-order assumption about the latency matrix L: For a
+given column (machine), when we visit the cells in increasing order
+of latency, let s1, . . . , sm denote the indexes of the cells retrieved
+this way. Then the column-order assumption is that all columns of
+the L matrix share the same order, s1, . . . , sm . See Fig. 6 for an exam-
+ple of L matrix. This assumption is likely to hold because, in the IPA
+step, all machines use the same amount of resources, Θ0, to process
+each instance. Hence, the order of latency across dierent instances
+is strongly correlated with the size of input tuples (or tuples that
+pass the lter) in those instances, which is independent of the ma-
+chine used. Empirically, we veried that this assumption holds over
+88-96% stages across three large production workloads, where the
+violations largely arise from the uncertainty of the learned model
+used to generate the L matrix.
+
+Below is our main optimality result of IPA. All proofs in this
+
+paper are left to [22] due to space limitations.
+
+Theorem 5.1. IPA achieves the single-objective stage-latency op-
+timality under the column-order assumption.
+
+Boosting IPA with clustering. A remaining issue is that a stage
+can be up to 80K instances in a production workload, and the num-
+ber of machines can also be tens of thousands. To further reduce the
+time cost, we exploit the idea that groups of machines or instances
+may behave similarly in the placement problem. Therefore, we
+boost the IPA eciency by clustering both machines and instances
+without losing much stage latency performance.
+
+While there exist many clustering methods [1], running them
+on many instances with large MCI features is still an expensive
+operation for a scheduler. This motivates us to design a customized
+clustering method based on MCI properties. An instance in a stage is
+characterized by its query plan (Ch1), instance meta (Ch2), resource
+plan (Ch3) and additional instance meta (AIM), where Ch1 and Ch3
+are the same for all instances, hence not needed in clustering, and
+AIM fully depends on Ch1 and Ch2. So the key factors lie in Ch2,
+where the input row number and input size are correlated. Thus,
+we approximately characterize an instance only by its input row
+number and apply 1D density-based clustering [1]. To represent a
+cluster, we choose the instance with the largest input row number
+to avoid latency underestimation. A machine in the cluster is
+characterized by its system states (Ch4) and hardware type (Ch5).
+We cluster them based on discretized values of Ch4 and Ch5.
+
+Suppose that clustering yields m(cid:48) instance clusters and n(cid:48) ma-
+chine clusters. Then the time complexity of IPA is O(m log m +
+n log n + m(cid:48)(m(cid:48) + n(cid:48)) + d), where a sorting-based method is used
+for clustering both instances and machines. Since m(cid:48) (cid:28) m, n(cid:48) (cid:28) n,
+the complexity reduces to O(m log m + n log n). Compared to other
+packing algorithms [18] that solve linear programming problems
+with quadratic complexity, the complexity of our algorithm is lower.
+
+5.3 Resource Assignment Advisor (RAA)
+After IPA determines the placement plan of a stage, each of its in-
+stances is scheduled to run on a specic machine. Then we propose
+a Resource Assignment Advisor (RAA) to tune the resource plan of
+each instance to solve a MOO problem, e.g., minimizing the stage
+latency, cloud cost, as well as other objectives.
+
+Stage-level MOO. Consider the stage-level MOO problem dened
+in Def. 5.2. By ignoring the constant B, we can rewrite it in the
+following abstract form using aggregators (д1, ..., дk ), each for one
+objective, to be applied to m instances:
+
+arg min
+
+Θ
+
+F Θ = F (Θ) =
+
+
+
+
+
+
+
+
+F1(Θ) = д1(f1(Θ1), ..., f1(Θm ))
+...
+Fk (Θ) = дk (fk (Θ1), ..., fk (Θm ))
+m ], θ li
+
+(4)
+
+
+
+
+
+
+
+
+where Θ = [Θ1, Θ2, ..., Θm ] = [θ l1
+1 , θ l2
+i denotes the li -th
+resource conguration of the i-th instance (i ∈ {1, ..., m}), and the
+aggregator дj (j=1,...,k) is either a sum or max.
+
+2 , ...θ lm
+
+As in the instance-level, we dene the stage-level resource
+2 , ...θ lm
+conguration as Θ = [θ l1
+m ], with its corresponding F Θ
+in the objective space Φ ⊆ Rk . Then we can dene stage-level
+Pareto Optimality and the Pareto Set similarly as before.
+
+1 , θ l2
+
+Note that we are particularly interested in two aggregators. The
+rst is max: the stage-level value of one objective is the maximum
+of instance-level objective values over all instances, e.g., latency.
+The second is sum: the stage-level value of one objective is the sum
+of instance-level objective values, e.g., cost.
+
+Example. In Figure 7, we have f1 as the predictive model for
+latency (д1 = max) and f2 for cost (д2 = sum). Suppose Θ = [θ 1
+1 , θ 2
+2 ]
+as the stage-level resource conguration. Then we have the stage-
+level latency as F1(Θ) = max(150, 100) = 150, the stage-level cost as
+F2(Θ) = sum(5, 5) = 10, and the stage-level solution F Θ is [150, 10].
+While one may consider using existing MOO methods to solve
+Eq. (4), it is still subject to a large number (O(md)) of variables. To
+
+Algorithm 2: General Hierarchical MOO
+
+Require: f j
+
+Pareto-optimal solutions in i-th instance and [θ 1
+
+i , i ∈ [1, m], j ∈ [1, pi ], where pi is the number of
+i , ..., θ pi
+]
+
+1: POΘ = [], POF = []
+2: minMList, maxMList = nd_range(f )
+3: k1Combs = nd_all_possible_values(f , minMList, maxMList)
+4: for c in k1Combs do
+for i in m do
+5:
+6:
+
+optimal_solution, index = nd_optimal(c, [f 1
+Θi = θ ind e x
+i
+
+i , ...f pi
+
+])
+
+i
+
+i
+
+end for
+POΘ .append(Θ), POF .append(F (Θ))
+
+7:
+8:
+9:
+10: end for
+11: POF , POΘ = lter_dominated(POF , POΘ)
+12: return POF , POΘ
+
+enable a fast algorithm, we next introduce our Hierarchical MOO
+approach developed in the divide-and-conquer paradigm.
+
+Denition 5.3. Hierarchical MOO. We solve the instance-level
+MOO problem for each of the m instances of a stage separately,
+for which we can use any existing MOO method (in practice, the
+Progressive Frontier (PF) algorithm [36] since it is shown to be
+the fastest). Suppose that there are k stage-level objectives, each
+with its max or sum aggregator to be applied to m instances. Our
+goal is to eciently nd the stage-level MOO solutions from the
+instance-level MOO solutions, for which we use f j
+i to denote the
+j-th Pareto-optimal solution in the i-th instance by using θ j
+i .
+General hierarchical MOO solution. Suppose that there are k
+user objectives, where k1 objectives use the max and k2 objectives
+use sum, k1 + k2 = k. We are also given instance-level Pareto sets.
+Then we want to select a solution for each instance such that the
+corresponding stage-level solution is Pareto optimal. Algorithm 2
+gives the full description. After initialization, line 2 obtains the
+lower and upper bounds for each of the k1 max objectives. In line 3
+(f ind_all_possible_values), we rst nd for each max objective all
+the possible values as one list, and then use the Cartesian product
+of these lists as the candidates for the k1 max objectives. In lines 4
+to 10, given one candidate, we try to nd the corresponding Pareto-
+optimal solution for the k2 sum objectives. For the k2 objectives
+using sum, due to the complexity of the sum operation, we can not
+aord the enumeration, which grows exponentially in the number
+of instances, O(pm
+max ) where pmax is the maximum number of
+instance-level Pareto points among m instances. To reduce the
+complexity, we resort to any existing MOO method, denoted by
+the function nd_optimal, that (in line 6) for each instance selects
+one Pareto-optimal solution for the k2 objectives. At the end of the
+procedure, we add a lter to remove the non-optimal solutions.
+
+Example. In Figure 7, we calculate the lower and upper bounds
+of the stage-level latency as max(55, 100) = 100 and max(150, 300)
+= 300 respectively. Then we enumerate all the possible stage-level
+latency values within the bounds (100, 150, 300) to collect potential
+Pareto-optimal solutions. For latency=100, there is only one feasible
+Θ choice (Θ = [θ 2
+2 ]) and hence the only solution is [100, 25].
+Similarly for latency=150, we get another solution [150, 10]. When
+latency=300, there are two solutions: [300, 24] with Θ = [θ 2
+1 , θ 1
+2 ]
+
+1 , θ 2
+
+Algorithm 3: RAA Path policy to construct POΘ and POF
+Require: pi, θ j
+
+i , ∀i ∈ [1, m], j ∈ [1, pi ], where we pre-sort f j
+
+i , f j
+
+i and
+
+i , i)], ∀i ∈ [1, m].
+
+= l at (f j
+
+qmax, i = Q .pop()
+if qmax < smax then
+
+θ j
+i in the descending order of latency for each instance.
+1: u j
+i ), ∀i ∈ [1, m], j ∈ [1, pi ].
+i
+2: P OΘ = [], P OF = [], λ = [1, 1, ..., 1], smax=inf
+3: Build the max heap Q with data points [(u 1
+4: repeat
+5:
+6:
+7:
+8:
+9:
+10:
+11:
+12:
+13: until True
+
+end if
+λ = πi (λ)
+if λi > pi then return POΘ, POF
+end if
+Q .push((u λi
+i
+
+, i))
+
+P OΘ .append(Θλ ), POF .append(F (Θλ )), smax = qmax
+
+1 , θ 1
+
+and [300, 9] with Θ = [θ 1
+2 ]. The rst one will be ltered because
+it is dominated by the latter one (line 6). Finally, we further lter
+solutions being dominated in the chosen set (line 11) and get the
+stage-level MOO solutions as [[100, 25], [150, 10], [300, 9]].
+
+Proposition 5.1. For a stage-level MOO problem, Algorithm 2
+guarantees to nd a subset of stage-level Pareto optimal points.
+
+Fast hierarchical MOO solution: RAA Path. In the case that
+there are only two objectives, whose aggregators are max and sum,
+respectively, we provide another algorithm that can resolve the
+Hierarchical MOO eciently. The key idea here is that the two ob-
+jectives are indeed making tradeos. The increase in one objective
+often leads to a decrease in the other. With this observation, we
+design a new approach called "RAA path".
+
+Example. Figure 8 shows an example of the Pareto sets of 3
+instances in a stage, where each instance has 2, 4, 3 Pareto-optimal
+solutions, and each solution is sorted by latency in descending order.
+We start the procedure by selecting the rst Pareto solution for
+3 ] and F λ = [300, 14].
+each instance, this leads to Θλ = [θ 1
+Notice that 300 is corresponding to θ 1
+2 by the entry
+below it in the same Pareto set. Now we have the second solution
+as Θλ = [θ 1
+3 ] and F λ = [150, 15]. Continue in this manner;
+each time, select the θ corresponding to the instance of the max
+latency and replace it with the item below it in the same Pareto set.
+It terminates until there is no entry below the current θ .
+
+1 , θ 1
+2 , so we replace θ 1
+
+2 , θ 1
+
+2 , θ 1
+
+1 , θ 2
+
+For a formal description, we use the following notation: (1) λ =
+[λ1, λ2, ..., λm ] as a state, where λi is the index of the Pareto point in
+2 , ..., θ λm
+instance i with the λi -largest latency; (2) Θλ = [θ λ1
+m ];
+(3) πi : λ → λ(cid:48) is a step such that the ith dimension in state λ is
+increased by 1. (4) pi is the number of instance-level Pareto solutions
+for instance i. Then Algorithm 3 gives the RAA Path algorithm.
+
+1 , θ λ2
+
+Proposition 5.2. For a stage-level MOO problem with two objec-
+tives using max and sum, respectively, RAA path guarantees to nd
+the full set of stage-level Pareto optimal points at the complexity
+of O(m · pmax log(m · pmax )).
+RAA with Clustering. For eciency, we run both the General hi-
+erarchical MOO and RAA Path methods by clustering the instances
+and machines, where m is replaced by m(cid:48) << m in the complexity.
+
+WL
+
+Num.
+Jobs
+
+Num.
+stages
+
+Num.
+Inst
+
+#stages
+/job
+
+#insts
+/stage
+
+#ops
+/stage
+
+Avg Job
+Lat(s)
+
+Avg Stage
+Lat(s)
+
+Avg Inst
+Lat(s)
+
+A 405K 970K 34M 2.40
+173K 858K 36M 4.95
+B
+100K 50M 2.42
+41K
+C
+
+35.45
+42.02
+505.51
+
+3.71
+6.27
+5.31
+
+30.97
+120.15
+376.83
+
+14.64
+39.72
+181.88
+
+16.85
+15.63
+71.08
+
+Table 1: Workload statistics for 3 workload over 5 days
+
+Resource plan recommendation. After getting the stage-level
+Pareto set, we reuse UDAO’s Weighted Utopia Nearest (WUN) strat-
+egy to recommend the resource plan, which includes a conguration
+for each instance of the stage. It recommends the resource plan
+whose objectives could achieve the smallest distance to the Utopia
+point, which is the hypothetical optimal in all objectives.
+
+6 EXPERIMENTS
+This section presents the evaluation of our models and stage opti-
+mizer. Using production traces from MaxCompute, we rst analyze
+our models and compare them to state-of-the-art modeling tech-
+niques. We then report the end-to-end performance of our stage
+optimizer using a simulator of the extended MaxCompute environ-
+ment (detailed in [22]) by replaying the production traces.
+
+Workload Characteristics. See Table 1 for descriptions of pro-
+
+duction workloads A-C. We give additional details in [22].
+
+6.1 Model Evaluation
+To train models, we partition the traces of workloads A-C into
+training, validation, and test sets, and tune the hyperparameters
+of all models using the validation set. As the default, we train
+MCI+GTN over all channels augmented by AIM for the instance
+latency prediction. More details about training are given in [22].
+
+We report model accuray on 5 metrics: (1) weighted mean abso-
+lute percentage error (WMAPE), (2) median error (MdErr), (3) 95 per-
+centile Error (95%Err), (4) Pearson correlation (Corr), and (5) error
+of the cloud cost (GlbErr). We choose WMAPE as the primary, also
+the hardest, metric because it assigns more weights to long-running
+instances, which are of more importance in resource optimization.
+Expt 1: Performance Proling. We report the performance of our
+best models for each workload in Table 3. First, our best model
+achieves 9-19% WMAPEs and 7-15% MdErrs over the three work-
+loads with our MCI features (Ch1-Ch5 plus AIM). Second, WMAPE
+is a more challenging metric than MdErr. The distribution of the
+instance latency in production workloads is highly skewed to short-
+and median-running instances. Therefore, MdErr is determined
+by the majority of the instances but does not capture well those
+long-running ones. Third, the error rate of the total cloud cost is
+3-4.5x smaller than WMAPEs, because individual errors of single in-
+stances could have a canceling eect on the global resource metric,
+hence better model performance on the global metric.
+
+Our breakdown analyses further show that IO-intensive opera-
+tors and the dynamics of system states are the two main sources of
+model errors. First, by training a separate model for the instance-
+level operator latency and calculating the error contribution of
+each operator type, we nd the top-3 most inaccurate operators as
+StreamLineWrite, TableScan, and MergeJoin, all involving fre-
+quent IO activities. It is likely that current traces in MaxCompute
+miss the features to fully characterize IO operations. As for the
+system dynamics, we train a separate model by augmenting system
+
+(a) MCI proling
+
+(b) Comparison among dierent cardinality choices
+
+(c) Comparison with single-machine SOTAs
+
+Figure 9: Performance of our instance-level models, compared to the state-of-the-art (SOTA) methods
+
+Figure 10: WMAPEs over time (workload C)
+
+states with the average system metrics during the lifetime of an
+instance (which is not realistic to get before running an instance).
+But this allows us to show that the model further reduces WMAPE
+and MdErr to 6-12% and 5-10%, pointing the error source to the
+system dynamics. The comprehensive results are shown in [22].
+
+Expt 2: Multi-channel Inputs. We now investigate the importance
+of each channel to model performance. We train separate models
+with dierent input channel choices, including (1) the leave-one-
+out choices for a channel x (Chx_off), (2) the ve basic channels
+all_on, and (3) the ve basic channels and the AIM all_on+calib.
+Fig. 9(a) shows our results. The top-3 important features are the
+instance meta (Ch2), the query plan (Ch1), and the system states
+(Ch4). By turning o each, WMAPE gets worse by 18-66%, 16-50%,
+and 9-27%, respectively, compared to all_on. The eect of the
+hardware type (Ch5) is not signicant, likely because the hardware
+types used are all high-performance ones. The eect of the resource
+plan (Ch3) is small here due to its sparsity in the feature space; e.g.,
+only 26 dierent resource plans are observed in workload B. But
+their eects will be dierent once they are tuned widely in MOO.
+Expt 3: Impact of Cardinality. We train separate models by de-
+riving AIMs from dierent cardinalities: (1) all_on+calib rep-
+resents the stage-oriented cardinality from MaxCompute’s CBO;
+(2) all_on+simu1 applies the ground-truth stage-level cardinalities
+while assuming operators in dierent instances share the stage
+selectivities; (3) all_on+simu2 applies the ground-truth instance-
+level cardinalities for operators. Fig. 9(b) shows at most a 0.2%
+and 0.4% WAMPE can be reduced by using all_on+simu1 and
+all_on+simu2, respectively. This means that improving cardinal-
+ity estimation alone cannot improve much latency prediction in big
+data systems, which is consistent with CLEO’s observation [35].
+
+Expt 4: Comparison with QPPNet [26] and TLSTM [37]. We next
+compare dierent modeling tools, including (1) original QPPNet,
+(2) original TLSTM, (3) our extension, MCI-based QPPNet, (4) MCI-
+based TLSTM, and (5) MCI+GTN (our new graph embedder). Fig. 9(c)
+shows our results. First, QPPNet and TLSTM achieve 22-36% and
+15-31% WMAPE, respectively, 2-3x larger than our best model,
+MCI+GTN. Second, using our MCI, MCI+QPPNet and MCI+TLSTM
+can improve WMAPE by 12-15% and 6-12%, respectively, while
+
+MCI+TLSTM and MCI+GTN achieve close performance. Thus, our
+MCI framework oers both good modeling performance and exten-
+sibility to adapt SOTAs from a single machine to big data systems.
+Expt 5: Training Overhead and Model Adaptivity. We next report
+on the training overhead: The data preparation stage costs ∼2 min-
+utes every day to collect new traces from each department using
+MaxCompute jobs (with a parallelism of 219). We collected 5-day
+traces from three internal departments, totaling 0.62M jobs, 2M
+stages, and 407G bytes. In the training stage, we run 24h periodic
+retraining (retrain) at midnight of each day when the workloads are
+light, which takes 3.5 hours on average over 16 GPUs (including
+hyperparameter tuning). Optionally, we run ne-tuning every 6
+hours (retrain+netune), at the average cost of 0.9h each.
+
+To study model adaptivity, we design two settings of workload
+drifts: (a) a realistic setting where queries from 5 days are injected in
+temporal order; (b) a hypothetical worst case where queries are in-
+jected in decreasing order of latency. In both settings, we compare a
+static method that trains the model using the data from rst 6 hours
+and never updates it afterward, with our retrain and retrain+netune
+methods. Our results, as shown in Fig. 10 for workload C, include:
+(1) The static approach can reach up to 72% WMAPE in some hours
+of a day, demonstrating the presence of workload drifts. (2) retrain
+and retrain+netune adapt better to the workload drifts, keeping
+errors mostly in the range of 15-25% after days of training, while
+having tradeos between them: If the workload patterns in 24h
+windows are highly regular, retrain works slightly better than re-
+train+netune by avoiding overtting to insignicant local changes
+(workload A). Otherwise, retrain+netune works better by adapting
+to signicant local changes (workload B). More discussion is in [22].
+
+6.2 Resource Optimization (RO) Evaluation
+We next evaluate the end-to-end performance of our Stage Opti-
+mizer (SO) against the current HBO and Fuxi scheduler [63], as
+well as other MOO methods using production workloads A-C. As
+we cannot run experiments directly in the production clusters, we
+developed a simulator of the extended MaxCompute and replayed
+the query traces to conduct our experiments (detailed in [22]).
+
+(in)
+s
+
+We consider the following metrics in resource optimization (RO):
+(1) coverage, the ratio of stages that receive feasible solutions within
+60s; (2) Lat
+, the average stage latency that includes the RO time;
+(3) Costs , the average cloud cost of all stages in a workload; (4) Ts ,
+the RO time cost. Below, we rst present a microbenchmark of our
+methods and other MOO methods using 29 subworkloads in Table 2,
+and then report our net benet over the full dataset in Table 4.
+
+ABCWorkloads5%10%15%20%25%WMAPE8.6%18.9%15.1%8.6%19.5%15.2%8.9%19.6%16.3%9.0%19.3%15.2%10.8%21.1%17.1%12.9%22.5%19.1%14.2%24.3%18.0%all_on+caliball_onch5_offch3_offch4_offch1_offch2_offABCWorkloads5%8%10%12%15%18%20%23%WMAPE8.6%18.9%15.1%8.5%18.9%14.9%8.2%18.9%14.7%all_on+caliball_on+simu1all_on+simu2ABCWorkloads10%20%30%40%WMAPE22.2%35.7%27.9%15.4%30.6%20.9%9.9%20.7%15.7%9.0%18.6%15.0%8.6%18.9%15.1%QPPNetTLSTMQPPNet_AUGTLSTM_AUGOurs24487296120time (h)20%40%60%80%hourly WMAPEstaticretrainretrain+finetuneCoverage
+
+C
+
+A B
+
+SO choice
+IPA(Org) 100% 100% 100%
+IPA(Cluster) 100% 100% 100%
+IPA+RAA(W/O_C) 100% 100% 100%
+IPA+RAA(DBSCAN) 100% 100% 100%
+IPA+RAA(General) 100% 100% 100%
+IPA+RAA(Path) 100% 100% 100%
+
+↓
+
+Lat (in)
+s
+A B C
+
+11% 20% 51%
+12% 17% 50%
+
+8% 79% 58%
+27% 69% 67%
+36% 80% 76%
+36% 80% 76%
+
+Costs ↓
+A B C
+
+avд(Ts ) (ms) / max(Ts ) (ms)
+C
+B
+
+A
+
+5% 9% 15% 280 / 2.0K
+4% 7% 14%
+
+15 / 24
+
+17 / 18
+10 / 10
+
+31% 76% 75% 2.5K / 19K 177 / 220
+132 / 136
+21% 64% 74%
+20 / 23
+29% 75% 75%
+17 / 18
+29% 75% 75%
+
+223 / 937
+100 / 241
+98 / 226
+
+1.4K / 1.8K
+33 / 36
+
+3.5K / 6.3K
+258 / 452
+167 / 229
+156 / 224
+
+EVO
+WS(Sample)
+PF(MOGD)
+
+0% 82% 0%
+21K / 24K
+90% 85% 82% -140% 48% -74% -107% 49% -52% 7.4K / 22K 465 / 753
+99% 100% 98%
+
+– / –
+9.8K / 12K
+24% 56% 75% 2.7K / 4.0K 2.1K / 2.5K 1.5K / 2.3K
+
+-15% 49% 65%
+
+–% -36% –%
+
+–% 66% –%
+
+– / –
+
+IPA+EVO
+
+-27% 69% 43%
+98% 100% 98%
+IPA+WS(Sample) 100% 100% 100% -36% 76% -1%
+IPA+PF(MOGD) 100% 100% 100% -0.4% 51% 69%
+
+22% 75% 71% 3.0K / 7.3K 2.4K / 2.6K 5.0K / 5.9K
+-19% 72% 32% 3.5K / 10K 517 / 741
+12K / 18K
+26% 56% 75% 1.6K / 2.5K 1.2K / 1.6K 1.2K / 2.2K
+
+Table 2: Average Reduction Rate (RR) against Fuxi in 29 subworkloads within 60s
+
+WL WMAPE MdErr 95%Err Corr GlbErr
+
+8.6%
+19.0%
+15.1%
+
+A
+1.9%
+B
+5.4%
+C
+5.1%
+Table 3: Modeling Performance
+
+7.4%
+62.4% 96.6%
+15.1% 71.5% 96.4%
+12.7% 97.3% 98.4%
+
+SO scenario
+
+Stage Lat (in):
+
+Cost:
+
+IPA (noise-free)
+IPA (noisy)
+IPA+RAA (noise-free) 37%, 58%, 72% 43%, 56%, 78%
+37%, 55%, 72% 42%, 56%, 78%
+IPA+RAA (noisy)
+
+10%, 15%, 44%
+9%, 10%, 42%
+
+3%, 7%, 12%
+3%, 6%, 12%
+
+Bootstrap Model
+
+Stage Lat (in):
+
+Cost:
+
+GTN+MCI
+TLSTM
+QPPNet
+Table 4: Average RR over 2M stages
+
+34%,49%,68%
+17%,2%,65%
+34%,1%,63%
+
+48%,41%,71%
+43%,31%,70%
+46%,30%,68%
+
+Expt 6: IPA Only. We rst turn on only the IPA module in the
+stage optimizer (no RAA) and compare the two options of IPA to
+the Fuxi scheduler over the 29 subworkloads. As shown in Tab. 2,
+the clustered version IPA(Cluster) reduces the stage latency (in-
+cluding the solving time) by 12-50% and cost by 4-14%, with the av-
+erage time cost between 10-33 msec. Without clustering, IPA(Org)
+achieves comparable reduction rates as IPA(Cluster) but costs
+2-83x more time for solving.
+
+Expt 7: IPA+RAA. We now run IPA(Cluster) with RAA of four
+choices. IPA+RAA(Path) solves the resource plan by applying RAA
+Path over instance and machine clusters and achieves the best per-
+formance. It reduces the stage latency by 36-80% and cloud cost by
+29-75%, with an average time cost between 17-156ms (including
+IPA). IPA+RAA(W/O_C) does RAA without clustering and suers
+high overhead (up to 19s for a stage). IPA+RAA(DBSCAN) applies
+DBSCAN for the instance clustering, which incurs up to 937 msec
+for a stage, hence inecient for production use. IPA+RAA(General)
+shows the performance of our general hierarchical MOO approach,
+which is slightly worse than IPA+RAA(Path) (in this 2D MOO prob-
+lem) in running time while oering a similar reduction of latency
+and cost. Details of the four choices are in [22].
+
+Expt 8: MOO baselines. We next compare to SOTA MOO solu-
+tions, EVO [8], WS(Sample) [27], and PF(MOGD) [36], using Def. 5.2.
+See [22] for their implementation details. As shown in the 3 red
+rows of Table 2, (1) over 29 sub-workloads, none of them guarantees
+to return all results within 60s; (2) their latency and cost reduction
+rates are all dominated by IPA+RAA(Path), and even lose to the
+Fuxi scheduler on some workloads; (3) their solving time is 1-2
+magnitude higher than our approach, making them infeasible to be
+used by a cloud scheduler. As an alternative, we apply IPA to solve
+the B variables and these MOO methods to solve only Θ based on
+Eq. (4). As shown in the last 3 blue rows in Table 2, they are still
+inferior to IPA+RAA(Path) in both latency and cost reduction and
+in running time (mostly taking 1-6 sec to complete).
+
+Expt 9: Net Benets. We next compare our SO (IPA+RAA) against
+Fuxi’s scheduling results by considering the model eects: the noise-
+free case means that the predicted latency is the true latency, while
+the noisy case captures the fact that the true latency is dierent from
+the predicted one. We run the entire 2M stages over 3 departments
+in both noisy and noise-free cases. For the noisy case, we turn on the
+actual latency simulator (GPR model) to simulate the actual latency.
+Specically, given a predicted instance latency, GPR generates a
+Gaussian distribution (N (µ, σ )) of the actual latency, and samples
+
+from the distribution within µ ± 3σ . Table 4 shows that in both
+noise-free and noisy settings, SO (IPA+RAA) signicantly reduces
+stage latency and cloud cost compared to Fuxi, with the ne-grained
+MCI+GTN model for latency prediction.
+
+Expt 10: Impact of Model Accuracy. Finally, to quantify the impact
+of model accuracy on resource optimization, we use GPR models
+pre-trained over three bootstrap models (MCI+GTN, TLSTM, QPP-
+Net). Note that in terms of model accuracy, we have (MCI+GTN >
+TLSTM > QPPNet), as shown in Fig. 9(c). We borrow Fuxi’s ground-
+truth placement plan and ask RAA for resource plans of each stage
+under the same condition of the system states as Fuxi. To be fair
+in the comparison, we dropped the scheduling delays for all stages
+and set the stage latency as the maximum instance latency. Table 4
+compares the RAA’s reduction rate (RR) among dierent bootstrap
+models. These results show that indeed, better reduction rates are
+achieved by using a more accurate model, which validates the im-
+portance of having a ne-grained accurate prediction model.
+
+7 CONCLUSIONS
+We presented a MaxCompute [28] based big data system that sup-
+ports multi-objective resource optimization via ne-grained instance-
+level modeling and optimization. To suit the complexity of our sys-
+tem, we developed ne-grained instance-level models that encode
+all relevant information as multi-channel inputs to deep neural
+networks. By exploiting these models, our stage optimizer employs
+a new IPA module to derive a latency-aware placement plan to
+reduce the stage latency, and a novel RAA model to derive instance-
+specic resource plans to further reduce stage latency and cost
+in a hierarchical MOO framework. Evaluation using production
+workloads shows that (1) our best model achieved 7-15% median
+error and 9-19% weighted mean absolute percentage error; (2) com-
+pared to the Fuxi scheduler [63], IPA+RAA achieved the reduction
+of 37-72% latency and 43-78% cost while running in 0.02-0.23s.
+
+ACKNOWLEDGMENTS
+This work was partially supported by the European Research Coun-
+cil (ERC) Horizon 2020 research and innovation programme (grant
+n725561), Alibaba Group through Alibaba Innovative Research
+Program, and China Scholarship Council (CSC). We also thank
+Yongfeng Chai, Daoyuan Chen, Xiaozong Cui, Botong Huang, Xi-
+aofeng Zhang, and Yang Zhang from the Alibaba Group for the
+discussion and help throughout the project.
+
+REFERENCES
+[1] Charu C. Aggarwal and Chandan K. Reddy (Eds.). 2014. Data Clustering: Algo-
+rithms and Applications. CRC Press. http://www.crcpress.com/product/isbn/
+9781466558212
+
+[2] Malay Bag, Alekh Jindal, and Hiren Patel. 2020. Towards Plan-aware Resource
+Allocation in Serverless Query Processing. In 12th USENIX Workshop on Hot Topics
+in Cloud Computing, HotCloud 2020, July 13-14, 2020, Amar Phanishayee and
+Ryan Stutsman (Eds.). USENIX Association. https://www.usenix.org/conference/
+hotcloud20/presentation/bag
+
+[3] Vinayak R. Borkar, Michael J. Carey, Raman Grover, Nicola Onose, and Rares
+Vernica. 2011. Hyracks: A exible and extensible foundation for data-intensive
+computing. In ICDE. 1151–1162.
+
+[4] Thomas H. Cormen, Charles E. Leiserson, Ronald L. Rivest, and Cliord Stein.
+
+2009. Introduction to Algorithms, Third Edition (3rd ed.). The MIT Press.
+
+[5] Samuel Daulton, Maximilian Balandat, and Eytan Bakshy. 2020. Dierentiable
+Expected Hypervolume Improvement for Parallel Multi-Objective Bayesian Opti-
+mization. CoRR abs/2006.05078 (2020). arXiv:2006.05078 https://arxiv.org/abs/
+2006.05078
+
+[6] Jerey Dean and Sanjay Ghemawat. 2004. MapReduce: simplied data processing
+on large clusters. In OSDI’04: Proceedings of the 6th conference on Symposium
+on Opearting Systems Design & Implementation (San Francisco, CA). USENIX
+Association, Berkeley, CA, USA, 10–10.
+
+[7] Sergey Dudoladov, Chen Xu, Sebastian Schelter, Asterios Katsifodimos, Stephan
+Ewen, Kostas Tzoumas, and Volker Markl. 2015. Optimistic Recovery for Itera-
+tive Dataows in Action. In Proceedings of the 2015 ACM SIGMOD International
+Conference on Management of Data, Melbourne, Victoria, Australia, May 31 - June
+4, 2015. 1439–1443. https://doi.org/10.1145/2723372.2735372
+
+[8] Michael T. Emmerich and André H. Deutz. 2018. A Tutorial on Multiobjective
+Optimization: Fundamentals and Evolutionary Methods. Natural Computing: an
+international journal 17, 3 (Sept. 2018), 585–609. https://doi.org/10.1007/s11047-
+018-9685-y
+
+[9] Alan Gates, Olga Natkovich, Shubham Chopra, Pradeep Kamath, Shravan
+Narayanam, Christopher Olston, Benjamin Reed, Santhosh Srinivasan, and
+Utkarsh Srivastava. 2009. Building a HighLevel Dataow System on top of
+MapReduce: The Pig Experience. PVLDB 2, 2 (2009), 1414–1425.
+
+[10] Goetz Graefe. 1995. The Cascades Framework for Query Optimization. IEEE Data
+
+Eng. Bull. 18, 3 (1995), 19–29. http://sites.computer.org/debull/95SEP-CD.pdf
+
+[11] Shohedul Hasan, Saravanan Thirumuruganathan, Jees Augustine, Nick Koudas,
+and Gautam Das. 2020. Deep Learning Models for Selectivity Estimation of
+Multi-Attribute Queries. In Proceedings of the 2020 International Conference on
+Management of Data, SIGMOD Conference 2020, online conference [Portland, OR,
+USA], June 14-19, 2020, David Maier, Rachel Pottinger, AnHai Doan, Wang-Chiew
+Tan, Abdussalam Alawini, and Hung Q. Ngo (Eds.). ACM, 1035–1050. https:
+//doi.org/10.1145/3318464.3389741
+
+[12] Daniel Hernández-Lobato, José Miguel Hernández-Lobato, Amar Shah, and
+Ryan P. Adams. 2016. Predictive Entropy Search for Multi-objective Bayesian
+Optimization. In Proceedings of the 33nd International Conference on Machine
+Learning, ICML 2016, New York City, NY, USA, June 19-24, 2016 (JMLR Work-
+shop and Conference Proceedings), Maria-Florina Balcan and Kilian Q. Weinberger
+(Eds.), Vol. 48. JMLR.org, 1492–1501. http://proceedings.mlr.press/v48/hernandez-
+lobatoa16.html
+
+[13] Herodotos Herodotou and Elena Kakoulli. 2021. Trident: Task Scheduling over
+Tiered Storage Systems in Big Data Platforms. Proc. VLDB Endow. 14, 9 (2021),
+1570–1582. http://www.vldb.org/pvldb/vol14/p1570-herodotou.pdf
+
+[14] Arvind Hulgeri and S. Sudarshan. 2002. Parametric Query Optimization for Linear
+and Piecewise Linear Cost Functions. In Proceedings of the 28th International
+Conference on Very Large Data Bases (Hong Kong, China) (VLDB ’02). VLDB
+Endowment, 167–178. http://dl.acm.org/citation.cfm?id=1287369.1287385
+[15] Sangeetha Abdu Jyothi, Carlo Curino, Ishai Menache, Shravan Matthur Narayana-
+murthy, Alexey Tumanov, Jonathan Yaniv, Ruslan Mavlyutov, Iñigo Goiri, Subru
+Krishnan, Janardhan Kulkarni, and Sriram Rao. 2016. Morpheus: Towards Au-
+tomated SLOs for Enterprise Clusters. In 12th USENIX Symposium on Operating
+Systems Design and Implementation, OSDI 2016, Savannah, GA, USA, Novem-
+ber 2-4, 2016. 117–134. https://www.usenix.org/conference/osdi16/technical-
+sessions/presentation/jyothi
+
+[16] Herald Kllapi, Eva Sitaridi, Manolis M. Tsangaris, and Yannis Ioannidis. 2011.
+Schedule Optimization for Data Processing Flows on the Cloud. In Proceedings of
+the 2011 ACM SIGMOD International Conference on Management of Data (Athens,
+Greece) (SIGMOD ’11). ACM, New York, NY, USA, 289–300. https://doi.org/10.
+1145/1989323.1989355
+
+[17] Viktor Leis and Maximilian Kuschewski. 2021. Towards Cost-Optimal Query
+Processing in the Cloud. Proc. VLDB Endow. 14, 9 (2021), 1606–1612. http:
+//www.vldb.org/pvldb/vol14/p1606-leis.pdf
+
+[18] Jiexing Li, Jerey F. Naughton, and Rimma V. Nehme. 2014. Resource Bricolage
+for Parallel Database Systems. PVLDB 8, 1 (2014), 25–36. http://www.vldb.org/
+pvldb/vol8/p25-Li.pdf
+
+[19] Teng Li, Zhiyuan Xu, Jian Tang, and Yanzhi Wang. 2018. Model-free Control for
+Distributed Stream Data Processing Using Deep Reinforcement Learning. Proc.
+VLDB Endow. 11, 6 (Feb. 2018), 705–718. https://doi.org/10.14778/3184470.3184474
+[20] Jie Liu, Wenqian Dong, Dong Li, and Qingqing Zhou. 2021. Fauce: Fast and
+Accurate Deep Ensembles with Uncertainty for Cardinality Estimation. Proc.
+VLDB Endow. 14, 11 (2021), 1950–1963. http://www.vldb.org/pvldb/vol14/p1950-
+liu.pdf
+
+[21] Yao Lu, Srikanth Kandula, Arnd Christian König, and Surajit Chaudhuri. 2021. Pre-
+training Summarization Models of Structured Datasets for Cardinality Estimation.
+Proc. VLDB Endow. 15, 3 (2021), 414–426. http://www.vldb.org/pvldb/vol15/p414-
+lu.pdf
+
+[22] Chenghao Lyu, Qi Fan, Fei Song, Arnab Sinha, Yanlei Diao, Wei Chen, Li Ma,
+Yihui Feng, Yaliang Li, Kai Zeng, and Jingren Zhou. 2022. Fine-Grained Modeling
+and Optimization for Intelligent Resource Management in Big Data Processing.
+https://doi.org/10.48550/ARXIV.2207.02026
+
+[23] Lin Ma, William Zhang, Jie Jiao, Wuwen Wang, Matthew Butrovich, Wan Shen
+Lim, Prashanth Menon, and Andrew Pavlo. 2021. MB2: Decomposed Behavior
+Modeling for Self-Driving Database Management Systems. In SIGMOD ’21: In-
+ternational Conference on Management of Data, Virtual Event, China, June 20-25,
+2021, Guoliang Li, Zhanhuai Li, Stratos Idreos, and Divesh Srivastava (Eds.). ACM,
+1248–1261. https://doi.org/10.1145/3448016.3457276
+
+[24] Ryan Marcus and Olga Papaemmanouil. 2016. WiSeDB: A Learning-based Work-
+load Management Advisor for Cloud Databases. PVLDB 9, 10 (2016), 780–791.
+http://www.vldb.org/pvldb/vol9/p780-marcus.pdf
+
+[25] Ryan C. Marcus, Parimarjan Negi, Hongzi Mao, Chi Zhang, Mohammad Alizadeh,
+Tim Kraska, Olga Papaemmanouil, and Nesime Tatbul. 2019. Neo: A Learned
+Query Optimizer. Proc. VLDB Endow. 12, 11 (2019), 1705–1718. https://doi.org/
+10.14778/3342263.3342644
+
+[26] Ryan C. Marcus and Olga Papaemmanouil. 2019. Plan-Structured Deep Neural
+Network Models for Query Performance Prediction. Proc. VLDB Endow. 12, 11
+(2019), 1733–1746. https://doi.org/10.14778/3342263.3342646
+
+[27] Regina Marler and J S Arora. 2004. Survey of multi-objective optimization
+methods for engineering. Structural and Multidisciplinary Optimization 26, 6
+(2004), 369–395.
+
+[28] MaxCompute [n.d.]. Open Data Processing Service. https://www.alibabacloud.
+
+com/product/maxcompute.
+
+[29] Achille Messac. 2012. From Dubious Construction of Objective Functions to the
+Application of Physical Programming. AIAA Journal 38, 1 (2012), 155–163.
+[30] Achille Messac, Amir Ismailyahaya, and Christopher A Mattson. 2003. The nor-
+malized normal constraint method for generating the Pareto frontier. Structural
+and Multidisciplinary Optimization 25, 2 (2003), 86–98.
+
+[31] Derek G. Murray, Frank McSherry, Rebecca Isaacs, Michael Isard, Paul Barham,
+and Martín Abadi. 2013. Naiad: A Timely Dataow System. In Proceedings of
+the Twenty-Fourth ACM Symposium on Operating Systems Principles (Farminton,
+Pennsylvania) (SOSP ’13). ACM, New York, NY, USA, 439–455. https://doi.org/
+10.1145/2517349.2522738
+
+[32] Parimarjan Negi, Ryan C. Marcus, Andreas Kipf, Hongzi Mao, Nesime Tatbul,
+Tim Kraska, and Mohammad Alizadeh. 2021. Flow-Loss: Learning Cardinality
+Estimates That Matter. Proc. VLDB Endow. 14, 11 (2021), 2019–2032.
+http:
+//www.vldb.org/pvldb/vol14/p2019-negi.pdf
+
+[33] Yuan Qiu, Yilei Wang, Ke Yi, Feifei Li, Bin Wu, and Chaoqun Zhan. 2021. Weighted
+Distinct Sampling: Cardinality Estimation for SPJ Queries. In SIGMOD ’21: In-
+ternational Conference on Management of Data, Virtual Event, China, June 20-25,
+2021, Guoliang Li, Zhanhuai Li, Stratos Idreos, and Divesh Srivastava (Eds.). ACM,
+1465–1477. https://doi.org/10.1145/3448016.3452821
+
+[34] Kaushik Rajan, Dharmesh Kakadia, Carlo Curino, and Subru Krishnan. 2016.
+PerfOrator: eloquent performance models for Resource Optimization. In Proceed-
+ings of the Seventh ACM Symposium on Cloud Computing, Santa Clara, CA, USA,
+October 5-7, 2016. 415–427. https://doi.org/10.1145/2987550.2987566
+
+[35] Tarique Siddiqui, Alekh Jindal, Shi Qiao, Hiren Patel, and Wangchao Le. 2020.
+Cost Models for Big Data Query Processing: Learning, Retrotting, and Our
+Findings. In Proceedings of the 2020 International Conference on Management of
+Data, SIGMOD Conference 2020, online conference [Portland, OR, USA], June 14-19,
+2020, David Maier, Rachel Pottinger, AnHai Doan, Wang-Chiew Tan, Abdussalam
+Alawini, and Hung Q. Ngo (Eds.). ACM, 99–113. https://doi.org/10.1145/3318464.
+3380584
+
+[36] Fei Song, Khaled Zaouk, Chenghao Lyu, Arnab Sinha, Qi Fan, Yanlei Diao,
+and Prashant J. Shenoy. 2021. Spark-based Cloud Data Analytics using Multi-
+Objective Optimization. In 37th IEEE International Conference on Data Engi-
+neering, ICDE 2021, Chania, Greece, April 19-22, 2021. IEEE, 396–407. https:
+//doi.org/10.1109/ICDE51399.2021.00041
+
+[37] Ji Sun and Guoliang Li. 2019. An End-to-End Learning-based Cost Estimator. Proc.
+
+VLDB Endow. 13, 3 (2019), 307–319. https://doi.org/10.14778/3368289.3368296
+
+[38] Ji Sun, Guoliang Li, and Nan Tang. 2021. Learned Cardinality Estimation for
+Similarity Queries. In SIGMOD ’21: International Conference on Management of
+Data, Virtual Event, China, June 20-25, 2021, Guoliang Li, Zhanhuai Li, Stratos
+Idreos, and Divesh Srivastava (Eds.). ACM, 1745–1757. https://doi.org/10.1145/
+3448016.3452790
+
+[39] Kai Sheng Tai, Richard Socher, and Christopher D. Manning. 2015. Improved
+Semantic Representations From Tree-Structured Long Short-Term Memory Net-
+works. In Proceedings of the 53rd Annual Meeting of the Association for Computa-
+tional Linguistics and the 7th International Joint Conference on Natural Language
+Processing of the Asian Federation of Natural Language Processing, ACL 2015, July
+26-31, 2015, Beijing, China, Volume 1: Long Papers. The Association for Computer
+Linguistics, 1556–1566. https://doi.org/10.3115/v1/p15-1150
+
+[40] Zilong Tan and Shivnath Babu. 2016. Tempo: robust and self-tuning resource man-
+agement in multi-tenant parallel databases. Proceedings of the VLDB Endowment
+9, 10 (2016), 720–731.
+
+[41] Ashish Thusoo, Joydeep Sen Sarma, Namit Jain, Zheng Shao, Prasad Chakka,
+Suresh Anthony, Hao Liu, Pete Wycko, and Raghotham Murthy. 2009. Hive
+- A Warehousing Solution Over a Map-Reduce Framework. PVLDB 2, 2 (2009),
+1626–1629.
+
+[42] Immanuel Trummer and Christoph Koch. 2014. Approximation Schemes for
+Many-objective Query Optimization. In Proceedings of the 2014 ACM SIGMOD
+International Conference on Management of Data (Snowbird, Utah, USA) (SIGMOD
+’14). ACM, New York, NY, USA, 1299–1310. https://doi.org/10.1145/2588555.
+2610527
+
+[43] Immanuel Trummer and Christoph Koch. 2014. Multi-objective Parametric Query
+Optimization. Proc. VLDB Endow. 8, 3 (Nov. 2014), 221–232. https://doi.org/10.
+14778/2735508.2735512
+
+[44] Immanuel Trummer and Christoph Koch. 2015. An Incremental Anytime Algo-
+rithm for Multi-Objective Query Optimization. In Proceedings of the 2015 ACM SIG-
+MOD International Conference on Management of Data, Melbourne, Victoria, Aus-
+tralia, May 31 - June 4, 2015. 1941–1953. https://doi.org/10.1145/2723372.2746484
+[45] Kapil Vaidya, Anshuman Dutt, Vivek R. Narasayya, and Surajit Chaudhuri. 2021.
+Leveraging Query Logs and Machine Learning for Parametric Query Optimiza-
+tion. Proc. VLDB Endow. 15, 3 (2021), 401–413. http://www.vldb.org/pvldb/vol15/
+p401-vaidya.pdf
+
+[46] Dana Van Aken, Andrew Pavlo, Georey J. Gordon, and Bohan Zhang. 2017.
+Automatic Database Management System Tuning Through Large-scale Machine
+Learning. In Proceedings of the 2017 ACM International Conference on Management
+of Data (Chicago, Illinois, USA) (SIGMOD ’17). ACM, New York, NY, USA, 1009–
+1024. https://doi.org/10.1145/3035918.3064029
+
+[47] M. van Steen and A.S. Tanenbaum. 2017. Distributed Systems (3 ed.).
+[48] Vinod Kumar Vavilapalli, Arun C. Murthy, Chris Douglas, Sharad Agarwal, Ma-
+hadev Konar, Robert Evans, Thomas Graves, Jason Lowe, Hitesh Shah, Sid-
+dharth Seth, Bikas Saha, Carlo Curino, Owen O’Malley, Sanjay Radia, Ben-
+jamin Reed, and Eric Baldeschwieler. 2013. Apache Hadoop YARN: yet an-
+other resource negotiator. In ACM Symposium on Cloud Computing, SOCC ’13,
+Santa Clara, CA, USA, October 1-3, 2013, Guy M. Lohman (Ed.). ACM, 5:1–5:16.
+https://doi.org/10.1145/2523616.2523633
+
+[49] Lalitha Viswanathan, Alekh Jindal, and Konstantinos Karanasos. 2018. Query and
+Resource Optimization: Bridging the Gap. In 34th IEEE International Conference
+on Data Engineering, ICDE 2018, Paris, France, April 16-19, 2018. IEEE Computer
+Society, 1384–1387. https://doi.org/10.1109/ICDE.2018.00156
+
+[50] Jiayi Wang, Chengliang Chai, Jiabin Liu, and Guoliang Li. 2021. FACE: A Normal-
+izing Flow based Cardinality Estimator. Proc. VLDB Endow. 15, 1 (2021), 72–84.
+http://www.vldb.org/pvldb/vol15/p72-li.pdf
+
+[51] Lucas Woltmann, Dominik Olwig, Claudio Hartmann, Dirk Habich, and Wolf-
+gang Lehner. 2021. PostCENN: PostgreSQL with Machine Learning Mod-
+els for Cardinality Estimation. Proc. VLDB Endow. 14, 12 (2021), 2715–2718.
+http://www.vldb.org/pvldb/vol14/p2715-woltmann.pdf
+
+[52] Chenggang Wu, Alekh Jindal, Saeed Amizadeh, Hiren Patel, Wangchao Le, Shi
+Qiao, and Sriram Rao. 2018. Towards a Learning Optimizer for Shared Clouds.
+https://doi.org/10.14778/3291264.
+Proc. VLDB Endow. 12, 3 (2018), 210–222.
+3291267
+
+[53] Peizhi Wu and Gao Cong. 2021. A Unied Deep Model of Learning from both Data
+and Queries for Cardinality Estimation. In SIGMOD ’21: International Conference
+on Management of Data, Virtual Event, China, June 20-25, 2021, Guoliang Li,
+Zhanhuai Li, Stratos Idreos, and Divesh Srivastava (Eds.). ACM, 2009–2022. https:
+//doi.org/10.1145/3448016.3452830
+
+[54] Ziniu Wu, Amir Shaikhha, Rong Zhu, Kai Zeng, Yuxing Han, and Jingren Zhou.
+2020. BayesCard: Revitilizing Bayesian Frameworks for Cardinality Estimation.
+
+https://doi.org/10.48550/ARXIV.2012.14743
+
+[55] Reynold S. Xin, Josh Rosen, Matei Zaharia, Michael J. Franklin, Scott Shenker,
+and Ion Stoica. 2013. Shark: SQL and rich analytics at scale. In Proceedings of
+the 2013 ACM SIGMOD International Conference on Management of Data (New
+York, New York, USA) (SIGMOD ’13). ACM, New York, NY, USA, 13–24. https:
+//doi.org/10.1145/2463676.2465288
+
+[56] Zongheng Yang, Amog Kamsetty, Sifei Luan, Eric Liang, Yan Duan, Xi Chen, and
+Ion Stoica. 2020. NeuroCard: One Cardinality Estimator for All Tables. Proc.
+VLDB Endow. 14, 1 (2020), 61–73. https://doi.org/10.14778/3421424.3421432
+[57] Zongheng Yang, Eric Liang, Amog Kamsetty, Chenggang Wu, Yan Duan, Peter
+Chen, Pieter Abbeel, Joseph M. Hellerstein, Sanjay Krishnan, and Ion Stoica.
+2019. Deep Unsupervised Cardinality Estimation. Proc. VLDB Endow. 13, 3 (2019),
+279–292. https://doi.org/10.14778/3368289.3368294
+
+[58] Seongjun Yun, Minbyul Jeong, Raehyun Kim, Jaewoo Kang, and Hyunwoo J. Kim.
+2019. Graph Transformer Networks. In Advances in Neural Information Processing
+Systems 32: Annual Conference on Neural Information Processing Systems 2019,
+NeurIPS 2019, December 8-14, 2019, Vancouver, BC, Canada, Hanna M. Wallach,
+Hugo Larochelle, Alina Beygelzimer, Florence d’Alché-Buc, Emily B. Fox, and
+Roman Garnett (Eds.). 11960–11970. https://proceedings.neurips.cc/paper/2019/
+hash/9d63484abb477c97640154d40595a3bb-Abstract.html
+
+[59] Matei Zaharia, Mosharaf Chowdhury, Tathagata Das, Ankur Dave, Justin Ma,
+Murphy McCauley, Michael J. Franklin, Scott Shenker, and Ion Stoica. 2012. Re-
+silient distributed datasets: a fault-tolerant abstraction for in-memory cluster
+computing. In Proceedings of the 9th USENIX conference on Networked Systems De-
+sign and Implementation (San Jose, CA) (NSDI’12). USENIX Association, Berkeley,
+CA, USA, 2–2. http://dl.acm.org/citation.cfm?id=2228298.2228301
+
+[60] Khaled Zaouk, Fei Song, Chenghao Lyu, Arnab Sinha, Yanlei Diao, and Prashant J.
+Shenoy. 2019. UDAO: A Next-Generation Unied Data Analytics Optimizer.
+PVLDB 12, 12 (2019), 1934–1937. https://doi.org/10.14778/3352063.3352103
+[61] Ji Zhang, Yu Liu, Ke Zhou, Guoliang Li, Zhili Xiao, Bin Cheng, Jiashu Xing,
+Yangtao Wang, Tianheng Cheng, Li Liu, Minwei Ran, and Zekang Li. 2019. An
+End-to-End Automatic Cloud Database Tuning System Using Deep Reinforcement
+Learning. In Proceedings of the 2019 International Conference on Management of
+Data (Amsterdam, Netherlands) (SIGMOD ’19). ACM, New York, NY, USA, 415–
+432. https://doi.org/10.1145/3299869.3300085
+
+[62] Xinyi Zhang, Hong Wu, Zhuo Chang, Shuowei Jin, Jian Tan, Feifei Li, Tieying
+Zhang, and Bin Cui. 2021. ResTune: Resource Oriented Tuning Boosted by
+Meta-Learning for Cloud Databases. In SIGMOD ’21: International Conference
+on Management of Data, Virtual Event, China, June 20-25, 2021, Guoliang Li,
+Zhanhuai Li, Stratos Idreos, and Divesh Srivastava (Eds.). ACM, 2102–2114. https:
+//doi.org/10.1145/3448016.3457291
+
+[63] Zhuo Zhang, Chao Li, Yangyu Tao, Renyu Yang, Hong Tang, and Jie Xu. 2014. Fuxi:
+a Fault-Tolerant Resource Management and Job Scheduling System at Internet
+Scale. Proc. VLDB Endow. 7, 13 (2014), 1393–1404. https://doi.org/10.14778/
+2733004.2733012
+
+[64] Jingren Zhou, Nicolas Bruno, Ming-Chuan Wu, Per-Ake Larson, Ronnie Chaiken,
+and Darren Shakib. 2012. SCOPE: parallel databases meet MapReduce. The VLDB
+Journal 21, 5 (Oct. 2012), 611–636. https://doi.org/10.1007/s00778-012-0280-z
+
+[65] Xuanhe Zhou, Ji Sun, Guoliang Li, and Jianhua Feng. 2020. Query Performance
+Prediction for Concurrent Queries using Graph Embedding. Proc. VLDB Endow.
+(2020), 1416–1428.
+
+[66] Rong Zhu, Ziniu Wu, Yuxing Han, Kai Zeng, Andreas Pfadler, Zhengping Qian,
+Jingren Zhou, and Bin Cui. 2021. FLAT: Fast, Lightweight and Accurate Method
+for Cardinality Estimation. Proc. VLDB Endow. 14, 9 (2021), 1489–1502. http:
+//www.vldb.org/pvldb/vol14/p1489-zhu.pdf
+
+[67] Yiwen Zhu, Matteo Interlandi, Abhishek Roy, Krishnadhan Das, Hiren Patel,
+Malay Bag, Hitesh Sharma, and Alekh Jindal. 2021. Phoebe: A Learning-based
+Checkpoint Optimizer. Proc. VLDB Endow. 14, 11 (2021), 2505–2518.
+http:
+//www.vldb.org/pvldb/vol14/p2505-zhu.pdf
+
+[68] Yuqing Zhu and Jianxun Liu. 2019. ClassyTune: A Performance Auto-Tuner for
+Systems in the Cloud. IEEE Transactions on Cloud Computing (2019), 1–1.
+[69] Yuqing Zhu, Jianxun Liu, Mengying Guo, Yungang Bao, Wenlong Ma, Zhuoyue
+Liu, Kunpeng Song, and Yingchun Yang. 2017. BestCong: tapping the perfor-
+mance potential of systems via automatic conguration tuning. SoCC ’17: ACM
+Symposium on Cloud Computing Santa Clara California September, 2017 (2017),
+338–350.
+
+

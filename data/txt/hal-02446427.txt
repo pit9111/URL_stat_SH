@@ -1,0 +1,2108 @@
+Ontology-Based RDF Integration of Heterogeneous Data
+Maxime Buron, François Goasdoué, Ioana Manolescu, Marie-Laure Mugnier
+
+To cite this version:
+
+Maxime Buron, François Goasdoué, Ioana Manolescu, Marie-Laure Mugnier. Ontology-Based RDF
+Integration of Heterogeneous Data. EDBT 2020 - 23rd International Conference on Extending
+Database Technology, Mar 2020, Copenhagen, Denmark. pp.299-310, ￿10.5441/002/edbt.2020.27￿.
+￿hal-02446427￿
+
+HAL Id: hal-02446427
+
+https://inria.hal.science/hal-02446427
+
+Submitted on 20 Jan 2020
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Distributed under a Creative Commons Attribution - NonCommercial - NoDerivatives 4.0
+International License
+
+Ontology-Based RDF Integration of Heterogeneous Data
+
+Maxime Buron1
+
+François Goasdoué2
+
+Ioana Manolescu1 Marie-Laure Mugnier3
+
+1Inria and LIX (UMR 7161, CNRS and Ecole polytechnique), France
+
+2Univ. Rennes, CNRS, IRISA, France
+
+3Univ. Montpellier, LIRMM, Inria, France
+
+ABSTRACT
+The proliferation of heterogeneous data sources in many applica-
+tion contexts brings an urgent need for expressive and efficient
+data integration mechanisms. There are strong advantages to
+using RDF graphs as the integration format: being schemaless,
+they allow for flexible integration of data from heterogeneous
+sources; RDF graphs can be interpreted with the help of an on-
+tology, describing application semantics; last but not least, RDF
+enables joint querying of the data and the ontology.
+To address this need, we formalize RDF Integration Systems (RIS),
+Ontology Based-Data Access mediators, that go beyond the state
+of the art in the ability to expose, integrate and flexibly query
+data from heterogeneous sources through GLAV (global-local-
+as-view) mappings. We devise several query answering strategies,
+based on an innovative integration of LAV view-based rewriting
+and a form of mapping saturation. Our experiments show that
+one of these strategies brings strong performance advantages,
+resulting from a balanced use of mapping saturation and query
+reformulation.
+
+1 INTRODUCTION
+The proliferation of digital data sources across all application
+domains brings a new urgency to the need for tools which allow
+to query heterogeneous data (relational, JSON, key-values, graphs
+etc.) in a flexible fashion. Traditional data integration systems
+fall into two classes: data warehousing, where all data source
+content is materialized in a single centralized source, respectively,
+mediation, where data remains in their original stores and all data
+can be queried through a single module called mediator. Data
+warehousing simplifies query evaluation, but requires potentially
+costly maintenance operations when the content of data sources
+changes; mediation does not suffer from these drawbacks, but
+requires more intricate query evaluation algorithms to distribute
+the work between the sources and the mediator.
+Below, we classify prior mediator-based approaches according to
+two main dimensions, and illustrate this classification in Table 1.
+Note that we also include in this table theoretical frameworks
+that did not necessarily lead to implementations.
+A first dimension concerns the data model and query lan-
+guage provided by the mediator to its applications.
+(i) The earliest goal of a mediator system was to mimic a single,
+integrated database. Thus the mediator supports one data model
+and its query language, e.g., relational and SQL, or XML and
+XPath/XQuery. More recent polystore systems support side-by-
+side different (data model, query language) pairs. These database-
+style mediators appear in the row we label DB in Table 1.
+(ii) Mediators studied in knowledge representation and manage-
+ment research provide a view of the data sources as a set of
+classes and relationships, also endowed with a set of semantic
+
+© 2020 Copyright held by the owner/author(s). Published in Proceedings of the
+23rd International Conference on Extending Database Technology (EDBT), March
+30-April 2, 2020, ISBN 978-3-89318-083-7 on OpenProceedings.org.
+Distribution of this paper is permitted under the terms of the Creative Commons
+license CC-by-nc-nd 4.0.
+
+Mappings
+LAV
+[4, 5, 22, 38]
+[1, 28, 30, 36]
+[45]
+
+GLAV
+[19]
+[18]
+[21]
+this work
+
+GAV
+[22, 24, 27]
+[40, 41, 43]
+[11, 17, 32, 34]
+[16, 33, 44]
+
+l
+e
+d
+o
+M
+
+DB
+CQ
+SPARQL-data
+SPARQL
+Table 1: Outline of the positioning of our work.
+constraints, or ontology. In such systems, users formulate con-
+junctive (relational) queries; answering them involves not only
+evaluation over the data (as done in DB mediators), but also rea-
+soning on the data with the help of ontologies. This mediation
+approach is also commonly termed Ontology-Based Data Access
+(OBDA) [41], with ontologies expressed in Description Logics
+(DL, in short). Work following this approach are listed in the row
+we label CQ in Table 1.
+(iii) RDF [47] is naturally suited as an integration model, thanks
+to its flexibility, its wide adoption in the Open Data community,
+its close relationship with ontology languages such as RDFS
+and OWL, and the presence of its associated standard SPARQL
+query language. Accordingly, several mediators from the CQ
+group have been extended to support RDF as an integration
+model and SPARQL query answering. However, while SPARQL
+allows querying the data together with the ontology, e.g., “find the
+properties of node n, as well the classes to which the values of
+these properties belong”, a DL-based mediation approach shares
+with all logic-based query languages, e.g., Datalog, SQL etc., the
+inability to do so. RDF mediators which support SPARQL but
+limited to querying the data only (not the ontology) appear in
+the row we label SPARQL-data in Table 1.
+(iv) Recent RDF mediators lift this limitation to support joint
+querying of the data and ontology; we list them in the SPARQL
+row in Table 1.
+
+A second dimension is how the source (or local) schemas are
+connected to the global (integration) schema, using map-
+pings [23]. There are three types of mappings, each correspond-
+ing to a column in Table 1. The simplest mappings define each
+element of the global schema, e.g., each relation (if the global
+schema is relational), as a view over the local schemas; this is
+known as Global-As-View, or GAV in short. In a GAV system, a
+query over the global (virtual) schema is easily transformed into
+a query over the local schemas, by unfolding each global schema
+relation, i.e., replacing it with its definition. In contrast, Local-
+As-View (LAV) mappings define elements of the local schemas
+as views over the global one. Query answering in this context
+requires rewriting the query with the views describing the local
+sources [31]. Global-Local-As-View (GLAV) data integration gen-
+eralizes both GAV and LAV. A GLAV mapping pairs a query q1
+over one or several local schemas to a query q2 over the global
+schema, having the same answer variables. The semantics is that
+for each answer of q1, the integration system exposes the data
+comprised in a corresponding answer of q2. GLAV maximizes
+flexibility, or, equivalently, integration expressive power: unlike
+LAV, a GLAV mapping may expose only part of a given source’s
+data, and may combine data from several sources; unlike GAV, a
+GLAV mapping may include joins or complex expressions over
+
+the global schema.
+
+In this work, we study GLAV mediation supporting SPARQL
+queries over the data and the ontology. We pick GLAV for
+its highest expressive power, RDF for its wide adoption, and aim
+at querying the data and the ontology in order to fully benefit
+from the flexibility and expressivity of RDF. As Table 1 shows,
+our system is the first capable of integrating multiple data sources
+through GLAV mappings, for SPARQL querying over the data and
+the ontology; further, it supports heterogeneous data sources (of
+different data models). A benefit of our using GLAV is the ability
+to support a form of incomplete information, naturally present in
+RDF through the so-called blank nodes, in the virtual RDF graph
+exposed by the mediator (see Section 3.1).
+Our closest competitors only support GAV mappings, even though
+some support more expressive ontologies and/or queries [16, 33,
+44]. Formal OBDA frameworks based on GLAV mappings have
+been defined, e.g., [18], without concretely deployed systems. A
+technique for simulating GLAV mappings through GAV ones un-
+der certain conditions is suggested in [21], however this solution
+has many drawbacks; we defer a detailed discussion to Section 6.
+
+Contributions and novelty The contributions we make in this
+work are as follows.
+(1). RIS Formalism We formally define RDF Integration Sys-
+tems (RIS, in short), OBDA mediators capable of exposing data
+from heterogeneous sources of virtually any data model through
+GLAV mappings, under the form of an RDF graph endowed with
+an RDFS ontology. We formalize the problem of BGP (basic graph
+pattern) RDF query answering over the RDF data and ontology
+exposed in such systems.
+(2). Novel RIS query answering techniques We describe sev-
+eral RIS query answering methods based on transforming map-
+pings into LAV view definitions, and on reducing query answering
+to rewriting it using views. Our first method combines known
+techniques; the other two methods are novel, and rely on a form
+of mapping saturation. We show that a smart decomposition of
+reasoning between offline precomputation and query time makes
+one of these methods much faster than the others.
+The paper is organized as follows. Section 2 recalls a set of prelim-
+inary notions we build upon. Then, Section 3 defines our RIS and
+formalizes RIS query answering. Section 4 describes RIS query
+answering methods. Section 5 presents our experiments, then we
+discuss related work and conclude.
+
+2 PRELIMINARIES
+We present the basics of the RDF graph data model (Section 2.1),
+of RDF entailment used to make explicit the implicit informa-
+tion RDF graphs encode (Section 2.2), and how RDF graphs can
+be queried using the widely-considered SPARQL Basic Graph
+Pattern queries (Section 2.3).
+Then, we recall two techniques, namely query reformulation (Sec-
+tion 2.4) and view-based query rewriting (Section 2.5), which will
+serve as building blocks for our query answering techniques.
+
+2.1 RDF Graphs
+We consider three pairwise disjoint sets of values: I of IRIs
+(resource identifiers), L of literals (constants) and B of blank
+nodes modeling unknown IRIs or literals, a.k.a. labelled nulls [3,
+29]. A (well-formed) triple belongs to (I ∪B)×I ×(L ∪I ∪B),
+and an RDF graph G is a set of (well-formed) triples. A triple
+(s, p, o) states that its subject s has the property p with the object
+value o [47]. We denote by Val(G) the set of all values (IRIs, blank
+nodes and literals) occurring in an RDF graph G, and by Bl(G) its
+
+Schema triples Notation
+Subclass
+(s, ≺sc , o)
+Subproperty
+(s, ≺sp, o)
+Domain typing
+(s, ←(cid:45)d , o)
+Range typing
+(s, (cid:44)→r , o)
+Notation
+
+Data triples
+Class fact
+Property fact
+
+(s, τ , o)
+(s, p, o) s.t. p (cid:60) {τ , ≺sc , ≺sp, ←(cid:45)d , (cid:44)→r }
+Table 2: RDF triples.
+set of blank nodes. In triples, we use _:b (possibly with indices)
+to denote blank nodes, and quoted strings to denote literals.
+Within an RDF graph, we distinguish data triples from schema
+ones. The former describe data (either attach a type, or a class,
+to a resource, or state the value of a certain data property of
+a resource). The latter state ontological constraints using RDF
+Schema (RDFS), which relate classes and properties: subclass
+(specialization relation between types), subproperty (specializa-
+tion of a binary relation), typing of the domain (first attribute)
+of a property, respectively, range (typing of the second attribute)
+of a property. Table 2 introduces short notations we adopt for
+these schema properties.
+From now on, we denote by Irdf the reserved IRIs from the RDF
+standard, e.g., the properties τ , ≺sc , ≺sp , ←(cid:45)d
+, (cid:44)→r shown in
+Table 2. The rest of the IRIs are application-dependent classes
+and properties, which are said user-defined and denoted by Iuser.
+Hence, Iuser = I \ Irdf .
+We will consider RDF graphs with RDFS ontologies made of
+schema triples of the four above flavours. More precisely:
+
+Definition 2.1 (RDFS ontology). An ontology triple is a schema
+triple whose subject and object are user-defined IRIs from Iuser.
+An RDFS ontology (or ontology in short) is a set of ontology triples.
+Ontology O is the ontology of an RDF graph G if O is the set of
+schema triples of G.
+Above, ontology triples are not allowed over blank nodes. This is
+only to simplify the presentation; we could have allowed them,
+and handled them as in [29]. More importantly, we forbid on-
+tology triples from altering the common semantics of RDF it-
+self. For instance, we do not allow (←(cid:45)d , ≺sp, (cid:44)→r ), which would
+impose that the range of every property shares all the types
+of the property’s domain! This second restriction can be seen
+as common-sense; it underlies most ontological formalisms, in
+particular description logics [8] thus the W3C’s Web Ontology
+Language (OWL), Datalog± [15] and existential rules [39], etc.
+
+[12]).
+
+on
+
+2.2
+
+based
+
+example,
+
+(Running
+
+Example
+Consider the following RDF graph:
+Gex = {(:worksFor, ←(cid:45)d , :Person), (:worksFor, (cid:44)→r , :Org),
+(:PubAdmin, ≺sc , :Org), (:Comp, ≺sc , :Org),
+(:NatComp, ≺sc , :Comp), (:hiredBy, ≺sp, :worksFor)
+(:ceoOf, ≺sp, :worksFor), (:ceoOf, (cid:44)→r , :Comp),
+(:p1, :ceoOf, _:bc ), (_:bc , τ , :NatComp),
+(:p2, :hiredBy, :a), (:a, τ , :PubAdmin)}
+
+The ontology of Gex, i.e., the first eight schema triples, states that
+people work for organizations, some of which are public adminis-
+trations or companies. Further, national companies are a kind of
+companies. Being hired by or being CEO of an organization are
+two ways of working for it; in the latter case, this organization is
+a company. The facts of Gex, i.e., the four remaining data triples,
+state that :p1 is CEO of some unknown company represented
+by the blank node _:bc , which is a national company, and :p2 is
+hired by the public administration :a.
+
+R
+
+
+
+
+
+
+Entailment rule
+
+Rule [48]
+rdfs5
+rdfs11
+ext1
+ext2
+ext3
+ext4
+rdfs2
+rdfs3
+rdfs7
+rdfs9
+
+(p1, ≺sp, p2), (p2, ≺sp, p3) → (p1, ≺sp, p3) 
+
+
+
+
+
+(s, ≺sc , o), (o, ≺sc , o1) → (s, ≺sc , o1)
+(p, ←(cid:45)d , o), (o, ≺sc , o1) → (p, ←(cid:45)d , o1)
+(p, (cid:44)→r , o), (o, ≺sc , o1) → (p, (cid:44)→r , o1)
+(p, ≺sp, p1), (p1, ←(cid:45)d , o) → (p, ←(cid:45)d , o)
+(p, ≺sp, p1), (p1, (cid:44)→r , o) → (p, (cid:44)→r , o)
+(p, ←(cid:45)d , o), (s1, p, o1) → (s1, τ , o)
+(p, (cid:44)→r , o), (s1, p, o1) → (o1, τ , o)
+(p1, ≺sp, p2), (s, p1, o) → (s, p2, o)
+(s, ≺sc , o), (s1, τ , s) → (s1, τ , o)
+Table 3: Sample RDFS entailment rules.
+
+
+
+Rc
+
+Ra
+
+2.2 RDF Entailment Rules
+An entailment rule r has the form body(r ) → head(r ), where
+body(r ) and head(r ) are RDF graphs, respectively called body and
+head of the rule r . In this work, we consider the RDFS entail-
+ment rules R shown in Table 3, which are the most frequently
+used; in the table, all values except RDF reserved IRIs are blank
+nodes. For instance, rule rdfs5 reads: whenever in an RDF graph,
+a property p1 is a subproperty of a property p2, and further p2
+is a subproperty of p3 (body of rdfs5), it follows that p1 is a
+subproperty of p3 (head of rdfs5). Similarly, rule rdfs7 states
+that if p1 is a subproperty of p2 and a resource s has the value o
+for p1, then s also has o as a value for p2. The triples (p1, ≺sp, p3)
+and (s, p2, o) in the above examples are called implicit, i.e., they
+hold in a graph thanks to the entailment rules, even if they may
+not be explicitly present in the graph. Following [12], we view
+R as partitioned into two subsets: the rules Rc lead to implicit
+schema triples, while rules Ra lead to implicit data triples1. The
+direct entailment of an RDF graph G with a set of RDF en-
+tailment rules R, denoted by CG, R , is the set of implicit triples
+resulting from rule applications that use solely the explicit triples
+of G. For instance, the rule rdfs9 applied to the graph Gex, which
+comprises (:NatComp, ≺sc , :Comp), (_:bc , τ , :NatComp), leads to
+the implicit triple (_:bc , τ , :Comp). This triple belongs to CGex, Ra
+(hence also to CGex, R ). The saturation of an RDF graph allows
+materializing its semantics, by iteratively augmenting it with the
+triples it entails using entailment rules, until reaching a fixpoint;
+this process is finite [48]. Formally:
+
+Definition 2.3 (RDF graph saturation). Let G be an RDF graph and
+R a set of entailment rules. We recursively define a sequence
+(Gi )i ∈N of RDF graphs as follows: G0 = G, and Gi+1 = Gi ∪CGi , R
+for i ≥ 0. The saturation of G w.r.t. R, denoted G R , is Gn for n
+the smallest integer such that Gn = Gn+1.
+Example 2.4 (Saturation). The saturation of Gex w.r.t. the set R
+of RDFS entailment rules shown in Table 3 is attained after the
+following two saturation steps:
+(Gex)1 =Gex ∪
+
+{(:NatComp, ≺sc , :Org),
+(:hiredBy, ←(cid:45)d , :Person), (:hiredBy, (cid:44)→r , :Org),
+(:ceoOf, ←(cid:45)d , :Person), (:ceoOf, (cid:44)→r , :Org),
+(:p1, :worksFor, _:bc ), (_:bc , τ , :Comp),
+(:p2, :worksFor, :a), (:a, τ , :Org)}
+
+(Gex)2 =(Gex)1 ∪
+
+{(:p1, τ , :Person), (:p2, τ , :Person), (_:bc , τ , :Org)}
+
+2.3 Basic Graph Pattern Queries
+A popular RDF query dialect consists of basic graph pattern
+queries, or BGPQs, in short. Let V be a set of variable symbols,
+1In the notations Rc and Ra , c and a respectively stand for “constraint triples”
+
+(called schema triples here) and “assertion triples” (data triples).
+
+disjoint from I ∪ B ∪ L . A basic graph pattern (BGP) is a set of
+triple patterns (triples in short) belonging to (I ∪ B ∪ V ) × (I ∪
+V ) × (I ∪ B ∪ L ∪ V ). For a BGP P, we denote by Var(P) the set
+of variables occurring in P, by Bl(P) its set of blank nodes, and by
+Val(P) its set of values (IRIs, blank nodes, literals and variables).
+
+Definition 2.5 (BGP Queries). A BGP query q is of the form q( ¯x) ←
+P, where P is a BGP (also denoted by body(q)), and ¯x ⊆ Var(P)
+are the answer variables of q.
+
+To ease the presentation, and without loss of generality, we con-
+sider BGPQs without blank nodes, as it is well-known that these
+can be replaced by non-answer variables [46].
+For query answering based on query reformulation (see Section
+2.4), it is convenient to slightly generalize BGPQs into partially
+instantiated BGPQs [12, 29]. Starting from a BGPQ q, partial
+instantiation may replace some variables with values from I ∪
+L ∪ B, as specified by a substitution σ . Due to σ , and in contrast
+with standard BGPQs, some answer variables of the resulting
+query qσ can be bound:
+Example 2.6 (Partially instantiated BGPQ). Consider the BGPQ
+asking for who is working for which kind of company q(x, y) ←
+(x, :worksFor, z), (z, τ , y), (y, ≺sc , :Comp) and the substitution σ =
+{x (cid:55)→ :p1}. The corresponding partially instantiated BGPQ is:
+q(:p1, y) ← (:p1, :worksFor, z), (z, τ , y), (y, ≺sc , :Comp). In it, the
+first answer variable has been bound to :p1.
+
+For simplicity, below we use the term “query” to designate either
+a standard BGPQ or a partially instantiated BPGQ.
+The semantics of a BGPQ on an RDF graph is defined through
+standard homomorphisms from the query body to the queried
+graph. We recall that a homomorphism from a BGP P to an
+RDF graph G is a function φ from Val(P) to Val(G) such that
+for any triple (s, p, o) ∈ P, the triple (φ(s), φ(p), φ(o)) is in G,
+with φ the identity on IRIs and literals. Next, we distinguish
+query evaluation, whose result is just based on the explicit
+triples of the graph, i.e., on BGP-to-RDF graph homomorphisms,
+from query answering that also accounts for the implicit graph
+triples, resulting from entailment. Formally:
+
+Definition 2.7 (Evaluation and answering). The answer set to a
+BGPQ q on an RDF graph G w.r.t. a set R of RDF entailment rules
+is: q(G, R) = {φ( ¯x) | φ homomorphism from body(q) to G R }. If
+¯x = ∅, q is a Boolean query, in which case q is false when q(G, R) =
+∅ and true when q(G, R) = {⟨⟩}, i.e., the answer to q is the empty
+tuple.
+The evaluation of q on G, denoted q(G, ∅) or q(G) in short, is
+obtained from homomorphisms from body(q) to G alone (not
+G R ). It can be seen as a particular case of query answering when
+R = ∅.
+
+Example 2.8 (Evaluation and answering). Consider again the BGPQ
+q from the preceding example. Its evaluation on Gex is empty
+because Gex has no explicit :worksFor assertion, while its answer
+set on Gex w.r.t. R is {⟨:p1, :NatComp⟩} because :p1 being CEO of
+_:bc , :p1 implicitly works for it, and _:bc is explicitly a company
+of the particular type :NatComp.
+
+The above notions and notations naturally extend to unions of
+(partially instantiated) BGPQs, or UBGPQs in short.
+We end this section by pointing out that many RDF data man-
+agement systems use saturation-based query answering, which
+directly follows the definition of query answering: an RDF graph
+G is first saturated with the set R of entailment rules, so that the
+
+answer set to an incoming query q is obtained through query
+evaluation as q(G R ).
+2.4 Query Reformulation
+Reformulation-based query answering is an alternative technique
+to the widely adopted saturation-based query answering. It con-
+sists in reformulating a query using R, so that evaluating the
+reformulated query on G yields the answer set to the original
+query on G w.r.t. R. Intuitively, reformulation injects the onto-
+logical knowledge into the query, just as saturation injects it
+into the RDF graph. We rely here on the very recent algorithm
+from [12], which takes into account all the entailment rules from
+Table 3. The process is decomposed into two steps according to
+the partition of R into Ra and Rc .
+(i) The first step reformulates a BGPQ q w.r.t. an RDFS ontology O
+and the set of rules Rc into a UBGPQ, say Qc , which is guaranteed
+not to contain ontology triples. Intuitively, this step generates
+new BGPQs obtained from q by instantiating variables that query
+the ontology with all their possible bindings; for instance, y in
+a query triple (y, ≺sc , :Comp) is bound to the IRIs of all explicit
+and implicit subclasses of :Comp in O. This step, alone, is sound
+and complete w.r.t. Rc for query answering, i.e., for any graph G
+with ontology O, q(G, Rc ) = Qc (G).
+(ii) The second step reformulates Qc w.r.t. O and Ra , and outputs
+a UBGPQ, say Qc ,a . This step, alone, is sound and complete
+w.r.t. Ra for query answering, i.e., for any graph G with ontology
+O, Qc (G, Ra ) = Qc ,a (G). Furthermore, a key property is that
+q(G, R) = Qc (G, Ra ), i.e., only Ra needs to be considered to
+answer Qc with respect to the entire set of rules R. This is the
+fundamental reason why the sucessive application of these two
+reformulation steps leads to a sound and complete reformulation-
+based query answering technique: q(G, R) = Qc ,a (G).
+Example 2.9 (Two-step reformulation). Consider the query q(x, y) ←
+(x, :worksFor, z), (z, τ , y), (y, ≺sc , :Comp) from the preceding ex-
+ample and the ontology O in Example 2.2. The first reformulation
+step instantiates the triple (y, ≺sc , :Comp) on O, leading to:
+Qc = q(x, :NatComp) ← (x, :worksFor, z), (z, τ , :NatComp).
+Then, Qc is reformulated into Qc ,a =
+q(x, :NatComp) ← (x, :worksFor, z), (z, τ , :NatComp) ∪
+q(x, :NatComp) ← (x, :hiredby, z), (z, τ , :NatComp) ∪
+q(x, :NatComp) ← (x, :ceoOf, z), (z, τ , :NatComp)
+by specializing :worksFor according to its subproperties in O. It
+can be checked that Qc ,a (Gex) = q(Gex, R) = q(G R
+{⟨:p1, :NatComp⟩}, obtained here from the third BGPQ in Qc,a .
+
+ex) =
+
+2.5 Query Rewriting-based Data Integration
+We recall now the basics of relational view-based query rewriting
+(Section 2.5.1), which has been extensively studied [23, 31]. Then
+we present a generalization of the notion of views as mappings
+[35] (Section 2.5.2).
+
+2.5.1 View-based (LAV) Data Integration. An integration sys-
+tem I is made of a global schema S (a set of relations) and a
+set V of views. An instance of I assigns a set of tuples to each
+relation of S and to each view of V. The data stored in a view is
+called its extension. Further, to each view V is associated a query
+V ( ¯x) :- ψ ( ¯x) over the global schema S, specifying how its data fits
+into S. Accordingly, this framework is called local-as-view (LAV)
+data integration. For instance, let S consist of three relations
+Emp(eID, name, dID), Dept(dID, cID, country), Salary(eID,amount),
+where eID, dID and cID are respectively identifiers for employees,
+departments and companies.
+Consider the views V1(eID, name, country) :- Emp(eID, name, dID),
+
+Dept(dID, “IBM”, country) providing the names of IBM employ-
+ees and where they work, and V2(eID, amount) :- Emp(eID, name,
+“R&D”), Salary(eID,amount), which indicates the salaries of em-
+ployees in R&D departments. Typically, no single view is expected
+to bring all information of a given kind; for instance, V1 brings
+some IBM employees, but other views may bring others, e.g., V2,
+possibly overlapping with V1; this is called the “Open World
+Assumption” (OWA).
+In an OWA setting, we are interested in certain answers [31],
+i.e., those that are sure to be part of the query result, knowing
+the data present in the views. Such answers can be computed by
+rewriting a query over S, into one over the views V; evaluating
+the rewriting over the view extensions produces the answers.
+Ideally, a rewriting should be equivalent to the query over S, i.e.,
+compute exactly the same answers. However, depending on the
+views and queries, such a rewriting may not exist. For instance,
+the query q(n, a) :- Emp(e, n, d), Dept(d, c, “France”), Salary(e, a)
+does not have an equivalent rewriting using V1 and V2, because
+V1 only provides IBM employees working in France, while V2
+only has salaries of employees of R&D departments. A maximally
+contained rewriting brings all the query answers that can be ob-
+tained through the given set of views; the rewriting may be not be
+equivalent to q (but just contained in q). In our example, qr (n, a)
+:- V1(e, n, ”France”), V2(e, a) is a maximally contained rewriting
+of q; it returns employees of French IBM R&D departments with
+their salary, clearly a subset of q answers.
+A remarkable result holds for (unions of) conjunctive queries
+((U)CQs), conjunctive views (views V such that the associated
+query V ( ¯x) :- ψ ( ¯x) is a CQ) and rewritings that are UCQs: any
+maximally contained rewriting computes exactly the certain an-
+swers [2]; we will build upon this result for answering queries in
+our RDF integration systems.
+
+2.5.2 GLAV Data Integration. The above setting has been gen-
+eralized to views that are not necessarily stored as such, but just
+queries over some underlying data source. For instance, assuming
+a data source D holds the relations Person(eID, name) and Con-
+tract(eID, dID, country) (see Figure 1) with people and their work
+contracts at IBM, the view V1 from the above example may be
+defined on D by the query V D
+1 over the D schema shown in the
+figure (note that V D
+1 hides the department from system I); V D
+1
+provides the extension of V1. Similarly, view V2 may be defined
+as a query over some data source (or sources).
+
+Global schema S
+Emp(eID, name, dID), Dept(dID, cID, country), Salary(eID,amount)
+
+V1 (eID, name, country) :- Emp(eID, name, dID), Dept(dID, “IBM”, country)
+V D
+1 (eID, name, country) :- Person(eID, name), Contract(eID, dID, country)
+
+Person(eID, name), Contract(eID, dID, country)
+Data source D
+Figure 1: Example: view V1 as a GLAV mapping.
+Query rewriting is unchanged, whether the views are stored or
+defined by source queries. In the latter case, to obtain answers,
+a view-based rewriting needs to be unfolded, replacing every
+occurence of a view symbol V with the body of the source query
+defining that view. Executing the resulting query (potentially over
+different data sources) computes the answers. This integration
+setting, which considers views as intermediaries between sources
+and the integration schema, has been called “global-local-as-view”
+(GLAV) [26]. An association of a query q1 over the data sources
+and another query q2 over the global schema, both with the same
+answer variables, e.g., q1 = V D
+1 and q2 = V1 above, is commonly
+called a GLAV mapping (denoted q1( ¯x) (cid:123) q2( ¯x)).
+
+Historically, two restrictions of GLAV mappings have been in-
+vestigated. First, global-as-view (or GAV) mappings define global
+schema relations as views over the local schemas. Specifically,
+a GAV mapping q1( ¯x) (cid:123) q2( ¯x), q2 defines a single element of
+the global schema (hence body(q2) is restricted to a single atom
+if q2 is a CQ, or a single triple pattern if q2 is a BGPQ) and its
+variables are exactly ¯x. Second, local-as-view (LAV) mappings
+express elements of the local schema as views over the global
+schema, similarly to the views described in Section 2.5.1.
+Importantly, unlike GAV mappings, GLAV ones do not require
+all variables of q2 to be answer variables (e.g., dI D in V1 in
+Figure 1); this makes integration more powerful. For example,
+suppose that ⟨1,“John Doe”,“France”⟩ is an answer to V D
+1 above.
+Then, V1 exposes this tuple in the global schema as: Emp(1,“John
+Doe",x), Dept(x,“IBM",”France”), stating that John Doe works for
+a department x located in France. Here, x is an existential vari-
+able (called “labeled null” in [3]); the GLAV mapping states the
+existence of such a department in the global schema, even if its
+identifier is unknown (because it is not provided by V1). Therefore,
+John Doe is a certain answer to a query asking for all employees
+in IBM departments, based on the above GLAV mapping. This
+answer cannot be found using GAV mappings.
+
+3 PROBLEM STATEMENT
+In this section, we first formalize the notion of RDF integration
+system (Section 3.1). Then, we state the associated query answer-
+ing problem (Section 3.2), for which Section 4 provides solutions.
+
+3.1 RDF integration system (RIS)
+In an RDF integration system (RIS in short), data from heteroge-
+neous sources, each of which may have its own data model and
+query language, is integrated into an RDF graph, consisting of an
+(RDFS) ontology and of data triples derived from the sources by
+means of GLAV-style mappings. Mappings allow (i) specifying
+the data made available from the sources, and (ii) organizing it
+according to the RIS ontology.
+
+Definition 3.1 (RIS mappings and extensions).
+A RIS mapping m is of the form m = q1( ¯x) (cid:123) q2( ¯x) where q1 and
+q2 are two queries with the same answer variables, and q2 is a
+BGPQ whose body contains only triples of the forms:
+
+• (s, p, o) where p ∈ Iuser,
+• (s, τ , C) where C ∈ Iuser.
+
+The body of m is q1 and its head is q2. The extension of m is the
+set of tuples ext(m) = {Vm (δ (v1), . . . , δ (vn )) | ⟨v1, . . . , vn ⟩ ∈
+q1(D)}, where q1(D) is the answer set of q1 on the data source D
+that m integrates and δ is a function that maps source values to
+RDF values, i.e., IRIs, blank nodes and literals.
+
+Intuitively, m specifies that the result of query q1 on D trans-
+formed in RDF, i.e., the extension of m, is exposed to the RIS as
+the result of the (BGP) query q2.
+
+Example 3.2 (Mappings). Consider the two mappings:
+m1 with head q2(x) ← (x, :ceoOf, y), (y, τ , :NatComp) and
+m2 with head q2(x, y) ← (x, :hiredBy, y), (y, τ , :PubAdmin).
+Suppose that the body of m1 returns ⟨pD1 ⟩ as its results, and that
+the δ function maps the value pD1
+from the data source D1 to
+1
+the IRI :p1. Then, the extension of m1 is: ext(m1) = {Vm1 (:p1)}.
+Further, suppose that the body of m2 returns ⟨pD2
+2 , aD2 ⟩, and that
+δ maps the values pD2
+2 , aD2 from the data source D2 to the IRIs
+:p2, :a. Then, the extension of m2 is: ext(m2) = {Vm2 (:p2, :a)}.
+Given a set of RIS mappings M, the extent of M is the union
+
+of the mappings’ extensions, i.e., E = (cid:208)
+m ∈M ext(m), and we
+denote by Val(E) the set of values occurring in E. We can now
+define the RIS data triples induced by some mappings and an
+extent thereof. These are all the data which is exposed (can be
+queried) through a RIS.
+Definition 3.3 (RIS data triples). Given a set M of RIS mappings
+and an extent E of M, the RIS data triples induced by M and E
+form an RDF graph defined as follows:
+
+(cid:216)
+
+{bgp2rdf(body(q2)[ ¯x ←¯t ])) | Vm (¯t) ∈ E}
+
+m=q1( ¯x )(cid:123)q2( ¯x )∈M
+
+G M
+E
+
+=
+
+where
+
+• body(q2)[ ¯x ←¯t ] is the BGP body(q2) in which the answer vari-
+ables ¯x are bound to the values in the tuple Vm (¯t), part of
+E;
+
+• bgp2rdf(·) is a function that transforms a BGP into an RDF
+graph, by replacing each variable with a fresh blank node.
+
+Observe that, because we use GLAV mappings, RIS data triples
+may include fresh blank nodes, as exemplified below; these cor-
+respond to the existential variables allowed in GLAV mappings,
+as discussed at the end of Section 2.5.2.
+
+Example 3.4. Reusing the mappings from Example 3.2, let M =
+{m1, m2} and its extent E = {Vm1 (:p1), Vm2 (:p2, :a)}. The RIS
+data triples they lead to are:
+G M
+E
+
+= {(:p1, :ceoOf, _:bc ), (_:bc , τ , :NatComp),
+(:p2, :hiredBy, :a), (:a, τ , :PubAdmin)}
+
+In particular, the first and second triples contain the blank node
+_:bc , introduced by bgp2rdf instead of the variable y in the head
+(query q2) of m1. Importantly, only non-answer variables in
+a mapping head lead to blank nodes introduced this way: by
+Def. 3.3, answer variables (here x for m1 and x, y for m2) are
+replaced with values from Vm (¯t), thus from Val(E).
+Finally, we define a RIS as a tuple S = ⟨O, R, M, E⟩ stating that
+S allows to access (query), with the reasoning power given by the
+set R of RDFS entailment rules, the RDF graph comprising the
+ontology O and the data triples induced by the set of mappings
+M and their extent E.
+
+3.2 Query answering problem
+The problem we consider is answering BGPQs in a RIS. We define
+certain answers in a RIS setting as follows:
+
+Definition 3.5 (Certain answer set). The certain answer set of a
+BGPQ q on a RIS S = ⟨O, R, M, E⟩ is:
+cert(q, S) = {φ( ¯x) | φ homomorphism from body(q) to (O∪G M
+where φ( ¯x) comprises only values from Val(E).
+The certain answer set cert(q, S) is thus the subset of q(O ∪ G M
+E , R)
+restricted to tuples fully built from source values, i.e., we ex-
+clude tuples with blank nodes introduced by the mappings (see
+Def. 3.3). Note, however, that blank nodes can be exploited to
+answer queries, as shown below.
+
+E )R }
+
+Example 3.6 (Certain answers). Consider the RIS S made of the
+ontology O of Gex in Example 2.2, the set R of entailment rules
+shown in Table 3, and the set of mappings M together with the
+extent E from Example 3.4.
+Let q(x, y) ← (x, :worksFor, y), (y, τ , :Comp) be the query asking
+the query
+for which company”, while
+“who works
+q′(x) ← (x, :worksFor, y), (y, τ , :Comp) asks “who works for some
+company”. The only difference between them is that y is an an-
+swer variable in q and not in q′. The certain answer set of q is ∅,
+
+(1)
+
+Qc ,a
+
+(2)
+
+(2’)
+
+rewriting
+
+reformulation
+
+(1’)
+
+Qc
+
+(2”)
+
+M
+
+mapping
+saturation
+
+(A)
+
+Ma,O
+
+ont. mapping
+creation
+(B)
+
+Ma,O ∪ MO Rc
+
+Ra
+
+O
+
+Rc
+
+answers
+
+(5)
+
+mediator
+query engine
+
+(4)
+
+(4’)
+
+q
+
+(3)
+
+(3’)
+
+qr
+
+qREW
+
+Figure 2: Outline of query answering strategies.
+while the certain answer set of q′ is {⟨:p1⟩}. This answer results
+from the RIS data triples (:p1, :worksFor, _:bc ), (_:bc , τ , :Comp),
+which are entailed from:
+
+• the G M
+E
+
+triples (:p1, :ceoOf, _:bc ), (_:bc , τ , :NatComp), with
+
+the blank node _:bc discussed in Example 3.4, and:
+
+• either
+
+O
+
+the
+
+triples
+
+(:ceoOf, ≺sp, :worksFor),
+(:ceoOf, (cid:44)→r , :Comp) together with the R rules rdfs3,
+(:ceoOf, ≺sp, :worksFor),
+rdfs7,
+or
+(:NatComp, ≺sc , :Comp)
+together with the R rules
+rdfs3, rdfs9.
+
+the O triples
+
+The query q has no answer because it requires a value not avail-
+able from the source: the company for which :p1 works; the RIS
+only knows the existence of such value through the blank node
+_:bc begotten by bgp2rdf in its data triples. In contrast, q′ al-
+lows finding out that :p1 works for (as CEO of) some (national)
+company, even though the mapping m1 (the only one involving
+companies) does not expose the company IRI through the RIS.
+
+The problem we study in the next section is:
+Problem 1. Given a RIS S, compute the certain answer set of a
+BGPQ q on S, i.e., cert(q, S).
+
+4 QUERY ANSWERING IN A RIS
+Since we adopt a mediator-style approach, the RIS data triples
+G M
+are not materialised, hence the saturation of O ∪G M
+cannot
+E
+E
+be computed to answer queries as defined above. Instead, queries
+are rewritten in terms of the remote heterogeneous sources, based
+on the RIS ontology O, reasoning power R and mappings M. We
+present three query answering strategies, which differ in how
+the ontological reasoning is incorporated: we may have all, some
+or no reasoning performed at query time, as outlined in Figure 2.
+All reasoning at query time The first strategy will be de-
+tailed in Section 4.1. First, it reduces the RIS query answering
+problem to standard query evaluation in an RDF data manage-
+ment system, by reformulating (step (1) in Figure 2) the query q
+based on the RIS ontology O and entailment rules R = Rc ∪ Ra .
+The obtained reformulated query Qc ,a thus yields the expected
+certain answers when evaluated on the RIS data triples (recall
+Section 2.4), provided that answers with blank nodes introduced
+by the bgp2rdf function are discarded (recall Section 3.2). Since
+
+these data triples are not materialized, the RDF query evaluation
+problem is in turn reduced to relational view-based query answer-
+ing, by rewriting Qc ,a using the RIS GLAV mappings M seen
+as LAV views (step (2)). This produces a relational rewriting qr
+over the mappings extension (step (3)), whose evaluation with
+a mediator query engine provides the desired certain answers
+(steps (4) and (5)).
+Some reasoning at query time The second strategy (detailed
+in Section 4.2) is a main contribution of this paper. First, it re-
+duces the RIS query answering problem to saturation-based query
+answering by reformulating (step (1’)) the query q based on O and
+Rc only (not R = Rc ∪ Ra as above). The obtained reformulation
+Qc thus yields the expected certain answer set when evaluated
+on the RIS data triples saturated with Ra (recall Section 2.4), again
+provided that the answers with blank nodes introduced by the
+bgp2rdf function are discarded (as above). Since these triples are
+not materialized in a RIS, hence cannot be saturated with Ra , the
+saturation-based query answering problem is in turn reduced
+to relational view-based query answering, by rewriting Qc using
+the RIS GLAV mappings saturated O and Ra , seen as LAV views.
+These saturated mappings, denoted Ma,O , are obtained (step
+(A)) from the original ones by adding to their head queries (q2)
+all the implicit data triples they model w.r.t. O and Ra . Then,
+the partially reformulated query Qc is rewritten using Ma,O
+(step (2’)) and the resulting query (step (3)) is evaluated as in
+the first strategy (steps (4) and (5)). Importantly, mappings are
+saturated offline, and need to be updated only when some map-
+ping changes. This limits both the reasoning effort at query time
+and the complexity of the reformulated query to rewrite, hence
+the rewriting time needed to obtain a rewriting qr over the data
+sources, as our experiments show (Section 5).
+No reasoning at query time Finally, the third strategy (detailed
+in Section 4.3) reduces the RIS query answering problem directly
+to view-based query answering. Here, the mappings are saturated
+offline as above (step (A)), in order to model all explicit and
+implicit RIS data triples. Also, these mappings are complemented
+with a set of mappings, noted MO Rc (step (B)), comprising all the
+explicit and implicit RIS schema triples w.r.t. O and R; since only
+Rc rules entail new schema triples (Table 3), O R is actually equal
+to O Rc . This second set of mappings is also computed offline,
+and only needs to be updated when the ontology changes. A
+query q just needs to be rewritten based on the above mappings
+Ma,O ∪ MO Rc seen as LAV views (step (2”)), in order to obtain,
+as above, a rewriting qREW over the data sources (step(3’), followed
+by the evaluation steps (4’) and (5)).
+Before going into the technical details of the above strategies, we
+introduce a set of simple functions. The bдp2ca function trans-
+forms a BGP into a conjunction of atoms with ternary predi-
+cate T (standing for “triple”) as follows: bдp2ca({(s1, p1, o1), . . .,
+(sn, pn, on )}) = T (s1, p1, o1) ∧ · · · ∧ T (sn, pn, on ). The bдpq2cq
+function transforms a BGPQ q( ¯x) ← body(q) into a CQ q( ¯x) ←
+bдp2ca(body(q)). Finally, the function ubдpq2ucq function trans-
+forms a UBGPQ (cid:208)n
+i=1 qi ( ¯xi ) into a UCQ by applying the above
+bдpq2cq function to each of its qi .
+
+4.1 Rewriting Fully-Reformulated Queries
+using Mappings as Views: REW-CA
+
+Based on [12], the first step of this strategy, (1) in Figure 2, refor-
+mulates a query q w.r.t. O and R = Rc ∪ Ra into a query Qc,a .
+This allows obtaining the certain answers directly from the RIS
+data triples, and not from their saturation after they have been
+
+augmented with O (recall Definition 3.5). Indeed, the correctness
+of the reformulation ensures that the certain answers of q on
+the RIS S correspond precisely to those of Qc ,a asked on S when
+disregarding O and R, as formally expressed in the next lemma.
+Of course, this still does not provide a concrete solution to ob-
+tain the desired certain answers using standard query evaluation,
+since the RIS data triples G M
+E
+Let S = ⟨O, R, M, E⟩ be a RIS, q be a BGPQ and
+Lemma 4.1.
+Qc ,a its UBGPQ reformulation w.r.t. O, R = Rc ∪ Ra using [12].
+Then:
+
+are not materialized.
+
+cert(q, S) = cert(Qc ,a, ⟨∅, ∅, M, E⟩)
+The proof of this and our following claims can be found in [13].
+Recall that the RIS data triples are defined from the mappings M
+by, for every mapping m = q1( ¯x) (cid:123) q2( ¯x) ∈ M, (i) evaluating
+the mapping body q1( ¯x) on the data source to produce its exten-
+sion ext(m) ∈ E, and then (ii) instantiating the mapping head
+q2( ¯x) with its extension. At the same time, this is also how the
+instance of a data integration system based on LAV views and
+their extensions is defined in a relational setting (Section 2.5.1)!
+Based on this analogy, we recast the RIS query answering problem
+of the above Lemma, into a relational view-based query answering
+one. To this aim, we treat our mappings as LAV views:
+
+Definition 4.2 (Mappings as relational LAV views). Let m = q1( ¯x) (cid:123)
+q2( ¯x) be a mapping. Its corresponding relational LAV view is:
+Vm ( ¯x) ← bдp2ca(body(q2)).
+Example 4.3. The relational LAV views corresponding to the
+mappings m1, m2 from Example 3.2 are:
+
+• Vm1 (x) ← T (x, :ceoOf, y),T (y, τ , :NatComp)
+• Vm2 (x, y) ← T (x, :hiredBy, y),T (y, τ , :PubAdmin)
+
+We denote the set of views derived from all the mappings M by
+Views(M). Crucially, the extent E of the mapping set M is also
+an extent for the corresponding set of views Views(M).
+Based on the above Lemma 4.1, treating mappings and their ex-
+tent as relational LAV views and their extent, and seeing (U)BGPQs
+as (U)CQs with the help of the functions introduced in the begin-
+ning of Section 4, we reduce the RIS query answering problem
+to view-based query answering:
+
+Theorem 4.4 (REW-CA correctness). Let S = ⟨O, R, M, E⟩ be a
+RIS and q be a BGPQ. Let Qc ,a be the reformulation of q w.r.t. O
+and R using [12]. Then:
+
+cert(q, S) = cert(ubдpq2ucq(Qc ,a ), Views(M), E)
+where cert(ubдpq2ucq(Qc,a ), Views(M), E) denotes the certain
+answer set of ubдpq2ucq(Qc ,a ) over Views(M) and E.
+Importantly, this provides an effective solution to RIS query
+answering problem by using state-of-the-art view-based query
+rewriting techniques [31], in particular for step (2) in Figure 2.
+
+Example 4.5 (REW-CA query answering). Consider again the RIS
+in Example 3.6 and the query q(x, y) ← (x, y, z), (z, τ , t), (y, ≺sp
+, :worksFor), (t, ≺sc , :Comp), (x, :worksFor, a), (a, τ , :PubAdmin)
+asking “who works for some public administration, and what
+working relationship he/she has with some company”. Its UBGPQ
+reformulation, seen as a UCQ, is shown in Figure 3. Its maximally-
+contained rewriting based on the views obtained from the RIS
+mappings is: qr (x, :ceoOf) ← Vm1 (x), Vm2 (x, y), obtained from
+the second CQ in the above union. This becomes clear when the
+views are replaced by their bodies: q(x, :ceoOf) ← T (x, :ceoOf, y1),
+T (y1, τ , :NatComp),T (x, :hiredBy, y2),T (y2, τ , :PubAdmin). Note
+
+Qc ,a = q(x, :ceoOf) ← T (x, :ceoOf, z),T (z, τ , :NatComp),
+
+T (x, :worksFor, a),T (a, τ , :PubAdmin)
+
+∪ q(x, :ceoOf) ← T (x, :ceoOf, z),T (z, τ , :NatComp),
+
+T (x, :hiredBy, a),T (a, τ , :PubAdmin)
+
+∪ q(x, :ceoOf) ← T (x, :ceoOf, z),T (z, τ , :NatComp),
+T (x, :ceoOf, a),T (a, τ , :PubAdmin)
+∪ q(x, :hiredBy) ←T (x, :hiredBy, z),T (z, τ , :NatComp),
+
+T (x, :worksFor, a),T (a, τ , :PubAdmin)
+
+∪ q(x, :hiredBy) ←T (x, :hiredBy, z),T (z, τ , :NatComp),
+T (x, :hiredBy, a),T (a, τ , :PubAdmin)
+∪ q(x, :hiredBy) ←T (x, :hiredBy, z),T (z, τ , :NatComp),
+T (x, :ceoOf, a),T (a, τ , :PubAdmin)
+Figure 3: Sample reformulation for Example 4.5.
+
+that the other CQs cannot be rewritten given the available views.
+With the current RIS, this rewriting yields an empty certain
+answer set to q, i.e., cert(q, S) = ∅, because the extent of the map-
+pings, hence of the views, is: E = {Vm1 (:p1), Vm2 (:p2, :a)}. How-
+ever, if we add Vm2 (:p1, :a) to E, then cert(q, S) = {⟨:p1, :ceoOf⟩}.
+
+4.2 Rewriting Partially-Reformulated
+
+Queries using Saturated Mappings as
+Views: REW-C
+
+In constrast with the REW-CA strategy that performs all the rea-
+soning w.r.t. O and R = Rc ∪ Ra at query time, our second
+strategy called REW-C splits the reasoning work between offline
+preprocessing and query time.
+The first step of this strategy, labeled (1’) in Figure 2, reformulates
+a query q using [12], but solely w.r.t. O, Rc , producing a UBGPQ
+denoted Qc . From the correctness of this reformulation step, and
+the fact that only Ra needs to be considered to answer Qc with
+respect to the entire set of rules R (recall Section 2.4), the certain
+answer set of q asked on the RIS S is exactly the certain answer
+set of Qc asked on S when disregarding Rc . Formally:
+Lemma 4.6. Let S = ⟨O, R, M, E⟩ be a RIS, q be a BGPQ and Qc
+its reformulation w.r.t. O, Rc [12]. Then:
+
+cert(q, S) = cert(Qc , ⟨O, Ra, M, E⟩)
+In other words, the desired answer set could be obtained by evalu-
+ating Qc on the RIS data triples G M
+saturated by Ra . Again, since
+E
+the RIS data triples are not materialized, this does not provide a
+concrete solution. To account for the impact of the ontology O
+and the entailment rules R on these “virtual” data triples, we rely
+on BGPQ saturation [25]: given a BGPQ q, O and R, the saturation
+q R,O is q augmented with all the triples q implicitly asks for, given
+the ontology O and the rules R. BGPQ saturation is exemplified
+below:
+
+Example 4.7 (BGPQ saturation). Consider the ontology O of Gex
+and the query q(x) ← (x, :hiredBy, y), (y, τ , :NatComp) asking
+who has been hired by a national company. Its saturation w.r.t. Ra, O
+is: q Ra ,O (x) ← body(q), (x, :worksFor, y), (x, τ , :Person),
+(y, τ , :Comp), (y, τ , :Org).
+We use BGPQ saturation to saturate the RIS mapping heads
+w.r.t. Ra, O, so that the saturated mappings together with E model
+the saturated RIS data triples w.r.t. Ra, O. To compute q Ra ,O we
+(1) saturate body(q) ∪ O using Ra , then (2) add to the body of q
+all triples thus inferred.
+
+Definition 4.8 (Mappings saturation). The saturation of a set M
+of RIS mappings w.r.t. entailment rules Ra and ontology O is:
+( ¯x) | m = q1( ¯x) (cid:123) q2( ¯x)}
+
+{q1( ¯x) (cid:123) q Ra ,O
+
+2
+
+Ma,O = (cid:216)
+m ∈M
+
+We saturate mappings offline, and just need to update them when
+O or the mapping heads change.
+
+Example 4.9 (Saturated mappings). Consider the RIS of Exam-
+ple 3.6, the mapping heads in Ma,O are (added implicit triples
+are in blue):
+m1 :
+
+q Ra ,O
+2
+
+(x) ← (x, :ceoOf, y), (y, τ , :NatComp)
+(x, :worksFor, y), (y, τ , :Comp)
+(x, τ :Person), (y, τ , :Org)
+(x, y) ←(x, :hiredBy, y), (y, τ , :PubAdmin)
+
+m2 :
+
+q Ra ,O
+2
+
+(x, :worksFor, y), (y, τ , :Org)
+(x, τ , :Person)
+
+From the above Lemma and the use of saturated RIS mappings
+instead of the original ones, we show:
+
+Lemma 4.10. Let S = ⟨O, R, M, E⟩ be a RIS, q be a BGPQ and Qc
+its reformulation w.r.t. O, Rc [12]. Then:
+
+cert(q, S) = cert(Qc , ⟨∅, ∅, Ma,O , E⟩)
+This result allows solving the RIS query answering problem by
+relational view-based query rewriting (step (2’) in Figure 2):
+
+Theorem 4.11 (REW-C correctness). Let S = ⟨O, R, M, E⟩ be a
+RIS, q be a BGPQ and Qc its reformulation w.r.t. O, Rc .Then:
+
+cert(q, S) = cert(ubдpq2ucq(Qc ), Views(Ma,O ), E)
+Example 4.12 (REW-CA). Consider again the RIS in Example 3.6
+and the query q of Example 4.5. Its reformulation Qc w.r.t. O, Rc ,
+seen as a UCQ, is:
+q(x, :ceoOf) ← T (x, :ceoOf, z),T (z, τ , :NatComp),
+
+T (x, :worksFor, a),T (a, τ , :PubAdmin)
+
+∪ q(x, :hiredBy) ←T (x, :hiredBy, z),T (z, τ , :NatComp),
+
+T (x, :worksFor, a),T (a, τ , :PubAdmin)
+
+This reformulation is therefore rewritten using the RIS views as:
+qr (x, :ceoOf) ← Vm1 (x), Vm2 (x, y). It is obtained from the first
+CQ in the above; the second one has no rewriting based on the
+available RIS views. We remark that this rewriting is equivalent to
+the one obtained in Example 4.5, hence yields the same answers.
+
+4.3 Rewriting Queries using Saturated
+
+Mappings and Ontology Mappings as
+Views: REW
+
+This strategy does not reason at query time at all. Instead, it
+rewrites a query q based on the saturated RIS mappings Ma,O
+as above, and on a specific set of ontology mappings we build to
+model the saturated RIS ontology as a data source:
+Definition 4.13 (Ontology mappings). The set of ontology map-
+pings for a RIS ontology O is:
+
+MO c =
+
+(cid:216)
+
+x ∈ { ≺sc , ≺sp ,←(cid:45)d ,(cid:44)→r }
+
+{mx | mx = q1(s, o) (cid:123) q2(s, o)}
+
+with q2(s, o) ← (s, x, o). The extension of an ontology mapping
+mx is ext(mx ) = {Vmx (s, o) | (s, x, o) ∈ O Rc }. The extent of
+MO c is denoted EO c .
+We compute ontology mappings offline, and only need to up-
+date them when the ontology changes. The ontology mapping
+extensions EO c store all the explicit and implicit RIS ontology
+triples (recall from Section 2.2 that only Rc lead to such triples).
+Importantly, this leads to the observation that a query triple that
+refers to the ontology (schema) can be evaluated on the ontology
+mapping extensions alone. Formally:
+
+q(x, :ceoOf) ← Vm1 (x), Vm≺sp
+
+∪ q(x, :ceoOf) ← Vm1 (x), Vm≺sp
+
+Vm≺sc
+
+(:ceoOf, :worksFor),
+(:NatComp, :Comp), Vm2 (x, a)
+(:ceoOf, :worksFor),
+
+Vm≺sc
+
+(:Comp, :Comp), Vm2 (x, a)
+
+∪ q(x, :ceoOf) ← Vm1 (x), Vm≺sp
+
+(:ceoOf, :worksFor),
+
+Vm≺sc
+
+(:Org, :Comp), Vm2 (x, a)
+
+∪ q(x, :worksFor) ←Vm1 (x), Vm≺sp
+
+(:worksFor, :worksFor),
+
+∪ q(x, :worksFor) ←Vm1 (x), Vm≺sp
+
+(:worksFor, :worksFor),
+
+Vm≺sc
+
+(:NatComp, :Comp), Vm2 (x, a)
+
+∪ q(x, :worksFor) ←Vm1 (x), Vm≺sp
+
+(:worksFor, :worksFor),
+
+Vm≺sc
+
+(:Comp, :Comp), Vm2 (x, a)
+
+∪ q(x, :hiredBy) ← Vm2 (x, z), Vm≺sp
+
+∪ q(x, :hiredBy) ← Vm2 (x, z), Vm≺sp
+
+Vm≺sc
+
+(:Org, :Comp), Vm2 (x, a)
+
+Vm≺sc
+
+(:hiredBy, :worksFor),
+(:PubAdmin, :Comp), Vm2 (x, a)
+(:hiredBy, :worksFor),
+
+Vm≺sc
+
+(:Org, :Comp), Vm2 (x, a)
+
+∪ q(x, :worksFor) ←Vm2 (x, z), Vm≺sp
+
+(:worksFor, :worksFor),
+
+∪ q(x, :worksFor) ←Vm2 (x, z), Vm≺sp
+
+(:worksFor, :worksFor),
+
+Vm≺sc
+
+(:PubAdmin, :Comp), Vm2 (x, a)
+
+Vm≺sc
+
+(:Org, :Comp), Vm2 (x, a)
+
+∪ (cid:208)
+
+r∈ { ≺sc , ≺sp ,←(cid:45)d ,(cid:44)→r }q(x, r) ← Vmr (x, z), Vm2 (v, z),
+(r, :worksFor),
+(:PubAdmin, :Comp),
+
+Vm≺sp
+Vm≺sc
+Vm2 (x, a)
+∪ q(x, r) ←Vmr (x, z), Vm2(v ,z),
+Vm≺sp
+Vm≺sc
+Vm2 (x, a)
+
+(r, :worksFor),
+(:Org, :Comp),
+
+Figure 4: Sample rewriting for Example 4.17.
+
+Lemma 4.14. Let S = ⟨O, R, M, E⟩ be a RIS and q be a BGPQ.
+Then:
+
+cert(q, S) = cert(q, ⟨O, Ra, MO c ∪ M, EO c ∪ E⟩)
+This lemma effectively “pushes” Rc reasoning in the set of map-
+pings (to which we add MO c ) and the extent (to which we add
+EO c ). Next, we rely (as we did for REW-CA) on mappings satu-
+ration with O, Ra to also push Ra reasoning in the mappings,
+leading to:
+
+Lemma 4.15. Let S = ⟨O, R, M, E⟩ be a RIS and q be a BGPQ.
+Then:
+
+cert(q, S) = cert(q, ⟨∅, ∅, MO c ∪ Ma,O , EO c ∪ E⟩)
+This allows to reduce RIS query answering to relational view-
+based query rewriting (step (2”) in Figure 2):
+
+Theorem 4.16 (REW correctness). Let S = ⟨O, R, M, E⟩ be a
+RIS and q be a BGPQ. Then:
+cert(q, S) = cert(bдpq2cq(q), Views(MO c ∪ Ma,O ), EO c ∪ E)
+
+Example 4.17 (REW). Consider again the RIS in Example 3.6 and
+the query q of Example 4.5 seen as a CQ:
+q(x, y) ←T (x, y, z),T (z, τ , t),T (y, ≺sp, :worksFor),
+
+T (t, ≺sc , :Comp),T (x, :worksFor, a),
+T (a, τ , :PubAdmin)
+
+Its maximally-contained rewriting qREW based on the views ob-
+tained from the RIS saturated mappings and ontology mappings
+appears in Figure 4. This rewriting is much larger than the ones
+of the two preceding techniques: this is due to the ontology map-
+pings. If we assume that E also contains Vm2 (:p1, :a), as we did in
+
+Example 4.5, we obtain again cert(q, S) = {⟨:p1, :ceoOf⟩}, which
+results from the evaluation of the first CQ in the UCQ rewriting;
+the other CQs yield empty results because some required ≺sc
+or ≺sp contraints are not found in the views built from the RIS
+ontology mappings.
+
+data sources (using the q1 parts of the mappings, see Section 2.5.2)
+and passed to Tatooine. We implemented the RIS query answer-
+ing methods described here in Java 1.8 on top of these tools.
+Hardware We used servers with 2,7 GHz Intel Core i7 processors
+and 160 GB of RAM, running CentOs Linux 7.5.
+
+How do our strategies compare? Since they are all correct,
+they lead to the same RIS certain answer set, however they do
+not necessarily compute the same view-based rewritings. Indeed,
+REW considers the additional set MO c of ontology mappings.
+Hence, for queries over the ontology, i.e., featuring in a property
+position ≺sc , ≺sp , ←(cid:45)d
+, (cid:44)→r , or a variable, a REW rewriting is
+larger than a REW-CA or REW-C rewriting and, to be answered,
+requires the additional ontology source. In contrast, REW-CA
+and REW-C yield logically equivalent rewritings; we minimize
+them both to avoid possible redundancies, thus they become
+identical (up to variable renaming). Hence, REW-CA and REW-C
+do not differ in how these rewritings are evaluated. Instead, they
+differ in how the rewritings are computed, or, equivalently, on the
+distribution of the reasoning effort on the data and mappings, across
+various query answering stages. As our experiments show, given
+the computational complexity of view-based query rewriting [42],
+this difference has a significant impact on their performance.
+
+5 EXPERIMENTAL EVALUATION
+We now describe our experiments with RIS query answering.
+In addition to our strategies based on query rewriting, we in-
+clude in our comparison a simple alternative strategy, based
+on materialization and denoted MAT. Offline (before answer-
+ing queries), this strategy materializes the RIS data triples and
+saturates them with the rule set R. The materialization is stored
+and saturated in an RDF data management system (RDFDB,
+in short). Then, MAT query answering amounts to query eval-
+uation on the saturated materialization. Therefore, MAT query
+answering can be seen as a lower bound for query answering
+through other strategies.
+
+5.1 Experimental settings
+Software Our platform is developed in Java 1.8, as follows.
+Our RDFDB is OntoSQL2, a Java platform providing efficient RDF
+storage, saturation, and query evaluation on top of an RDBMS [14,
+29], relying on Postgres v9.6. To save space, OntoSQL encodes
+IRIs and literals into integers, and a dictionary table which allows
+going from one to the other. It stores all resources of a certain
+type in a one-attribute table, and all (subject, object) pairs for
+each property (including RDFS schema properties) in a table; the
+tables are indexed. OntoSQL is used in the MAT strategy, and it
+also provides the RDF query reformulation algorithm [12].
+We rely on the Graal engine [9] for view-based query rewrit-
+ing. Graal is a Java toolkit dedicated to query answering algo-
+rithms in knowledge bases with existential rules (a.k.a. tuple-
+generating dependencies). Since the relational view Vm ( ¯x) ←
+bдp2ca(body(q2)) corresponding to a GLAV mapping m (recall
+Def. 4.2) can be seen as a specific existential rule of the form
+Vm ( ¯x) → bдp2ca(body(q2)), the query reformulation algorithm
+of Graal can be used to rewrite the UCQ translation of a BGPQ
+with respect to a set of RIS mappings. To execute queries against
+heterogeneous data sources, we use Tatooine [4, 10], a Java-
+based mediator (or polystore) system, capable both of pushing
+queries in underlying data sources and (unlike other polystores,
+e.g., [24]) of evaluating joins within the mediator engine. Query
+rewritings produced by Graal are unfolded into queries on the
+
+2https://ontosql.inria.fr
+
+5.2 Experimental scenarios
+RDF Integration Systems (RIS) used Our first interest was
+to study scalability of RIS query answering, in particular in the
+relational setting studied in many prior works. To achieve this,
+we used the BSBM benchmark relational data generator3 to build
+databases consisting of 10 relations named producer, product,
+offer, review etc. Using two different benchmark scale factors, we
+obtained a data source DS1 of 154.054 tuples across the relations,
+respectively, DS2 of 7.843.660 tuples; both are stored in Postgres.
+We used two RDFS ontologies O1 respectively O2, containing,
+first, subclass hierarchies of 151 (resp. 2011) product types, which
+come with DS1, respectively, DS2. To O1 and O2, we add a nat-
+ural RDFS ontology for BSBM composed of 26 classes and 36
+properties, used in 40 subclass, 32 subproperty, 42 domain and
+16 range statements.
+Relational-sources RIS We devised two sets M1, M2 of 307,
+respectively, 3863 mappings, which expose the relational data
+from DS1, respectively, DS2 as RDF graphs. The relatively high
+number of mappings is because: (i) each product type (of which
+there are many, and their number scales up with the BSBM data
+size) appears in the head of a mapping, enabling fine-grained
+and high-coverage exposure of the data in the integration graph;
+(ii) we also generated more complex GLAV mappings, partially
+exposing the results of join queries over the BSBM data; interest-
+ingly, these mappings expose incomplete knowledge, in the style
+of Example 3.4.
+The mapping sets lead to the RIS graphs of 2.0·106, respectively,
+108 · 106 triples. Their saturated versions comprise respectively
+3.4 · 106 and 185 · 106 triples. Our first two RIS are thus: S1 =
+⟨O1, R, M1, E1⟩ and S2 = ⟨O2, R, M2, E2⟩, where Ei for i in
+{1, 2} are the extents resulting from DSi and Mi .
+Heterogeneous-sources RIS Second, going beyond relational-
+sources OBDA [16, 17, 44], our architecture extends to hetero-
+geneous data sources. For that, we converted a third (33%) of
+DS1, DS2 into JSON documents, and stored them into MongoDB,
+leading to the JSON data sources denoted DSj,1, DSj,2; the rela-
+tional sources DSr ,1, DSr2 store the remaining (relational) data.
+Conceptually, for i in {1, 2}, the extension based on DSr ,i and
+extension based on DSj,i form a partition of Ei . We devise a
+set of JSON-to-RDF mappings to expose DSj,1 and DSj,2 into
+RDF, and denote M3 the set of mappings exposing DSr ,1 and
+DSj,1, together, as an RDF graph; similarly, the mappings M4
+expose DSr ,2 and DSj,2 as RDF. Our last two RIS are thus: S3 =
+⟨O1, R, M3, E3⟩ and S4 = ⟨O2, R, M4, E4⟩, where E3 is the ex-
+tent of M3 based on DSr ,1 and DSj,1, while E4 is the extent of
+M4 based on DSr ,2 and DSj,2. The RIS data and ontology triples
+of S1 and S3 are identical; thus, the difference between these two
+RIS is only due to the heterogeneity of their underlying data sources.
+The same holds for S2 and S4.
+Queries We devised a set of 28 BGP queries having from 1 to
+11 triple patterns (5.5 on average), of varied selectivity (they re-
+turn between 2 and 330 · 103 results in S1 and S3 and between 2
+and 4.4 · 106 results in S2 and S4); 6 among them query the data
+and the ontology (recall Example 2.6), a capability which most
+
+3https://downloads.sourceforge.net/project/bsbmtools/bsbmtools/
+
+bsbmtools-0.2
+
+RIS
+all
+S1, S3
+S1, S3
+S2, S4
+S2, S4
+
+NTRI
+|Qc,a |
+NANS
+|Qc,a |
+NANS
+
+Q01
+5
+7
+1272
+21
+15514
+
+RIS
+all
+S1, S3
+S1, S3
+S2, S4
+S2, S4
+
+NTRI
+|Qc,a |
+NANS
+|Qc ,a |
+NANS
+
+Q13a
+4
+84
+43157
+5628
+4416946
+
+Q01a
+5
+21
+4376
+175
+111793
+Q13b
+4
+700
+330142
+5628
+10049829
+
+5
+175
+22738
+1407
+863729
+Q14
+3
+1
+56200
+1
+2998948
+
+Q01b Q02 Q02a Q02b Q02c Q03 Q04 Q07 Q07a
+3
+19
+3
+19
+3
+
+2
+1
+91
+1
+4487
+
+6
+1225
+1342
+1225
+1570
+
+6
+147
+174
+525
+1058
+
+5
+525
+19
+4375
+5
+
+6
+21
+16
+63
+124
+
+6
+49
+56
+147
+598
+
+3
+5
+2
+5
+2
+
+Q16
+4
+25
+8114
+201
+249004
+
+Q19 Q19a Q20 Q20a Q20b Q20c
+11
+1225
+7564
+4221
+51988
+
+9
+147
+3515
+1225
+60834
+
+11
+525
+2312
+1225
+10486
+
+11
+63
+236
+525
+7818
+
+9
+63
+2015
+525
+39826
+
+11
+21
+0
+63
+904
+
+Q13
+4
+28
+13190
+84
+167760
+
+Q09 Q10
+3
+670
+9
+9350
+10
+
+1
+7
+5617
+7
+299902
+Q21 Q22 Q22a
+4
+4
+40
+2
+434
+28
+520
+40
+18588
+1528
+
+3
+670
+1085
+9350
+37176
+
+Q23
+7
+192
+25803
+192
+1329887
+
+Table 4: Characteristics of the queries used in our experiments.
+
+Figure 5: Query answering times on the smaller RIS S1
+(top, relational sources) and S3 (bottom, heterogeneous
+sources).
+
+competitor systems lack (see Section 6). Table 4 reports three
+query properties impacting query answering performance: the
+number of induced triples (NTRI), the number of BGPQ refor-
+mulations on the ontology (|Qc ,a |, ranging from 1 to 1225; this
+strongly determines the performance of answering such large
+union queries, recall Example 4.5), and its number of answers
+(NANS) on the two RIS groups (S1, S3 and S2, S4). To further study
+the impact of the ontology on query evaluation complexity, we
+created query families denoted QX , QX a etc. by replacing the
+classes and properties appearing in QX with their super classes
+or super properties in the ontology. In such a family, QX is the
+most selective, and queries are sorted in the increasing order of their
+number of reformulations.
+Our ontologies, mappings, queries, and experimental details are
+available online4.
+
+5.3 Query answering performance
+REW inefficiency We have conducted experiments4 using our
+six queries on ontological triples showing, as in Example 4.17
+and Figure 4, an explosion of the size of the rewriting (number
+of CQs), compared to the rewriting produced by the two other
+approaches. On queries (also) over the ontology, as explained in
+
+4Experiment web site: https://gitlab.inria.fr/mburon/org/blob/master/projects/
+
+het2onto-benchmark/bsbm/
+
+Figure 6: Query answering times on the larger RIS S2
+(top, relational sources) and S4 (bottom, heterogeneous
+sources).
+
+Section 4.3, we noted that the size of the rewriting produced by
+REW is larger (by a multiplicative factor of 29 to 74 in S1 and
+S3, and of 33 to 969 in S2 and S4) than the rewritings of the two
+other strategies, which led to an explosion of the time spent
+minimizing the rewriting, and made REW overall unfeasible; the
+details of these tests can be found online4. On queries that do not
+carry over the ontology, REW produces the same rewritings as the
+other methods. Thus, we do not report further REW performance
+below.
+Query answering time comparison Figure 5 depicts the query
+answering times, on the smaller RIS, of REW-CA, REW-C and MAT.
+The size of (number of BGPQs in) the reformulation of each query
+w.r.t. R, |Qc ,a | appears in parentheses after the query name, in the
+labels along the x axis. Given that S1, S3 have the same RIS data
+triples, the MAT strategy coincides among these two RIS. Figure 6
+shows the corresponding times for the largest RIS S2 and S4; the
+same observations apply. Note the logarithmic time axes.
+A first observation is that our query set is quite diverse; their
+answering times range from a few to more than 105 ms.
+As expected, query answering in MAT is the fastest in most cases,
+since it has no reasoning work to do at query answering time.
+However, it required, for S1, S3, 1.2 · 105 ms to build the material-
+ization and 1.49 · 105 ms more to saturate it, whereas for S2, S4,
+these times are 14h46 (5.31 · 107 ms), respectively, 1h28 (5.28 · 106
+
+ms). Not only these are orders of magnitude more than all query
+answering times; recall also that materializing G M
+requires main-
+E
+taining it when the underlying data changes, and its saturation
+(G M
+E ∪ O)R needs a second level of maintenance. Thus, MAT is
+not practical when data sources change. We were surprised to see
+REW-C and REW-CA somehow faster than MAT for queries Q09 and
+Q14. Answering these queries through MAT within OntoSQL leads
+to producing many results that involve mapping-generated blank
+nodes, tuples which should not appear in our certain answers,
+as per Definition 3.5. We remove such tuples in post-processing
+mode, which leads to a performance overhead for MAT. REW-C
+and REW-CA, in contrast, are answered by evaluating rewritings,
+and do not have to apply such a result pruning. It remains to be
+seen if this pruning could be pushed in an RDFDB; note that not
+all answers including blank nodes should be pruned, only those
+whose blank nodes are due to mappings.
+In each scenario, we observe that REW-C is faster or takes as
+long as REW-CA. Since the two approaches produce the same
+rewritings, the difference is due to steps before the step (3) in
+Figure 2. It turns out it is due to the rewriting time, which in turn
+strongly depends on the size of the reformulation it receives as
+input. In REW-C, the reformulations w.r.t. Rc are of size 1 (no
+union, just one BGP) for queries on data triples only, and never
+exceed 64 in S1 and S3 and 200 in S2 and S4, whereas, in REW-CA
+the reformulation sizes are much larger. REW-C is most often
+faster than REW-CA, by up to two orders of magnitude e.g., for
+Q02a , Q19 and Q20a on S2, the latter two on S4 etc. One order
+of magnitude speed-up is noticeable even on the smaller RIS
+S1, S3 (Figure 5) for Q02a . As a consequence, REW-C completes
+successfully in all scenarios we study, whereas REW-CA fails to
+complete for many queries with timeout set to 10min (missing
+yellow bars in Figure 6), in close correlation with the increased
+number of reformulations.
+Scaling in the data size As stated in Section 5.2, there is a
+scale factor of about 50 between S1, S3 on one hand, and S2, S4
+on the other. Figures 5 and 6 show that the query answering
+times generally grow by less than 50, when moving from S1 to
+S2, and from S3 to S4. This is mostly due to the good scalability
+of PostgreSQL (in the all-relational RIS), Tatooine (itself building
+on PostgreSQL and MongoDB, in the heterogeneous RIS), and
+OntoSQL (for MAT). As discussed above, computation steps we
+implemented outside these systems are strongly impacted by
+the mappings, ontology and query; intelligently distributing the
+reasoning effort, as REW-C does, avoids the heavy performance
+penalties that from which REW-CA and REW sometimes suffer.
+Impact of heterogeneity REW-CA and REW-C incur a (modest)
+overhead when combining data from PostgreSQL and MongoDB
+(heterogeneous RIS) w.r.t. the relational-sources RIS. Part of this
+is due to the cost of marshalling data across system boundaries;
+the rest is due to imperfect optimization within Tatooine. Overall,
+the comparison demonstrates that RIS query answering is feasible
+and quite efficient even on heterogeneous data sources.
+
+5.4 Experiment conclusion
+In a setting where the data, ontology and mappings do not change,
+MAT is an efficient and robust query answering technique, at a
+rather high cost to materialize and saturate the RIS instance. In
+contrast, in a dynamic setting, REW-C smartly combines partial
+reformulation and view-based query rewriting to efficiently com-
+pute query answers. The changes it requires when the ontology
+and mappings change (basically re-saturating mapping heads)
+are light and likely to be very fast. Thus, we conclude that REW-C
+
+is the best query answering strategy for dynamic RIS.
+
+6 RELATED WORK AND CONCLUSION
+Ontologies have been used to integrate relational or heteroge-
+neous data sources in mediators [49] with LAV views based on de-
+scription logics [1, 37] or their combination with Datalog [28, 30].
+Semantics have been used at the integration level since e.g., [20]
+for SGML and soon after for RDF [6, 7]; data is considered rep-
+resented and stored in a flexible object-oriented model, thus no
+mappings are used.
+Our work follows the OBDA paradigm introduced in [41]. This
+paradigm was conceived to enhance access to relational data by
+mappings to an ontology expressed in a dialect of the DL-Lite
+description logic family (typically DL-LiteR underpinning the
+OWL 2 QL profile of the W3C ontological language OWL 2). Ma-
+ture DL-based systems include Mastro5 [17] and Ontop6 [16, 43].
+Another notable OBDA system, namely UltrawrapO BDA [44], is
+based on an extension of RDFS to inverse and transitive proper-
+ties. All these systems rely on GAV mappings.
+Compared to these, our main novelty is to handle GLAV mappings
+and provide query answering algorithms for the resulting novel
+RIS setting. Note that formal OBDA frameworks with GLAV
+mappings have long been defined, e.g., in [18], but not put into
+practice. Regarding the other components of OBDA, we consider
+a simpler ontological language than existing OBDA systems, but
+support BGPQs on both data and ontological triples, a feature
+hardly found in these systems (an exception is [33]).
+As explained in the introduction, GLAV mappings maximize the
+expressive power of the integration system. In particular, they
+allow to expose a form of incomplete information (recall Exam-
+ple 3.6). To some extent, GLAV mappings may be simulated by
+GAV mappings provided with so-called Skolem functions on an-
+swer variables, as suggested for instance in [21]. To illustrate,
+consider the GLAV mapping m1 = q1( ¯x) (cid:123) q2( ¯x) with head
+q2(x) ← (x, :ceoOf, y), (y, τ , :NatComp) from Example 3.2. The
+non-answer variable y could be replaced by a Skolem function
+f (x), which would yield two GAV mappings, namely m11 =
+q1( ¯x) (cid:123) q21 ( ¯x) and m12 = q1( ¯x) (cid:123) q22 ( ¯x), with respective head
+q21 ( ¯x) ← (x, :ceoOf, f (x)) and q22 ( ¯x) ← (f (x), τ , :NatComp).
+Note that Skolem functions would have to produce syntactically
+correct RDF values in a materialization scenario. Still in a mate-
+rialisation scenario, query answering would require some post-
+processing to prevent the values built by the Skolem functions
+to be accepted as answers, while in a query rewriting sceSkolem-
+nario functional values would also have to be dealt with in a
+special way, which in particular prevents to use off-the-shelf
+view-based query rewriting algorithms. Hence, value invention
+would be simulated here at the price of technically more com-
+plex mappings and processing. Second, the break-up of GLAV
+mappings into several GAV mappings would lead to higher con-
+ceptual complexity since intrinsically connected triples, as those
+associated with (x, :ceoOf, y) and (y, τ , :NatComp) in the exam-
+ple, could not be exposed together by a single mapping. Last but
+not least, query rewriting would be considerably slowed down
+and would produce highly redundant rewritings, as demonstrated
+in the seminal paper [42].
+Our mapping saturation (Definition 4.8) is inspired by a query
+saturation technique introduced in [25] to compute least general
+generalizations of BGPQs under RDFS background knowledge.
+
+5http://obdasystems.com/mastro/
+6https://ontop.inf.unibz.it/
+
+It can be seen as a generalization to GLAV mappings of the T -
+mapping technique introduced in [43] (and further developed in
+[44]) to optimize query rewriting in a classical OBDA context.
+The T -mapping technique consists of completing the original
+set of GAV mappings with new ones, encapsulating informa-
+tion inferred from the DL ontology. For instance, given a GAV
+mapping m = q1(x) (cid:123) q2(x) ← C(x) with C a class, and a DL
+constraint specifying that C is a subclass of D, a new mapping
+m′ = q1(x) (cid:123) q′
+2(x) ← D(x) is created by composing m and the
+DL constraint. On this example, we would saturate the head of
+m into q2(x) ← C(x) ∧ D(x), which is semantically equivalent
+to adding the mapping m′. However, when mappings are GLAV
+and not GAV, one cannot simply add new mappings. For instance,
+consider the GLAV mapping m1 = q1( ¯x) (cid:123) q2( ¯x) with head
+q2(x) ← (x, :ceoOf, y), (y, τ , :NatComp); given the entailment
+rule rdfs9 and the ontological triple (:NatComp, ≺sc , :Comp),
+the saturation adds the triple (y, τ , :Comp) to the body of q2; cre-
+ating instead a new mapping of the form m′
+2( ¯x)
+with head q′
+2(x) ← (y, τ , :Comp) would be unsatisfactory as y in
+m′
+Our mapping saturation technique could be extended to more
+general entailment rules, in which the head of the rules may
+include blank nodes that are not in their body, possibly shared
+by several triples. This is part of our future research agenda.
+
+1 should correspond to the same object as y in m1.
+
+1 = q1( ¯x) (cid:123) q′
+
+Acknowledgements: This work is supported by the Inria Project
+Lab iCoda and the ANR project CQFD (ANR-18-CE23-0003).
+
+REFERENCES
+[1] Nada Abdallah, François Goasdoué, and Marie-Christine Rousset. 2009. DL-
+LITER in the Light of Propositional Logic for Decentralized Data Management.
+In IJCAI.
+
+[2] Serge Abiteboul and Oliver M. Duschka. 1998. Complexity of Answering
+
+Queries Using Materialized Views. ACM Press.
+
+[3] Serge Abiteboul, Richard Hull, and Victor Vianu. 1995.
+
+Foundations of
+
+Databases. Addison-Wesley.
+
+[4] Rana Alotaibi, Damian Bursztyn, Alin Deutsch, Ioana Manolescu, and Stamatis
+Zampetakis. 2019. Towards Scalable Hybrid Stores: Constraint-Based Rewrit-
+ing to the Rescue. In SIGMOD. https://hal.inria.fr/hal-02070827
+
+[5] Bernd Amann, Catriel Beeri, Irini Fundulaki, and Michel Scholl. 2002. Querying
+XML Sources Using an Ontology-Based Mediator. In CoopIS. Springer Berlin
+Heidelberg.
+
+[6] Bernd Amann and Irini Fundulaki. 1999. Integrating Ontologies and Thesauri
+
+to Build RDF Schemas. In ECDL.
+
+[7] Bernd Amann, Irini Fundulaki, and Michel Scholl. 2000. Integrating ontologies
+and thesauri for RDF schema creation and metadata querying. Int. J. on Digital
+Libraries 3, 3 (2000).
+
+[8] Franz Baader, Diego Calvanese, Deborah L. McGuinness, Daniele Nardi, and
+Peter F. Patel-Schneider (Eds.). 2003. The Description Logic Handbook: Theory,
+Implementation, and Applications. Cambridge University Press.
+
+[9] Jean-François Baget, Michel Leclère, Marie-Laure Mugnier, Swan Rocher, and
+Clément Sipieter. 2015. Graal: A Toolkit for Query Answering with Existential
+Rules. In RuleML.
+
+[10] Raphaël Bonaque, Tien Duc Cao, Bogdan Cautis, François Goasdoué, Javier
+Letelier, Ioana Manolescu, Oscar Mendoza, Swen Ribeiro, Xavier Tannier, and
+Michaël Thomazo. 2016. Mixed-instance querying: a lightweight integration
+architecture for data journalism. In VLDB. https://hal.inria.fr/hal-01321201
+[11] Elena Botoeva, Diego Calvanese, Benjamin Cogrel, Julien Corman, and Guohui
+Xiao. 2018. A Generalized Framework for Ontology-Based Data Access. In
+AI*IA.
+
+[12] Maxime Buron, François Goasdoué, Ioana Manolescu, and Marie-Laure Mug-
+nier. 2019. Reformulation-Based Query Answering for RDF Graphs with RDFS
+Ontologies. In ESWC.
+
+[13] Maxime Buron, François Goasdoué, Ioana Manolescu, and Marie-Laure Mug-
+nier. 2018. Rewriting-Based Query Answering for Semantic Data Integration
+Systems. In BDA (informal publication only). https://hal.archives-ouvertes.fr/
+hal-01927282
+
+[14] Damian Bursztyn, François Goasdoué, and Ioana Manolescu. 2015. Optimizing
+
+Reformulation-based Query Answering in RDF. In EDBT.
+
+[15] Andrea Calì, Georg Gottlob, and Thomas Lukasiewicz. 2009. A general Datalog-
+based framework for tractable query answering over ontologies. In PODS.
+[16] Diego Calvanese, Benjamin Cogrel, Sarah Komla-Ebri, Roman Kontchakov,
+Davide Lanti, Martin Rezk, Mariano Rodriguez-Muro, and Guohui Xiao. 2017.
+Ontop: Answering SPARQL queries over relational databases. Semantic Web
+8, 3 (2017).
+
+[17] Diego Calvanese, Giuseppe De Giacomo, Domenico Lembo, Maurizio Lenz-
+erini, Antonella Poggi, Mariano Rodriguez-Muro, Riccardo Rosati, Marco Ruzzi,
+and Domenico Fabio Savo. 2011. The MASTRO system for ontology-based
+data access. Semantic Web 2, 1 (2011).
+
+[18] Diego Calvanese, Giuseppe De Giacomo, Domenico Lembo, Maurizio Lenz-
+erini, Riccardo Rosati, and Marco Ruzzi. 2009. Using OWL in Data Integra-
+tion. In Semantic Web Information Management – A Model-Based Perspective.
+Springer.
+
+[19] Diego Calvanese, Giuseppe De Giacomo, Maurizio Lenzerini, and Moshe Y.
+Vardi. 2012. Query Processing under GLAV Mappings for Relational and
+Graph Databases. PVLDB 6, 2 (2012).
+
+[20] Vassilis Christophides, Martin Doerr, and Irini Fundulaki. 1997. A Semantic
+
+Network Approach to Semi-Structured Documents Repositories. In ECDL.
+[21] Giuseppe De Giacomo, Domenico Lembo, Maurizio Lenzerini, Antonella Poggi,
+and Riccardo Rosati. 2018. Using Ontologies for Semantic Data Integration.
+In A Comprehensive Guide Through the Italian Database Research Over the Last
+25 Years. Vol. 31. Springer, Cham.
+
+[22] A. Deutsch and V. Tannen. 2003. MARS: A System for Publishing XML from
+
+Mixed and Redundant Storage.. In VLDB.
+
+[23] AnHai Doan, Alon Halevy, and Zachary G. Ives. 2012. Principles of Data
+
+Integration. Morgan Kaufmann, Waltham, MA.
+
+[24] J. Duggan, A. J. Elmore, M. Stonebraker, M. Balazinska, B. Howe, J. Kepner, S.
+Madden, D. Maier, T. Mattson, and S. B. Zdonik. 2015. The BigDAWG Polystore
+System. SIGMOD 44, 2 (2015).
+
+[25] Sara El Hassad, François Goasdoué, and Hélène Jaudoin. 2017. Learning
+
+Commonalities in SPARQL. In ISWC.
+
+[26] Marc Friedman, Alon Y. Levy, and Todd D. Millstein. 1999. Navigational Plans
+
+for Data Integration. In I3 workshop@IJCAI.
+
+[27] Hector Garcia-Molina, Yannis Papakonstantinou, Dallan Quass, Anand Rajara-
+man, Yehoshua Sagiv, Jeffrey D. Ullman, Vasilis Vassalos, and Jennifer Widom.
+1997. The TSIMMIS Approach to Mediation: Data Models and Languages. J.
+Intell. Inf. Syst. 8, 2 (1997).
+
+[28] François Goasdoué, Véronique Lattès, and Marie-Christine Rousset. 2000. The
+Use of CARIN Language and Algorithms for Information Integration: The
+PICSEL System. Int. J. Cooperative Inf. Syst. 9, 4 (2000).
+
+[29] François Goasdoué, Ioana Manolescu, and Alexandra Roatis. 2013. Efficient
+
+query answering against dynamic RDF databases. In EDBT.
+
+[30] François Goasdoué and Marie-Christine Rousset. 2004. Answering queries
+using views: A KRDB perspective for the semantic Web. ACM TOIT 4, 3
+(2004).
+
+[31] Alon Y. Halevy. 2001. Answering Queries Using Views: A Survey. The VLDB
+
+Journal 10, 4 (Dec. 2001).
+
+[32] Dag Hovland, Roman Kontchakov, Martin G. Skjæveland, Arild Waaler, and
+Michael Zakharyaschev. 2017. Ontology-Based Data Access to Slegge. In
+ISWC.
+
+[33] Roman Kontchakov, Martin Rezk, Mariano Rodríguez-Muro, Guohui Xiao, and
+Michael Zakharyaschev. 2014. Answering SPARQL Queries over Databases
+under OWL 2 QL Entailment Regime. In ISWC.
+
+[34] Davide Lanti, Guohui Xiao, and Diego Calvanese. 2017. Cost-Driven Ontology-
+
+Based Data Access. In ISWC.
+
+[35] Maurizio Lenzerini. 2002. Data Integration: A Theoretical Perspective. In
+
+PODS.
+
+[36] Alon Y. Levy, Anand Rajaraman, and Joann J. Ordille. 1996. Querying Hetero-
+
+geneous Information Sources Using Source Descriptions. In VLDB.
+
+[37] Alon Y. Levy, Divesh Srivastava, and Thomas Kirk. 1995. Data Model and
+Query Evaluation in Global Information Systems. J. Intell. Inf. Syst. 5, 2 (1995).
+[38] Ioana Manolescu, Daniela Florescu, and Donald Kossmann. 2001. Answering
+
+XML Queries on Heterogeneous Data Sources. In VLDB.
+
+[39] Marie-Laure Mugnier. 2011. Ontological Query Answering with Existential
+
+Rules. In RR.
+
+[40] Floriana Di Pinto, Domenico Lembo, Maurizio Lenzerini, Riccardo Mancini,
+Antonella Poggi, Riccardo Rosati, Marco Ruzzi, and Domenico Fabio Savo.
+2013. Optimizing query rewriting in ontology-based data access. In EDBT.
+
+[41] Antonella Poggi, Domenico Lembo, Diego Calvanese, Giuseppe De Giacomo,
+Maurizio Lenzerini, and Riccardo Rosati. 2008. Linking Data to Ontologies. J.
+Data Semantics 10 (2008).
+
+[42] Rachel Pottinger and Alon Y. Halevy. 2001. MiniCon: A scalable algorithm for
+
+answering queries using views. VLDB J. 10 (2001).
+
+[43] Mariano Rodriguez-Muro, Roman Kontchakov, and Michael Zakharyaschev.
+
+2013. Ontology-Based Data Access: Ontop of Databases. In ISWC.
+
+[44] Juan F. Sequeda, Marcelo Arenas, and Daniel P. Miranker. 2014. OBDA: Query
+
+Rewriting or Materialization? In Practice, Both!. In ISWC.
+
+[45] Grégory Smits, Olivier Pivert, Hélène Jaudoin, and François Paulus. 2014.
+AGGREGO SEARCH: Interactive Keyword Query Construction. In EDBT.
+
+[46] W3C. 2013.
+
+SPARQL 1.1 Query Language.
+
+https://www.w3.org/TR/
+
+sparql11-query/
+
+[47] W3C. 2014. RDF 1.1 Concepts and Abstract Syntax. https://www.w3.org/TR/
+
+rdf11-concepts/
+
+[48] W3C. 2014. RDF 1.1 Semantics.
+
+https://www.w3.org/TR/rdf11-mt/
+
+#rdfs-entailment
+
+[49] Gio Wiederhold. 1992. Mediators in the Architecture of Future Information
+
+Systems. IEEE Computer 25, 3 (1992).
+
+

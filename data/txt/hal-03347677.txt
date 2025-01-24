@@ -1,0 +1,5114 @@
+HADAD: A Lightweight Approach for Optimizing
+Hybrid Complex Analytics Queries
+Rana Alotaibi, Bogdan Cautis, Alin Deutsch, Ioana Manolescu
+
+To cite this version:
+
+Rana Alotaibi, Bogdan Cautis, Alin Deutsch, Ioana Manolescu. HADAD: A Lightweight Approach
+for Optimizing Hybrid Complex Analytics Queries. ACM SIGMOD 2021 - International Conference
+on Management of Data, Jun 2021, Xi’an / Online, China. ￿hal-03347677￿
+
+HAL Id: hal-03347677
+
+https://inria.hal.science/hal-03347677
+
+Submitted on 17 Sep 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+HADAD: A Lightweight Approach for Optimizing Hybrid
+Complex Analytics Queries
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+†UC San Diego, USA, ‡Univ. Paris Saclay, France, §Inria & Institut Polytechnique de Paris, France
+{ralotaib,deutsch}@eng.ucsd.edu;bogdan.cautis@u-psud.fr;ioana.manolescu@inria.fr
+
+ABSTRACT
+Hybrid complex analytics workloads typically include (i) data man-
+agement tasks (joins, filters, etc. ), easily expressed using relational
+algebra (RA)-based languages, and (ii) complex analytics tasks (re-
+gressions, matrix decompositions, etc.), mostly expressed in linear
+algebra (LA) expressions. Such workloads are common in a number
+of areas, including scientific computing, web analytics, business
+recommendation, natural language processing, speech recognition.
+Existing solutions for evaluating hybrid complex analytics queries –
+ranging from LA-oriented systems, to relational systems (extended
+to handle LA operations), to hybrid systems – fail to provide a
+unified optimization framework for such a hybrid setting. These sys-
+tems either optimize data management and complex analytics tasks
+separately, or exploit RA properties only while leaving LA-specific
+optimization opportunities unexplored. Finally, they are not able to
+exploit precomputed (materialized) results to avoid computing again
+(part of) a given mixed (LA and RA) computation.
+
+We describe HADAD, an extensible lightweight approach for opti-
+mizing hybrid complex analytics queries, based on a common abstrac-
+tion that facilitates unified reasoning: a relational model endowed
+with integrity constraints, which can be used to express the proper-
+ties of the two computation formalisms. Our approach enables full
+exploration of LA properties and rewrites, as well as semantic query
+optimization. Importantly, our approach does not require modifying
+the internals of the existing systems. Our experimental evaluation
+shows significant performance gains on diverse workloads, from
+LA-centered ones to hybrid ones.
+
+1 INTRODUCTION
+Modern analytical tasks typically include (i) data management tasks
+(e.g., joins, filters) to perform pre-processing steps including fea-
+ture selection, transformation, and engineering [18, 22, 34, 41, 43],
+tasks that are easily expressed using relational algebra (RA)-based
+languages, as well as (ii) complex analytics tasks (e.g., regressions,
+matrices decompositions), which are mostly expressed using linear
+algebra (LA) operations [33]. Such workloads are common in several
+application domains including scientific computing, web analytics,
+business recommendation, natural language processing [38], or
+speech recognition [29]. To perform such analytical tasks, data sci-
+entists can choose from a variety of systems, tools, and languages.
+Languages/libraries such as R [3] and NumPy [2], as well as LA-
+oriented systems such as SystemML [19] and TensorFlow [11] treat
+matrices and linear algebra operations as first-class citizens: they
+offer a rich set of built-in LA operations and algorithms. However,
+it can be difficult to express data management tasks that include
+pre-processing and data transformation in these systems. Further,
+
+expression rewrites, based on equivalences that hold due to well-
+known LA properties, are not exploited in some of these systems,
+leading to missed optimization opportunities.
+
+Many works haved sought to efficiently integrate RA and LA
+processing in a hybrid environment where both algebraic styles
+can be used together [1, 27, 32, 35, 37, 39, 45]. Some works pro-
+pose calling LA packages through user defined functions (UDFs),
+where libraries such as R and NumPy are embedded in the host
+language [1]. Others suggest to treat LA objects as first-class citi-
+zens in a column-oriented store or RDBMS and using built-in func-
+tions to express LA operations [32, 37]. However, the semantics of
+LA operations remain hidden behind these built-in functions and
+UDFs, i.e., LA routines, which the optimizers treat as black-boxes.
+LARA [35] introduces a declarative domain-specific language for
+collections and matrices, which enables optimization across the two
+algebraic abstractions. SPORES [46] and SPOOF [21] optimize LA
+expressions, by converting them into RA, optimizing the latter, and
+then converting the result back to an (optimized) LA expression.
+Polystore or hybrid systems provide an environment, where mixed
+RA and LA programs can be written and executed across different
+systems [27, 45].
+
+We identify unexplored optimization opportunities in existing
+solutions for evaluating hybrid complex analytics queries. First,
+they do not fully exploit LA properties and rewrites, whereas it has
+been shown that such rewrites can drastically enhance LA-based
+pipelines’ performance [44]. Second, they do not support semantic
+query optimization [12], which includes taking advantage of partial
+materialized computation results, i.e., materialized views, known to
+improve the performance of a variety of queries.
+
+We propose HADAD, an extensible, lightweight, holistic opti-
+mizer for analytical queries, based on reasoning on a common
+abstraction: relational model with integrity constraints. This brings
+within reach powerful cost-based optimizations across RA and LA,
+without the need to modify the internals of the existing systems; as
+we show, it is very easy to add within HADDAD knowledge about
+a wider range of LA operations than previous work could consider,
+while also enabling view-based rewriting and semantic query opti-
+mization using integrity constraints. The benefits of our optimized
+rewrites apply both to systems that provide a mixed-programming
+interface, such as polystores, and to LA-oriented systems designed
+and built for matrix operations. Last but not least, our holistic,
+cost-based approach enables to judiciously apply for each query
+the best available optimization. For instance, given the computa-
+tion M(N P) for some matrices M, N and P, we may rewrite it into
+(MN )P if its estimated cost is smaller than that of the original ex-
+pression, or we may turn it into MV if a materialized view V stores
+exactly the result of (N P). HADAD capitalizes on a framework
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+previously introduced in [14] for rewriting queries across many
+data models, using materialized views, in a polystore setting. The
+novelty of HADAD is to extend the benefits of rewriting and views
+optimizations to LA computations, crucial for model analytics and
+ML workloads.
+
+Contributions. This paper makes the following contributions:
+
+1 We propose an extensible lightweight approach to optimize
+hybrid complex analytics queries. Our approach can be im-
+plemented on top of existing systems without the need to
+modify their internals; it is based on a powerful intermedi-
+ate abstraction that supports reasoning about such a hybrid
+setting, namely, a relational model with integrity constraints.
+2 We formalize the problem of rewriting computations using
+previously materialized views in this mixed setting. To the best
+of our knowledge, ours is the first work that brings views-
+based rewriting under integrity constraints in the context of
+LA-based pipelines and hybrid complex analytics queries.
+3 We provide formal guarantees for our solution in terms of
+
+soundness and completeness.
+
+4 We conduct an extensive set of experiments on typical LA-
+based and hybrid pipelines, which show the benefits of our
+approach.
+
+Paper Organization. The rest of this paper is organized as follows.
+Section 2 formalizes the query optimization problem we solve in
+the context of a hybrid setting. After some preliminaries (Section 3),
+Section 4 provides an end-to-end overview of our approach. Sec-
+tion 5 presents our novel reduction of a rewriting problem with LA
+views into one that can be solved by existing techniques from the
+relational setting. Section 6 describes our extension to the query
+rewriting engine, integrating two different cost models, to help
+prune out inefficient rewritings as soon as they are enumerated.
+We formalize our solution’s guarantees in Section 7 and present
+our experimental evaluation in Section 8. We then discuss related
+work and conclude in Section 9.
+
+2 PROBLEM STATEMENT
+We consider a set of value domains Di , e.g., D1 denotes integers,
+D2 denotes real numbers, D3 strings, etc. We consider two basic
+data types: relations (sets of tuples) as in classical database modeling,
+and matrices (bi-dimensional arrays). Any attribute in a tuple or
+cell in a matrix is a value from some Di . We assume a matrix can be
+implicitly converted into a relation (the order among matrix rows is
+lost), and the opposite conversion (each tuple becomes a matrix line,
+in some order that is unknown, unless the relation was explicitly
+sorted before the conversion).
+
+We consider a set Rops of (unary or binary) relational algebra op-
+erators; concretely, Rops comprises the standard relational selection,
+projection, and join. We also consider a set Lops of linear algebra
+operators, comprising: unary operators which apply to a matrix
+and return a matrix (e.g., inversion and transposition), a number
+(e.g., the trace), or two matrices (e.g., the LU decomposition [36]);
+unary operations applied to a matrix and a number and returning a
+matrix, such as the scalar-matrix multiplication; binary operations
+applied to two matrices, or a matrix and a number, and returning a
+matrix or a number, such as matrix sum and product, scalar product,
+
+etc. The full set Lops of LA operations we support is detailed in
+Section 5.1. A hybrid (RA and/or LA) expression is defined as follows:
+• any value from a domain Di , any matrix, and any relation,
+
+is an expression;
+
+• (RA operators): given some expressions E, E ′, ro1(E) is also
+an expression, where ro1 ∈ Rops is a unary relational opera-
+tor, and E’s type matches ro1’s expected input type. The same
+holds for ro2(E, E ′), where ro2 ∈ Rops is a binary relational
+operator (i.e., the join);
+
+• (LA operators): given some expressions E, E ′ which are ei-
+ther numeric matrices or numbers (which can be seen as
+degenerate matrices of 1 × 1), and some real number r , the
+following are also expressions: lo1(E) where lo1 ∈ Lops is a
+unary operator, and lo2(E, E ′) where lo2 ∈ Lops is a binary
+operator (again, provided that E, E ′ match the expected input
+types of the operators).
+
+Clearly, an important set of equivalence rules hold over our hybrid
+expressions, well-known respectively in the RA and the LA litera-
+ture. These equivalences lead to alternative evaluation strategies for
+each expression.
+
+Further, we assume given a (potentially empty) set of material-
+ized views V, expressions which have been previously computed
+over some inputs (matrices and/or relations), and whose results are
+directly available (e.g., as a file on disk). Detecting when a material-
+ized view can be used instead of evaluating (part of) an expression
+is another important source of alternative evaluation strategies.
+
+Given an expression E and a cost model that assigns a cost (a real
+number) to an expression, we consider the problem of identify-
+ing the most efficient (lowest-cost) rewrite derived from E by:
+(i) exploiting RA and LA equivalence rules, and/or (ii) replacing
+part of an expression with a scan of a materialized view equivalent
+to that expression.
+
+Below, we detail our approach, the equivalence rules we capture,
+and two alternative cost models we devised for this hybrid RA/LA
+setting. Importantly, our solution (based on a relational encoding
+with integrity constraints) capitalizes on the framework previously
+introduced in [14], where it was used to rewrite queries using mate-
+rialized views in a polystore setting, where the data, views, and query
+cover a variety of data models (relational, JSON, XML, etc. ). Those
+queries can be expressed in a combination of standard database
+query languages, including SQL, JSON query languages, XQuery,
+etc. The ability to rewrite such queries using heterogeneous
+views directly and fully transfers to HADAD: thus, instead of
+a relation, we could have the (tuple-structured) results of an XML or
+JSON query; views materialized by joining an XML document with
+a JSON one and a relational database could also be reused. The nov-
+elty of our work is to extend the benefits of rewriting and view-
+based optimization to LA computations, crucial for modern
+analytics and ML workloads. In what follows (Section 5), we fo-
+cus on capturing matrix data and LA computations in the relational
+framework, along with relational data naturally; this enables our
+novel, holistic optimization of hybrid expressions.
+
+3 PRELIMINARIES
+We recall conjunctive queries [23], integrity constraints [12], and
+query rewriting under constraints [31]; these concepts are at the
+core of our approach.
+
+HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+3.1 Conjunctive Query and Constraints
+A conjunctive query (or simply CQ) Q is an expression of the form
+Q(x):- R1(y1), . . . , Rn (yn ), where each Ri is a predicate (relation)
+are tuples of variables or con-
+of some finite arity, and x, y1, . . . , yn
+stants. Each Ri (yi ) is called a relational atom. The expression Q(x)
+is the head of the query, while the conjunction of relational atoms
+R1(y1), . . . , Rn (yn ) is its body. All variables in the head are called
+distinguished. Also, every variable in x must appear at least once in
+. Different forms of constraints have been studied in the
+y1, . . . , yn
+literature [12]. In this work, we use Tuple Generating Dependen-
+cies (TGDs) and Equality Generating Dependencies (EGDs), stated
+by formulas of the form ∀x1, . . . xn ϕ(x1, . . . xn ) → ∃z1, . . . , zk
+ψ (y1, . . . , ym ), where {z1, . . . , zk } = {y1, . . . , ym }\{x1, . . . , xn }.
+The constraint’s premise ϕ is a possibly empty conjunction of rela-
+tional atoms over variables x1, . . . , xn and possibly constants. The
+constraint’s conclusion ψ is a non-empty conjunction of atoms over
+variables y1, . . . , ym and possibly constants, atoms that are rela-
+tional ones in the case of TGDs or equality atoms – of the form
+w = w ′ – in the case of EGDs. For instance, consider a relation Re-
+view(paper, reviewer, track) listing reviewers of papers submitted to a
+conference’s tracks, and a relation PC (member, affiliation) listing the
+affiliation of every program committee member [25].The fact that a
+paper can only be submitted to a single track is captured by the fol-
+lowing EGD: ∀p∀r∀t∀r ′∀t ′Review(p, r, t) ∧Review(p, r ′, t ′) → t =
+t ′. We can also express that papers can be reviewed only by PC mem-
+bers by the following TGD: ∀p∀r∀t Review(p, r, t) → ∃a PC(r, a).
+
+3.2 Provenance-Aware Chase & Back-Chase
+A key ingredient leveraged in our approach is relational query
+rewriting using views, in the presence of constraints. The state-
+of-the-art method for this task, called Chase & Backchase, was
+introduced in [26] and improved in [31], as the Provenance-Aware
+Chase & Back-Chase (PACB in short). At the core of these meth-
+ods is the idea to model views as constraints, in this way reducing
+the view-based rewriting problem to constraints-only rewriting.
+Specifically, for a given view V defined by a query, the constraint
+VI O states that for every match of the view body against the in-
+put data, there is a corresponding (head) tuple in the view output,
+while the constraint VO I states the converse inclusion, i.e., each
+view output tuple is due to a view body match. From a set V of
+view definitions, PACB therefore derives a set of view constraints
+C V = {VI O , VO I | V ∈ V}.
+
+Given a source schema σ with a set of integrity constraints I,
+a set V of views defined over σ , and a conjunctive query Q over
+σ , the rewriting problem thus becomes: find every reformulation
+query ρ over the schema of view names V that is equivalent to Q
+under the constraints I ∪ C V .
+
+For instance, if σ = {R, S }, I = ∅, τ = {V } and we have a view V
+materializing the join of relations R and S, V (x, y):- R(x, z), S(z, y),
+the pair of constraints capturing V is the following:
+
+VI O :
+VO I :
+
+∀x∀z∀y R(x, z) ∧ S(z, y) → V (x, y)
+∀x∀yV (x, y) → ∃z R(x, z) ∧ S(z, y).
+
+E
+
+≡
+
+E ′
+
+C V
+
+MMC
+
+decLA(RWe )
+
+encLA(E)
+
+PACB++
+Figure 1: Outline of our reduction
+
+RWe
+
+(i) chasing Q with the constraints I∪CI O
+V
+
+, where CI O
+V
+
+= {VI O | V ∈
+
+V}; intuitively, this enriches (extends) Q with all the consequences
+that follow from its atoms and the constraints I ∪ CI O
+V
+
+(ii) restricting the chase result to only the V-atoms; the result is
+
+.
+
+called the universal plan) U .
+
+ID called a provenance term.
+
+(iii) annotating each atom of the universal plan U with a unique
+
+(iv) chasing U with the constraints in I ∪ CO I
+V
+
+=
+{VO I | V ∈ V}, and annotating each relational atom a introduced
+by these chase steps with a provenance formula
+π (a), which gives
+the set of U -subqueries whose chasing led to the creation of a; the
+result of this phase, called the backchase, is denoted B.
+
+, where CO I
+V
+
+1
+
+(v) matching Q against B and outputting as rewritings the subsets
+of U that are responsible for the introduction (during the backchase)
+of the atoms in the image h(Q) of Q; these rewritings are read off
+directly from the provenance formula π (h(Q)).
+
+= {VI O }, and the result of the
+In our example, I is empty, CI O
+V
+chase in phase (i) is Q1(x, y):- R(x, z), S(z, y), V (x, y). The universal
+plan obtained in (ii) by restricting Q1 to the schema of view names
+is U (x, y):- V (x, y)p0 , where p0 denotes the provenance term of
+atom V (x, y). The result of backchasing U with CO I
+in phase (iv)
+V
+is B(x, y):- V (x, y)p0, R(x, z)p0, S(z, y)p0 . Note that the provenance
+formulas of the R and S atoms (a simple term, in this example) are
+introduced by chasing the view V . Finally, in phase (v) we find one
+match image given by h from Q’s body into the R and S atoms from
+B’s body. The provenance formula π (h(Q)) of the image h is p0,
+which corresponds to an equivalent rewriting ρ(x, y):- V (x, y).
+
+4 HADAD OVERVIEW
+We outline here our approach as an extension to [14] for solving
+the rewriting problem for LA-based computations.
+Hybrid Expressions and Views. A hybrid expression (whether
+asked as a query, or describing a materialized view) can be purely
+relational (RA), in which case we assume it is specified as a conjunc-
+tive query. Other expressions are purely linear-algebra ones (LA);
+we assume that they are defined in a dedicated LA language such
+as R [3], DML [19], etc. , using linear algebra operators from our
+set Lops (see Section 5.1), commonly used in real-world machine
+learning workloads. Finally, a hybrid expression can combine RA
+and LA, e.g., an RA expression (resulting in a relation) is treated as
+a matrix input by an LA operator, whose output may be converted
+again to a table and joined further, etc.
+
+Our approach is based on a reduction to a relational model.
+Below, we show how to bring our hybrid expressions - and, most
+specifically, their LA components - under a relational form (the RA
+part of each expression is already in the target formalism).
+
+Given the query Q(x, y):- R(x, z), S(z, y), PACB finds the refor-
+
+mulation ρ(x, y):- V (x, y). Algorithmically, this is achieved by:
+
+1Provenance formulas are constructed from provenance terms using logical conjunc-
+tion and disjunction.
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+Encoding into a Relational Model. Let E be an LA expression
+(query) and V be a set of materialized views. We reduce the LA-
+views based rewriting problem to the relational rewriting problem
+under integrity constraints, as follows (see Figure 1). First, we encode
+relationally E, V, and the set Lops of linear algebra operators. Note
+that the relations used in the encoding are virtual and hidden, i.e.,
+invisible to both the application designers and users. They only
+serve to support query rewriting via relational techniques.
+
+These virtual relations are accompanied by a set of relational
+integrity constraints encLA(LApr op ) that reflect a set LApr op of LA
+properties of the supported LA operations Lops . For instance, we
+model the matrix addition operation using a relation addM (M, N , R)
+to denote that O is the result of M + N , together with a set of con-
+straints stating that addM is a functional relation that is commuta-
+tive, associative, etc. These constraints are EGDs or TGDs (recall
+Section 3). We detail our relational encoding in Section 5.
+Reduction form LA-based to Relational Rewriting. Our reduc-
+tion translates the declaration of each view V ∈ V to additional
+constraints encLA(V ) that reflect the correspondence between V ’s
+input data and its output. Separately, E is also encoded as a rela-
+tional query encLA(E) over the relational encodings of Lops and its
+basic ingredients (matrices).
+
+Now, the reformulation problem is reduced to a purely relational
+setting, as follows. We are given a relational query encLA(E) and
+a set C V = encLA(V1) ∪ . . . ∪ encLA(Vn ) of relational integrity
+constraints encoding the views V. We add as further input a set of
+relational constraints encLA(LApr op ), which encodes relationally
+the LApr op operators; we called them Matrix-Model Encoding con-
+straints, or MMC in short. We must find the rewritings RW i
+ex-
+r
+pressed over the relational views C V and MMC, for some integer
+k and 1 ≤ i ≤ k, such that each RW i
+is equivalent to encLA(E) un-
+r
+der these constraints (C V (cid:208) MMC). Solving this problem yields
+a relationally encoded rewriting RWe expressed over the (virtual)
+relations used in the encoding; a final decoding step is needed to
+obtain E ′, the rewriting of the (LA or, more generally, hybrid) E
+using the views V.
+
+The challenge in coming up with the reduction consists in design-
+ing an encoding, i.e., one in which rewritings found by (i) encoding
+relationally, (ii) solving the resulting relational rewriting problem,
+and (iii) decoding a resulting rewriting over the views, is guar-
+anteed to produce an equivalent expression E ′. The reduction is
+detailed in Section 5.
+Relational Rewriting Using Constraints. To solve the relational
+rewriting problem under constraints, the algorithm of choice is
+++
+PACB (recall Section 3). Our PACB rewriting engine (PACB
+hereafter) has been extended to utilize the Prunedpr ov algorithm
+sketched and discussed in [30, 31], which prunes inefficient rewrit-
+ings during the rewritings search phase, based on a simple cost
+model using two different matrix sparsity estimators. Section 6
+++
+details the choice of an efficient rewriting utilizing the PACB
+engine.
+Decoding of the Relational Rewriting. For the selected rela-
+++, a decoding step dec(RWe ) is
+tional reformulation RWe by PACB
+performed to translate RWe into the native syntax of its respective
+underlying store/engine (e.g., R, DML, etc.).
+
+5 REDUCTION TO THE RELATIONAL MODEL
+Our internal model is relational, and it makes prominent use of
+expressive integrity constraints (TGDs and EGDs, recall Section 3).
+This framework suffices to describe the features and properties of
+most data models used today, notably including relational, XML,
+JSON, graph, etc [14, 15].
+
+Going beyond, in this section, we present a novel way to rea-
+son relationally about LA primitives/operations by treating them
+as uninterpreted functions with black-box semantics, and adding
+constraints that capture their important properties. First, we give
+an overview of a wide range of LA operations that we consider in
+Section 5.1. Then, in Section 5.2, we show how matrices and their op-
+erations can be represented (encoded) using a set of virtual relations,
+part of a schema we call VREM (for Virtual Relational Encoding
+of Matrices), together with the integrity constraints MMC that
+capture the LA properties of these operations. Regardless of matrix
+data’s physical storage, we only use VREM to encode LA ex-
+pressions and views relationally to reason about them. Section 5.3
+exemplifies relational rewritings obtained via our reduction.
+
+5.1 Matrix Algebra
+We consider a wide range of matrix operations [17, 36], which are
+common in real-world machine learning algorithms [5]: element-
+wise multiplication (i.e., Hadamard-product) (multiE ), matrix-scalar
+multiplication (multiMS ), matrix multiplication (multiM ), addition
+(addM ), division (divM ), transposition (tr ), inversion (invM ), deter-
+minant (det), trace (trace), exponential (exp), adjoints (adj), direct
+sum (sumD ), direct product (productD ), summation (sumM ), rows
+and columns summation (rowSumM and colSumM , respectively),
+QR decomposition (QR), Cholesky decomposition (cho), LU decom-
+position (LU ), and pivoted LU decomposition (LU P).
+
+k ×z
+
+1, n) ∈ VREM attaching a unique ID Mi
+
+5.2 VREM Schema and Relational Encoding
+To model LA operations on the VREM relational schema (part
+of which appears in Table 1), we also rely on a set of integrity
+constraints MMC, which are encoded using relations in VREM.
+We detail the encoding below.
+5.2.1 Base Matrices and Dimensionality Modeling. We de-
+note by M
+(D) a matrix of k rows and z columns, whose entries
+(values) come from a domain D, e.g., the domain of real num-
+bers R. For brevity we just use M
+. We define a virtual relation
+1 to any matrix
+name(Mi
+identified by a name denoted n (which may be e.g. of the form
+“/data/M.csv”). This relation (shown at the top left in Table 1) is
+accompanied by an EGD key constraint Iname ∈ MMCm , where
+MMCm ⊂ MMC, and Iname states that two matrices with the
+same name n have the same ID:
+2 name(Mi
+
+Iname : ∀Mi
+Note that the matrix ID in name (and all the other virtual relations
+used in our encoding) are not IDs of individual matrix objects: rather,
+each identifies an equivalence class (induced by value equality) of
+expressions. That is, two expressions are assigned the same ID iff
+they yield value-based-equal matrices.
+
+1, n) ∧ name(Mi
+
+2, n) → Mi
+
+1 = Mi
+2
+
+1∀Mi
+
+k×z
+
+The dimensions of a matrix are captured by a size(Mi
+
+1, k, z) rela-
+tion, where k and z are the number of rows, resp. columns and Mi
+1
+is an ID. An EGD constraint Isize ∈ MMCm holds on the size
+relation, stating that the ID determines the dimensions:
+
+HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Operation
+Matrix scan
+
+Encoding
+name(Mi
+1, n)
+Multiplication multiM (Mi
+1, Mi
+1, Mi
+addM (Mi
+1, Mi
+divM (Mi
+1, Mi
+multiE (Mi
+1, Ro )
+tr (Mi
+
+Addition
+Division
+Hadamard
+product
+Transposition
+
+2, Ro )
+2, Ro )
+2, Ro )
+2, Ro )
+
+Operation
+Inversion
+Scalar
+
+Encoding
+1, Ro )
+
+invM (Mi
+
+1, Ro )
+
+Multiplication multiM S (s, Mi
+Determinant
+1, Ro )
+Trace
+1, s)
+1, Ro )
+1, Ro )
+
+det(Mi
+trace(Mi
+
+Exponential
+
+exp(Mi
+
+Adjoints
+
+adj(Mi
+
+Operation
+Cells sum
+
+Row sum
+
+Col sums
+Direct sum
+
+Kronecker product
+
+Diagonal
+
+Encoding
+sumM (Mi
+1, s)
+1, Ro )
+rowSumM (Mi
+1, Ro )
+colSumM (Mi
+sumD (Mi
+2, Ro )
+1, Mi
+productD (Mi
+diaдM (Mi
+
+1, Mi
+1, Ro )
+
+2, Ro )
+
+Table 1: Snippet of the VREM Schema
+
+Isize : ∀Mi
+1, k1, z1) ∧ size(Mi
+
+1∀k1∀z1∀k2∀z2
+1, k2, z2) → k1 = k2 ∧ z1 = z2
+
+size(Mi
+
+The identity I and zero O matrices are captured by the Zero(O)
+and Identity(I ), relations respectively, which are accompanied by
+EGD constraints Iiden
+, Izer o ∈ MMCm , stating that zero matri-
+ces with the same sizes have the same IDs, and this also applies for
+identity matrices with the same size:
+
+Zero(Oi
+
+1) ∧ size(Oi
+
+2, k, z) → Oi
+
+1 = Oi
+2
+
+Izer o : ∀Oi
+1∀Oi
+1, k, z) ∧ Zero(Oi
+: ∀I i
+Iiden
+
+2∀k∀z
+2) ∧ size(Oi
+1∀I i
+2∀i
+2) ∧ size(I i
+1, k, k) ∧ Identity(I i
+
+Identity(I i
+
+1) ∧ size(I i
+
+2, k, k) → I i
+
+1 = I i
+2
+
+5.2.2 Encoding Matrix Algebra Expressions. LA operations
+are encoded into dedicated relations, as shown in Table 1. We now
+illustrate the encoding of an LA expression on the VREM schema.
+Example 5.1. Consider the LA expression E: ((MN )T ), where the
+two matrices M100×1 and N1×10 are stored as “M.csv” and “N .csv”,
+respectively. The encoding function enc(E) takes as argument the LA
+expression E and returns a conjunctive query whose: (i) body is the
+relational encoding of E using VREM (see below), and (ii) head
+has one distinguished variable, denoting the equivalence class of the
+result. For instance:
+enc(((MN )T ) =
+
+Let enc(MN ) =
+
+Let enc(M) = Q0(Mi
+enc(N ) = Q1(N i
+Ro
+1 = freshId()
+
+1):- name(Mi
+1):- name(N i
+
+1, “M.csv”);
+1, “N .csv”);
+
+in
+Q2(Ro
+1 ):- multiM (Mi
+Ro
+2 = freshId()
+in
+2 ):- tr (Ro
+
+2 ), Q2(Ro
+1 );
+
+1, Ro
+
+Q(Ro
+
+1, N i
+
+1, Ro
+
+1 ),Q0(Mi
+
+1), Q1(N i
+
+1);
+
+In the above, nesting is dictated by the syntax of E. From the inner
+(most indented) to the outer, we first encode M and N as small queries
+using the name relation, then their product (to whom we assign the
+newly created identifier Ro
+1 ), using the multiM relation and encoding
+the relationship between this product and its inputs in the definition
+of Q2(Ro
+2 used to encode the full E
+(the transposed of Q2) via relation tr , in the query Q(Ro
+2 ). For brevity,
+we omit the matrices’ size relations in this example and hereafter.
+Unfolding Q2(Ro
+2 ) :- tr (Ro
+Q0(Mi
+
+1 ) in the body of Q yields:
+2 ), multiM (Mi
+1, Ro
+1, Ro
+1 ),
+1);
+
+1 ). Next, we create a fresh ID Ro
+
+1),Q1(N i
+
+Q(Ro
+
+1, N i
+
+∀Mi
+∀Mi
+∃Ro
+∀Mi
+∃Ro
+
+1∀Mi
+1∀Mi
+3 ∃Ro
+1∀Ro
+3 tr (Mi
+
+2∀Ro addM (Mi
+1∀Ro
+2∀Ro
+1, Ro
+4 tr (Mi
+2 invM (Mi
+1∀Ro
+1, Ro
+
+1, Mi
+2 addM (Mi
+3 ) ∧ tr (Mi
+1, Ro
+3 ) ∧ invM (Ro
+
+2, Ro ) → addM (Mi
+1, Mi
+1 ) ∧ tr (Ro
+2, Ro
+4 ) ∧ addM (Ro
+2, Ro
+1, Ro
+1 ) ∧ tr (Ro
+2 ) →
+3, Ro
+2 )
+
+1, Ro )
+
+2, Mi
+1, Ro
+3, Ro
+
+2 ) →
+4, Ro
+2 )
+
+(1)
+
+(2)
+
+(3)
+
+Figure 2: MMC Constraints Capturing Basic LA Properties
+
+1, N i
+
+Q(Ro
+
+2 ) :- tr (Ro
+
+1, Ro
+name(Mi
+
+Now, by unfolding Q0 and Q1 in Q, we obtain the final encoding of
+((MN )T ) as a conjunctive query Q:
+2 ), multiM (Mi
+1, Ro
+1 ),
+1, “N .csv”);
+1, “M.csv”),name(N i
+5.2.3 Encoding LA Properties as Integrity Constraints. Fig-
+ure 2 shows some of the constraints MMCLApr op ⊂ MMC,
+which capture textbook LA properties [17, 36] of our LA operations
+(Section 5.1). The TGDs (1), (2) and (3) state that matrix addition is
+commutative, matrix transposition is distributive with respect to
+addition, and the transposition of the inverse of matrix Mi
+1 is equiv-
+alent to the inverse of the transposition of Mi
+1, respectively. We also
+express that the virtual relations are functional by using EGD key
+constraints. For example, the following Imul t iM
+∈ MMCLApr op
+constraint states that multiM is functional, that is the products of
+pairwise equal matrices are equal.
+2∀Ro
+: ∀Mi
+1∀Ro
+2
+1 ) ∧ multiM (Mi
+1, Mi
+Other properties [17, 36] of the LA operations we consider are
+similarly encoded; due to space constraints, we relegate them to
+the technical report [4].
+5.2.4 Encoding LA Views as Constraints. We translate each
+view definition V (defined in LA language such as R, DML, etc)
+into relational constraints encLA(V ) ∈ C V, where C V is the set
+of relational constraints used to capture the views V. These con-
+straints show how the view’s inputs are related to its output over
+the VREM schema. Figure 3 illustrates the encoding as a TGD
+constraint of the view V : (N )T +(MT )−1 stored in a file “V .csv” and
+computed based on the matrices N and M (e.g., stored as “N .csv”
+and “M.csv”, respectively).
+5.2.5 Encoding Matrix Decompositions. Matrix decomposi-
+tions play a crucial role in many LA computations. For instance, for
+every symmetric positive definite matrix M there exists a unique
+
+Imul t iM
+multiM (Mi
+
+1∀Mi
+2, Ro
+
+2 ) → Ro
+
+1 = Ro
+2
+
+1, Mi
+
+2, Ro
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+name(Mi
+
+1∀Ro
+
+1∀N i
+
+∀Mi
+1∀Ro
+1, “M.csv”) ∧ name(N i
+1, Ro
+3, Ro
+
+addM (Ro
+
+2∀Ro
+3∀Ro
+4
+1, “N .csv”) ∧ tr (N i
+3 ) ∧
+4, “V .csv”)
+
+2 ) ∧ invM (Ro
+
+2, Ro
+4 ) → name(Ro
+
+tr (Mi
+
+1, Ro
+
+1, Ro
+
+1 ) ∧
+
+Figure 3: Relational Encoding of view V
+
+Cholesky Decomposition (CD) of the form M = LLT , where L is a
+lower triangular matrix. We model CD, as well as other well-known
+decompositions (LU, QR, and Pivoted LU or PLU) as a set of virtual
+, which we add to VREM. For instance, to
+relations VREMdec
+CD we associate a relation cho(Mi
+1, Lo ), which denotes that Lo is the
+output of the CD decomposition for a given matrix M whose ID is
+1. cho is a functional relation, meaning every symmetric positive
+Mi
+definite matrix has a unique CD decomposition. This functional
+aspect is captured by an EGD, conceptually similar to the constraint
+(Section 5.2.3). The property M = LLT is captured as a
+Imul t iM
+:
+TGD constraint Icho ∈ MMCLApr op
+
+Icho
+type(Lo
+
+1 type(Mi
+: ∀Mi
+1, “L”) ∧ tr (Lo
+
+1, “S”) → ∃ Lo
+1, Lo
+
+1∃Lo
+2) ∧ multiM (Lo
+
+2 cho(Mi
+1, Lo
+2, Mi
+1, Lo
+1)
+
+1)∧
+
+(4)
+
+1,“S") indicates the type of matrix Mi
+
+The atom type(Mi
+1, where the
+constant “S" denotes a matrix that is symmetric positive definite;
+similarly, type(Lo
+1 is a lower trian-
+1,“L") denotes that the matrix Lo
+gular matrix. For each base matrix, its type (if available) (e.g., sym-
+metric, upper triangular, etc. ) is specified as TGD constraint. For
+example, we state that a certain matrix M (and any other matrix
+value-equal to M) is symmetric positive definite as follows:
+
+∀M1 name(Mi
+
+1, “M.csv”) → type(Mi
+
+1, “S”)
+
+(5)
+
+Example 5.2. Consider a view V =N + LLT , where L = cho(M)
+and M is a symmetric positive definite matrix encoded as in (5). Let
+E be the LA expression M + N . The reader realizes easily that V can
+be used to answer E directly, thanks to the specific property of the
+CD decomposition (4), and since M + N = N + M, which is encoded
+in (1). However, at the syntactic level, V and E are very dissimilar.
+Knowledge of (1) and (4) and the ability to reason about them is
+crucial in order to efficiently answer E based on V .
+
+The output matrix of CD decomposition is a lower triangular
+matrix L, which is not symmetric positive definite, meaning that
+CD decomposition can not be applied again on L. For other de-
+compositions, such as QR(M) = [Q, R] decomposition, where M
+is a square matrix, Q is an orthogonal matrix [36] and R is an
+upper triangular matrix, there exists a QR decomposition for the
+orthogonal matrix Q such that QR(Q) = [Q, I ], where I is an iden-
+tity matrix and QR(R) = [I, R]. We say the fixed point of the QR
+decomposition is QR(I ) = [I, I ]. These properties of the Q decom-
+positions are captured with the following constraints, which are
+part of MMCLApr op :
+
+1, n) ∧ size(Mi
+1, Qo, Ro ) ∧ type(Qo, “O”) ∧ type(Ro, “U ”)
+
+1, k, k) → ∃Qo ∃Ro
+
+1∀n∀k name(Mi
+
+∀Mi
+QR(Mi
+∧ multiM (Qo, Ro, Mi
+1)
+1, “O”) → ∃I o QR(Qi
+∀Qi
+1 type(Qi
+1, I o, Qi
+∧ multiM (Qi
+1)
+1, “U ”) → ∃I o QR(Ri
+1 type(Ri
+∀Ri
+1, Ri
+∧ multiM (I o, Ri
+1)
+1) → QR(I i
+1 identity(I i
+∀I i
+
+1, Qi
+
+1, I o ) ∧ identity(I o )
+
+1, I o, Ri
+
+1) ∧ identity(I o )
+
+(6)
+
+(7)
+
+(8)
+
+1, I i
+1)
+Known LA properties of the other matrix decompositions (LU
+
+1, I i
+
+(9)
+
+and PLU) are similarly encoded.
+
+5.2.6 Encoding LA-Oriented System Rewrite Rules. Most LA-
+oriented systems [2, 3] execute an incoming expression (LA pipeline)
+as-is, that is: run operations in a sequence, whose order is dictated
+by the expression syntax. Such systems do not exploit basic LA
+properties, e.g., reordering a chain of multiplied matrices in order to
+reduce the intermediate size. SystemML [19] is the only system that
+models some LA properties as static rewrite rules. It also comprises
+a set of rewrite rules which modify the given expressions to avoid
+large intermediates for aggregation and statistical operations such
+as rowSums(M), sum(M), etc. For example, SystemML uses rule:
+
+sum(MN ) = sum(colSums(M)T ⊙ rowSums(N ))
+
+(i)
+
+to rewrite sum(MN ) (summing all cells in the matrix product) where
+⊙ is a matrix element-wise multiplication, to avoid actually com-
+puting MN and materializing it; similarly, it rewrites sum(MT ) into
+sum(M), to avoid materializing MT , etc. However, the performance
+benefits of rewriting depend on the rewriting power (or, in other
+words, on how much the system understands the semantics of the
+incoming expression), as the following example shows.
+
+Example 5.3. Consider the LA expression E=((MT )k (M + N )T ),
+where M and N are square matrixes, and expression E ′=sum(E), which
+computes the sum of all cells in E. The expression E ′ can be rewritten
+to RW0 : sum(E ′′), where E ′′ is:
+
+sum(colSums(M + N )T ⊙ rowSums(Mk ))
+Failure to exploit the properties LApr op1 : (MN )T =MT N T and/or
+LApr op2 : (Mn )T = (MT )n prevents from finding rewriting RW0.
+E ′ admits the alternative rewriting
+
+RW1: sum(t(colSums((MT )k )) ⊙ t(colSums(M + N ))
+
+which can be obtained by directly applying the rewrite rule (i) above
+and rowSums(MT )=colSums(M)T , without exploiting the properties
+LApr op1 and LApr op2. However, RW1 introduces more intermediate
+results than RW0.
+
+To fully exploit the potential of rewrite rules (for statistical or
+aggregation operations), they should be accompanied by sufficient
+knowledge of, and reasoning on, known properties of LA operations.
+To bring such fruitful optimization to other LA-oriented systems
+lacking support of such rewrite rules, we have incorporated Sys-
+temML’s rewrite rules into our framework, encoding them as a set
+of integrity constraints over the virtual relations in the schema
+VREM, denoted MMCSt at Aдд (MMCSt at Aдд ⊂ MMC).
+
+HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+RW1 : (M−1)T + N T
+RW3 : N T + (M−1)T
+RW5 : (N + M−1)T
+
+RW2 : (MT )−1 + N T
+RW4 : (N T )−1 + N T
+
+Figure 4: Equivalent rewritings of the pipeline Qp .
+
+Thus, these rewrite rules can be exploited together with other LA
+properties. For instance, the rewrite rule (i) is modeled by the fol-
+lowing integrity constraint Isum ∈ MMCSt at Aдд:
+
+1∀N i
+1 ∃Ro
+
+1∀Ro multiM (Mi
+∀Mi
+∃Ro
+3 ∃Ro
+2 ∃Ro
+∧ rowSums(N i
+
+1, Ro ) ∧ sum(Ro, s) →
+1, Ro
+3 ) ∧ multiE (Ro
+We refer the reader to the extended version of the paper [4] for a
+full list of SystemML’s encoded rewrite rules.
+
+1, N i
+4colSums(Mi
+1, Ro
+
+1, Ro
+2 )
+4 ) ∧ sum(Ro
+
+1 ) ∧ tr (Ro
+3, Ro
+2, Ro
+
+4, s)
+
+5.3 Relational Rewriting Using Constraints
+With the set of views constraints C V and MMC = MMCm ∪
+++ to rewrite a
+MMCLApr op ∪ MMCSt at Aдд, we rely on PACB
+given expression under integrity constraints. We exemplify this
+below, and detail PACB
+
+++’s inner workings in Section 6.
+
+The view V shown in Figure 3 can be used to fully rewrite (return
+the answer for) the pipeline Qp : (M−1 + N )T by exploiting the
+TGDs (1), (2) and (3) listed in Figure 2, which describe the following
+three LA properties, denoted LApr op1 : M +N = M +N ; ((M +N ))T =
+(M)T + (N )T and ((M)−1)T = ((M)T )−1. The relational rewriting
+4, “V .csv”). In this
+RW0 of Qp using the view V is RW0(Ro
+example, RW0 is the only views-based rewriting of Qp . However,
+five other rewritings exist (shown in Figure 4), which reorder its
+operations just by exploiting the set LApr op1 of LA properties.
+
+4 ):- name(Ro
+
+Rewritings RW0 to RW5 have different evaluation costs. We dis-
+cuss next how we estimate which among these alternatives (includ-
+ing evaluating Qp directly) is likely the most efficient.
+6 CHOICE OF AN EFFICIENT REWRITING
+We introduce our cost model (Section 6.1), which can take two differ-
+ent sparsity estimators (Section 6.2). Then, we detail our extension
+to the PACB rewriting engine based on the Prunepr ov algorithm
+(Section 6.3) to prune out inefficient rewritings.
+
+6.1 Cost Model
+We estimate the cost of an expression E, denoted γ (E), as the sum
+of the intermediate result sizes if one evaluates E “as stated”, in the
+syntactic order dictated by the expression. Real-world matrices may
+be dense (most or all elements are non-zero) or sparse (a majority of
+zero elements). The latter admit more economical representations
+that do not store zero elements, which our intermediate result size
+measure excludes. To estimate the number of non-zeros (nnz, in
+short), we incorporated two different sparsity estimators from the
+literature (discussed in Section 6.2) into our framework.
+
+Example 6.1. Consider E1 = (MN )M and E2 = M(N M), where
+we assume the matrices M50K ×100 and N100×50K are dense. The total
+cost of E1 is γ (E1) = 50K × 50K and γ (E2) = 100 × 100 .
+
+6.2 LA-based Sparsity Estimators
+We outline below two existing sparsity estimators [19, 46] that we
+have incorporated into our framework to estimate nnz.
+
+6.2.1 Naïve Metadata Estimator. The naïve metadata estima-
+tor [20, 46] derives the sparsity of the output of LA expression solely
+from the base matrices’ sparsity. This incurs no runtime overhead
+since metadata about the base matrices, including the nnz, columns
+and rows are available before runtime in a specific metadata file.
+The most common estimator is the worst-case estimator [20], which
+we use in our framework.
+
+6.2.2 Matrix Non-zero Count (MNC) Estimator. The MNC es-
+timator [42] exploits matrix structural properties such as single
+non-zero per row, or columns with varying sparsity, for efficient,
+accurate, and general sparsity estimation; it relies on count-based
+histograms that exploit these properties. We have also adopted this
+framework into our approach, and compute histograms about the
+base matrices offline. However, the MNC framework still needs to
+derive and construct histograms for intermediate results online (dur-
+ing rewriting cost estimation). We study this overhead in Section 8.
+
+6.3 Rewriting Pruning: PACB++
+We extended the PACB rewriting engine with the Prunepr ov algo-
+rithm sketched and discussed in [30, 31], to eliminate inefficient
+rewritings during the rewriting search phase. The naïve PACB al-
+gorithm generates all minimal (by join count) rewritings before
+choosing a minimum-cost one. While this sufficies on the scenarios
+considered in [14, 31], the settings we obtain from our LA encod-
+ing stress-test the naïve algorithm, as commutativity, associativity,
+etc. blow up the space of alternate rewritings exponentially. Scala-
+bility considerations forced us to further optimize naïve PACB to
+find only minimum-cost rewritings, aggressively pruning the oth-
+ers during the generation phase. We illustrate Prunepr ov and our
+improvements next.
+Prunepr ov Minimum-Cost Rewriting. Recall from Section 3 that
+the minimal rewritings of a query Q are obtained by first finding
+the set H of all matches (i.e., containment mappings) from Q to the
+result B of backchasing the universal plan U . Denoting with π (S)
+the provenance formula of a set of atoms S, PACB computes the
+DNF form D of (cid:212)
+h ∈H π (h(Q)). Each conjunct c of D determines a
+subquery sq(c) of U which is guaranteed to be a rewriting of Q.
+
+The idea behind cost-based pruning is that, whenever the naive
+PACB backchase would add a provenance conjunct c to an exist-
+ing atom a’s provenance formula π (a), Prunepr ov does so more
+conservatively: if the cost γ (sq(c)) is larger than the minimum cost
+threshold T found so far, then c will never participate in a minimum-
+cost rewriting and need not be added to π (a). Moreover, atom a
+itself need not be chased into B in the first place if all its provenance
+conjuncts have above-threshold cost.
+
+Example 6.2. Let E = M(N M), where we assume for simplicity
+that M50K ×100 and N100×50K are dense. Exploiting the associativity
+of matrix-multiplication (MN )M = M(N M) during the chase leads
+to the following universal plan U annotated with provenance terms:
+
+U (Ro
+
+2 ) : name(Mi
+name(N i
+multiM (Mi
+multiM (N i
+
+1, “M.csv”)p0 ∧ size(Mi
+
+1, 50000, 100)p1 ∧
+
+1, “N .csv”)p2 ∧ size(N i
+
+1, N i
+1, Mi
+
+1, Ro
+1, Ro
+
+1 )p4 ∧ multiM (Ro
+3 )p6 ∧ multiM (Mi
+
+1, 100, 50000)p3 ∧
+2 )p5 ∧
+2 )p7
+
+1, Mi
+1, Ro
+
+1, Ro
+3, Ro
+
+Now, consider in the back-chase the associativity constraint C:
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+∀Mi
+1∀Ro
+1∀N i
+multiM (Mi
+∃Ro
+
+1∀Ro
+2
+1, Ro
+1, N i
+1, Mi
+4multiM (N i
+
+1 ) ∧ multiM (Ro
+1, Ro
+
+1, Mi
+4 ) ∧ multiM (Mi
+
+1, Ro
+1, Ro
+
+2 ) →
+4, Ro
+2 )
+
+There exists a containment mapping h embedding the two atoms in
+the premise P of C into the U atoms whose provenance annotations
+are p4 and p5. The provenance conjunct collected from P’s image is
+π (h(P))=p4 ∧ p5.
+
+1, Ro
+
+1, Mi
+
+Without pruning, the backchase would chase U with the constraint
+C, yielding U ′ which features additional π (h(P))-annotated atoms
+4 )p4∧p5 ∧ multiM (Mi
+
+multiM (N i
+E has precisely two matches h1, h2 into U ′. h1(E) involves the
+newly added atoms as well as those annotated with p0, p1, p2, p3.
+Collecting all their provenance annotations yields the conjunct c1 =
+p0 ∧ p1 ∧ p2 ∧ p3 ∧ p4 ∧ p5. c1 determines the U -subquery sq(c1)
+corresponding to the rewriting (MN )M, of cost (50K)2
+
+2 )p4∧p5
+
+4, Ro
+
+1, Ro
+
+.
+
+h2(E)’s image yields the provenance conjunct c2 = p0 ∧ p1 ∧ p2 ∧
+p3 ∧ p6 ∧ p7, which determines the rewriting M(N M) that happens
+to be the original expression E of cost 1002
+
+.
+
+rewritings), and complete (i.e., it finds all equivalent cost-optimal
+rewritings).
+
+We denote with L the language of hybrid expressions described
+in Section 2. Let V ⊆ L be a set of materialized view definitions.
+Let LApr op be a set of properties of the LA operations in Lops
+that admits relational encoding over VREM. We say that LApr op
+is terminating if it corresponds to a set of TGDs and EGDs with
+terminating chase (this holds for our choice of LApr op ).
+
+Denote with γ a cost model for expressions from L. We say that
+γ is monotonic if expressions are never assigned a lower cost than
+their subexpressions (this is true for both models we used).
+
+We call E ∈ L (γ , LApr op, V)-optimal if for every E ′ ∈ L that
+
+is (LApr op ,V)-equivalent to E we have γ (E ′) ≥ γ (E).
+
+Let Eqγ ⟨LApr op, V⟩(E) denote the set of all (γ , LApr op, V)-optimal
+
+expressions that are (LApr op ,V)-equivalent to E.
+
+We denote with HADAD⟨LApr op, V, γ ⟩ our parameterized so-
+lution based on relational encoding followed by PACB++ rewrit-
+ing and next by decoding all the relational rewritings generated
+by the cost-based pruning PACB++ (recall Figure 1). Given E ∈
+L, HADAD⟨LApr op, V, γ ⟩(E) denotes all expressions returned by
+HADAD⟨LApr op, V, γ ⟩ on input E.
+
+The naive PACB would find both rewritings, cost them, and drop
+
+the former in favor of the latter.
+
+2 )p5
+
+1, Ro
+
+1, Ro
+
+1, N i
+
+1, Mi
+
+of cost (50K)2
+
+With pruning, the threshold T is the cost of the original expres-
+sion 1002
+. The chase step with C is never applied, as it would intro-
+duce the provenance conjunct π (h(P)) which determines U-subquery
+sq(π (h(P)) = multiM (Mi
+
+1 )p4 ∧ multiM (Ro
+exceeding T . The atoms needed as image of E under
+h1 are thus never produced while backchasing U , so the expensive
+rewriting is never discovered. This leaves only the match image h2(E),
+which corresponds to the efficient rewriting M(N M).
+Our improvements on Prunepr ov . Whenever the pruned chase
+step is applicable and applied for each TGD constraint, the orig-
+inal algorithm searches for all minimal-rewritings RW that can
+be found “so far”, then it costs each rw ∈ RW to find the “so far”
+minimum-cost one rwe and adjusts the thresholdT to the cost of rwe .
+However, this strategy can cause redundant costing of rw ∈ RW
+whenever the pruned chase step is applied again for another con-
+straint. Therefore, in our modified version of Prunepr ov , we keep
+track of the rewriting costs already estimated, to prevent such re-
+dundant work. Additionally, the search for minimal-rewritings “so
+far” (matches of the query Q into the evolving universal plan in-
+stance U ′, see Section 3) whenever the pruned chase step is applied
+is modeled as a query evaluation of Q against U ′ (viewed as a sym-
+bolic/canonical database [12]). This involves repeatedly evaluating
+the same query plan. However, the query is evaluated over evolu-
+tions of the same instance. Each pruned chase step adds a few new
+tuples to the evolving instance, corresponding to atoms introduced
+by the step, while most of the instance is unchanged. Therefore,
+instead of evaluating the query plan from scratch, we employ in-
+cremental evaluation as in [31]. The plan is kept in memory along
+with the populated hash tables, and whenever new tuples are added
+to the evolving instance, we push them to the plan.
+
+7 GUARANTEES ON THE REDUCTION
+We detail the conditions under which we guarantee that our ap-
+proach is sound (i.e., it generates only equivalent, cost-optimal
+
+Theorem 7.1 (Soundness). If the cost model γ is monotonic, then
+for every E ∈ L and every rw ∈ HADAD⟨LApr op, V, γ ⟩(E), we have
+rw ∈ Eqγ ⟨LApr op, V⟩(E).
+
+Theorem 7.2 (Completeness). If γ is monotonic and LApr op is
+terminating, then for every E ∈ L and every rw ∈ Eqγ ⟨LApr op, V⟩(E),
+we have rw ∈ HADAD⟨LApr op, V, γ ⟩(E).
+8 EXPERIMENTAL EVALUATION
+We evaluate our approach, first on LA pipelines (Section 8.1),
+then on real-world hybrid scenarios (Section 8.2). Due to space
+constraints, we delegate other results to our extended version of
+the paper [4].
+
+Experimental Environment. We used a single node with an
+Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz, 40 Cores (hyper-
+threading), 123GB RAM, disk read speed 616 MB/s, and disk write
+speed 455 MB/s. We run on OpenJDK Java 8 VM . As for LA system-
+s/libraries, we used R 3.6.0, Numpy 1.16.6 (python 2.7), Ten-
+sorFlow 1.4.1, Spark 2.4.5 (MLlib), and SystemML 1.2.0; hybrid
+scenarios were evaluated in the SparkSQL [16] polystore.
+
+Systems Configuration Tuning. We discuss here the most im-
+portant installation and configuration details. We use a JVM-based
+linear algebra library for SystemML as recommended in [44], at the
+optimization level 4. Additionally, we enable multi-threaded matrix
+operations in a single node. We run Spark using the standalone
+cluster manager, and using OpenBLAS (built from the sources as
+detailed in [10]) to take advantage of its accelerations [44]. SparkM-
+Llib’s datatypes do not support many basic LA operations, such as
+scalar-matrix multiplication, matrix element-wise multiplication,
+etc. To support them, we use the Breeze Scala library [7], con-
+vert MLlib’s datatypes to Breeze types and express the basic LA
+operations in Spark. The driver memory allocated for Spark and
+SystemML is 115GB. To maximize TensorFlow performance, we
+compile it from sources. For all systems/libraries, we set the number
+of cores to 24; all systems use double precision numbers.
+
+HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Expression
+(M N )T
+(A + B)v1
+((A)T )T
+r owSums(AT )
+sum(M N )
+sum(AT )
+(CT )−1
+t r ace((C + D)−1)
+
+No.
+P1.1
+P1.4
+P1.7
+P1.10
+P1.13
+P1.16
+P1.19
+P1.22
+P1.25 M ⊙ (N T /(M N N T ))
+P1.28
+
+A ⊙ (A ⊙ B + A)
+
+No.
+P1.2
+P1.5
+P1.8
+P1.11
+P1.14
+P1.17
+P1.20
+P1.23
+P1.26
+P1.29
+
+Expression
+AT + BT
+((D)−1)−1
+s1A + s2A
+r owSums(AT + BT )
+sum(col Sums(N T MT ))
+det (C DC)
+t r ace(C −1)
+det ((C D)−1) + D)
+N ⊙ (MT /(MT M N ))
+DC CC
+Table 2: LA Benchmark Pipelines (Part 1)
+
+No.
+P1.3
+P1.6
+P1.9
+P1.12
+P1.15
+P1.18
+P1.21
+P1.24
+P1.27
+P1.30
+
+Expression
+C −1D −1
+t r ace(s1D)
+det (DT )
+col Sums(M N )
+(M N )M
+sum(col Sums(A))
+(C + D −1)T
+t r ace((C D)−1)) + t r ace(D)
+t r ace(D(C D)T )
+N M ⊙ N M RT
+
+Name
+
+Rows n
+
+Colsm
+
+Nnz ||X||0
+
+DFV
+2D_54019
+Amazon/(AS )
+Amazon/(AM )
+Amazon/(AL1)
+Amazon/(AL2)
+Amazon/(AL3)
+Netflix/(N S )
+Netflix/(N M )
+Netflix/(N L1)
+Netflix/(N L2)
+Netflix/(N L3)
+
+1M
+50K
+50K
+100K
+1M
+10M
+100K
+50K
+100K
+1M
+10M
+100K
+
+100
+100
+100
+100
+100
+100
+50K
+100
+100
+100
+100
+50K
+
+8050
+3700
+378
+673
+6539
+11897
+103557
+69559
+139344
+665445
+665445
+15357418
+
+SX
+
+0.0080%
+0.0740%
+0.0075%
+0.0067%
+0.0065%
+0.0011%
+0.0020%
+1.3911%
+1.3934%
+0.6654%
+0.0665%
+0.307%
+
+Table 3: Overview of Used Real Datasets.
+
+Datasets. We used several real-world, sparse matrices, for which
+Table 3 lists the dimensions and the sparsity (SX ) (i) dielFilterV3real
+(DFV in short) is an analysis of a microwave filter with different
+mesh qualities [24]; (ii) 2D_54019_highK (2D_54019 in short) is
+a 2D semiconductor device simulation [24]; (iii) we used several
+subsets of an Amazon books review dataset [6] (in JSON), and sim-
+ilarly (iv) subsets of a Netflix movie rating dataset [8]. The latter
+two were easily converted into matrices where columns are items
+and rows are customers [46]; we extracted smaller subsets of all
+real datasets to ensure the various computations applied on them
+fit in memory (e.g., Amazon/(AS) denotes the small version of the
+Amazon dataset). We also used a set synthetic, dense matrices,
+described in Table 4.
+
+LA benchmark. We select a set P of 57 LA expressions (pipelines)
+used in prior studies and/or frequently occurring in real-world LA
+computations, as follows:
+
+Real-world matrix expressions include: a chain of matrix self-
+products used for reachability queries and other graph analytics [42]
+(P1.29 in Table 18); expressions used in Alternating Least Square
+Factorization (ALS) [46] (P2.25 in Table 17); Poisson Nonnegative
+Matrix Factorization (PNMF) [46] (P1.13 in Table 18); Nonnegative
+Matrix Factorization (NMF) [44](P1.25 and P1.26 in Table 18); com-
+plex predicate for image masking [42] (P1.30 in Table 18); recom-
+mendation computation [42] (P1.30 in Table 18); finally, Ordinary
+Least Squares Regression (OLS) [44] (P2.21 in Table 17).
+
+Synthetic expressions were also generated, based on a set of
+basic matrix operations (inverse, multiplication, addition, etc.), and
+
+Name
+
+Rows n
+
+Colsm
+
+Syn1
+Syn2
+Syn3
+Syn4
+Syn5
+
+50K
+100
+1M
+5M
+10K
+
+100
+50K
+100
+100
+10K
+
+Name
+
+Syn6
+Syn7
+Syn8
+Syn9
+Syn10
+
+Rows n
+20K
+100
+50K
+100K
+100
+
+Colsm
+20K
+1
+1
+1
+100
+
+Table 4: Syntactically Generated Dense Datasets
+
+Matrix Name
+
+A and B
+
+C and D
+M
+N
+R
+X
+v1,v2 and u1
+
+.
+
+Used Data
+AM, AL1, AL2, NM, NL1, NL2,
+dielFilter, Syn3 or Syn4
+Syn5 or Syn6
+AS, NS, Syn1, or 2D_54019
+Syn2
+Syn10
+AL3 or NL3
+Syn7, Syn8 and Syn9, respectively.
+
+Table 5: Matrices used for each matrix name in a pipeline
+a set of combination templates, written as a Rule-Iterated Context-
+.
+Free Grammar (RI-CFG) [40]. Expressions thus generated include
+P2.16, P2.16, P2.23, P2.24 in Table 18.
+Methodology. We evaluate our approach using the LA pipelines
+in Table 18 and Table 17, systems/tools mentioned above, and the
+matrices in Table 5. For TensorFlow and NumPy, we present the
+results only for dense matrices, due to limited support for sparse
+matrices. In Section 8.1, we focus on LA pipeline rewriting, while
+Section 8.2 describes experiments on real-world, hybrid scenarios.
+8.1 Experiments on LA-based Pipelines
+In Section 8.1.1, we show the performance benefits of our approach
+to existing LA systems using a set P¬Opt ⊂ P of 38 pipelines,
+whose performance can be improved just by exploiting LA properties
+(in the absence of views). In Section 8.1.2, we study our optimization
+overhead for the set POpt = P \ P¬Opt of 19 pipelines that are
+already optimized. Finally, in Section 8.1.3, we show how our ap-
+proach improves the performance of 30 pipelines from P, denoted
+PV iews , using pre-materialized views.
+8.1.1 Effectiveness of LA Rewriting (No Views). For each sys-
+tem, we run the original pipeline and our rewriting 5 times; we
+report the average of the last 4 running times. We exclude the data
+loading time. For fairness, we ensured SparkMLib and SystemML
+compute the entire pipeline (despite their lazy evaluation mode).
+Figure 5 illustrates the original pipeline execution time Qex ec
+and the selected rewriting execution time RWex ec for P1.1, P1.3,
+P1.4, and P1.15, including the rewriting time RWf ind
+, using the
+MNC cost model. For each pipeline, the used datasets are on top of
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+No.
+P2.1
+P2.4
+P2.7
+P2.10
+P2.13
+P2.16
+P2.19
+P2.22
+P2.25
+
+Expression
+t r ace(C + D)
+s1A + s1B
+DD −1C
+r owSums(M N )
+((M N )M )T
+t r ace(C −1D −1) + t r ace D)
+(CT D)−1
+exp((C + D)T )
+(u1vT
+2 − X )v2
+
+No.
+P2.2
+P2.5
+P2.8
+P2.11
+P2.14
+P2.17
+P2.20
+P2.23
+P2.26
+
+Expression
+det (D −1)
+det ((C + D)−1)
+det (CT D)
+sum(A + B)
+((M N )M )N
+((((C + D)−1)T )((D −1)−1)C −1C
+(M (N M ))T
+det (C) ∗ det (D) ∗ det (C)
+exp((C + D)−1)
+
+No.
+P2.3
+P2.6
+P2.9
+P2.12
+P2.15
+P2.18
+P2.21
+P2.24
+P2.27
+
+Expression
+t r ace(DT )
+CT (DT )−1
+t r ace(CT DT + D)
+sum(r ow Sums(N T MT ))
+sum(r owSums(A))
+col Sums(AT + BT )
+(DT D)−1(DT v1)
+(D −1C)T
+((((C + D)T )−1)D)C
+
+Table 6: LA Benchmark Pipelines (Part 2)
+
+(a) P1.1
+
+(b) P1.3
+
+(c) P1.4
+
+(d) P1.15
+
+Figure 5: Evaluation time with and without rewriting
+
+the figure. For brevity in the figures, we use SM for SystemML, NP
+for NumPy, TF for Tensorflow, and SP for MLlib.
+
+For P1.1 (see Figure 5(a)), both matrices are dense. The speed-up
+(1.5× to 4×) comes from rewriting (MN )T (intermediate result size
+to (50K)2) into N T MT , much cheaper since both N T and MT are of
+size 50K ×100. We exclude MLlib from this experiment since it failed
+to allocate memory for the intermediate matrix (Spark/MLLib limits
+the maximum size of a dense matrix). As a variation (not plotted
+in the Figure), we ran the same pipeline with the ultra-sparse AS
+matrix (0.0075% non-zeros) used as M. The Qex ec and RWex ec time
+are very comparable using SystemML, because we avoid large dense
+intermediates. In R, this scenario lead to a runtime exception since
+the multiplication operator tries to densify the matrix M. To avoid
+it, we cast M during load time to a dense matrix type. Thus, the
+speed-up achieved is the same as if M and N were both dense. If,
+instead, N S (1.3860% non-zeros) plays the role of M, our rewrite
+achieves ≈ 1.8× speed-up for SystemML.
+
+For P1.3 (Figure 5(b)), the speed-up comes from rewriting C−1
+D−1
+to (DC)−1. Interestingly, TensorFlow is the only system that applies
+this optimization by itself. SystemML timed-out (>1000 secs) for
+both original pipeline and its rewriting.
+
+(a) P1.13
+
+(b) P1.25
+
+Figure 6: P1.13 and P1.25 evaluation before and after rewrite
+For pipeline P1.4 (Figure 5(c)), we rewrite (A + B)v1 to Av1 +
+Bv1. Adding a sparse matrix A to a dense matrix B results into
+materializing a dense intermediate of size 1M × 100. Instead, Av1 +
+Bv1 has fewer non-zeros in the intermediate results, and Av1 can be
+computed efficiently since A is sparse. The MNC sparsity estimator
+has a noticeable overhead here. We run the same pipeline, where
+the dense Syn4 matrix plays both A and B (not shown in the Figure).
+This leads to speed-up of up to 9× for MLlib, which does not natively
+support matrix addition, thus we convert its matrices to Breeze
+types in order to perform it (as in [44]).
+
+P1.15 (Figure 5(d)) is a matrix chain multiplication. The naïve
+left-to-right evaluation plan (MN )M computes an intermediate
+2), where n is 50K. Instead, the rewriting M(N M)
+matrix of size O(n
+2) intermediate matrix, where m is 100, and is
+only needs an O(m
+much faster. To avoid MLLib memory failure on P1.15, we use the
+distributed matrix of type BlockMatrix for both matrices. While
+M thus converted has the same sparsity, Spark views it as being of a
+dense type ( multiplication on BlockMatrix is considered to produce
+dense matrices) [9]. SystemML does optimize the multiplication
+order if the user does not enforce it. Further (not shown in the
+Figure), we ran P.15 with AS in the role of M. This is 4× faster
+in SystemML since with an ultra sparse M, multiplication is more
+efficient. This is not the case for MLlib which views it as dense. For
+R, we again had to densify M during loading to prevent crashes.
+
+Figure 6 studies P1.13 and P1.25, two real-world pipelines in-
+volved in ML algorithms, using the MNC cost model; note the log-
+scale y axis. Rewriting P1.13: sum(MN ) into sum(t(colSums(M)) ∗
+rowSums(N )) yields a speed-up of 50×; while SystemML has this
+rewrite as a static rule, it did not apply it. Our rewrite allowed Sys-
+temML and the others to benefit from it. Not shown in the Figure,
+we re-ran this with M ultra sparse (using AS) and SystemML: the
+rewrite did not bring benefits, since MN is already efficient. In this
+
+020406080100SMRNPTFSPTotalExecutionTime-[s]M:Syn1,N:Syn2X020406080100SMRNPTFTotalExecutionTime-[s]M:Syn1,N:Syn2QexecRWexecRWfnd050100150200250300350SMRNPTFSPC:Syn5,D:Syn5X00.511.522.5SMRSPTotalExecutionTime-[s]A:AL1,B:Syn30510152025303540SMRSPM:NS,N:Syn20.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]M:Syn1,N:Syn2020406080100SMRNPTFTotalExecutionTime-[s]M:Syn1,N:Syn2QexecRWexecRWfndX0.0010.010.1110SMRNPTFSPM:Syn1,N:Syn2XHADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+lead to a low Qex ec when the system applies internally the same
+optimization that HADAD finds “outside” of the system.
+
+T F
+
+S M
+
+Concretely, for the P¬Opt pipelines, on the dense and sparse
+matrices listed in Table 5, using the naïve cost model, 64% of the
+times are under 25ms (50% are under 20ms), and the longest
+RWf ind
+is about 200m. Using the MNC estimator, 55% took less than 20ms,
+and the longest (outlier) took about 300ms. Among the 39 P¬Opt
+pipelines, SystemML finds efficient rewritings for a set of 6, denoted
+P¬Opt
+, while TensorFlow optimizes a different set of 11, denoted
+S M
+P¬Opt
+. On these subsets, where HADAD’s optimization is redun-
+T F
+dant, using dense matrices, the overhead is very low: with the MNC
+model, 0.48% to 1.12% on P¬Opt
+(0.64% on average), and 0.0051%
+to 3.51% on P¬Opt
+(1.38% on average). Using the naïve estimator
+slightly reduces this overhead, but across P¬Opt , this model misses
+4 efficient rewritings. On sparse matrices, the overhead is at most
+4.86% with the naïve estimator and up to 5.11% with the MNC one.
+Among the already-optimal pipelines POpt , 70% involve expen-
+sive operations such as inverse, determinant, matrix exponential,
+leading to rather long Qex ec times. Thus, the rewriting overhead is
+less than 1% of the total time, on all systems, using sparse or dense
+matrices, and the naïve or the MNC-based cost models. For the other
+POpt pipelines with short Qex ec , mostly matrix multiplications
+chains already in the optimal order, on dense matrices, the overhead
+reaches 0.143% (SparkMlLib) to 9.8% (TensorFlow) using the naïve
+cost model, while the MNC cost model leads to an overhead of
+0.45% (SparkMlib) up to 10.26% (TensorFlow). On sparse matrices,
+using the naïve and MNC cost models, the overhead reaches up to
+0.18% (SparkMLlib) to 1.94% (SystemML), and 0.5% (SparkMLlib) to
+2.61% (SystemML), respectively.
+
+8.1.3 Effectiveness of view-based LA rewriting. We have de-
+fined a set Vexp of 12 views that pre-compute the result of some
+expensive operations (multiplication, inverse, determinant, etc.)
+which can be used to answer our PV iews pipelines, and material-
+ized them on disk as CSV files. The experiments outlined below
+used the naïve cost model; all graphs have a log-scale y axis.
+Discussion. For P2.14 (Figure 9(a)), using the view V4 = N M by
+and the multiplication associativity leads to up to 2.8× speed-up.
+Figure 9(b) shows the gain due to the view V1 = D−1, for the
+ordinary-least regression (OLS) pipeline P2.21. It has 8 rewritings,
+4 of which use V1; they are found thanks to the properties (CD)−1 =
+D−1
+C−1, (CD)E = C(DE) and (DT )−1 = (D−1)T among others.
+The cheapest rewriting is V (V T (DT v1)), since it introduces small
+intermediates due to the optimal matrix chain multiplication order.
+This rewrite leads to 70×, 55× and 150× speed-ups on R, NumPy
+and MLlib, respectively; TensorFlow is omitted as matmul operator
+does not support matrix-vector multiplication. It could run this
+pipeline by converting the matrices to NumPy, whose performance
+we already report separately. On SystemML, the original pipeline
+timed out (> 1000 seconds).
+
+Pipeline P2.25 (Figure 9(c)) benefits from a view V5, which pre-
+computes a dense intermediate vector multiplication result; then,
+rewriting based on the property (A + B)v = Av + Bv leads to a 65×
+speed-up in SystemML. For MLlib, as discussed before, to avoid
+memory failure, we used BlockMatrix types. for all matrices and
+
+(a) P1.14
+
+(b) P2.12
+
+Figure 7: P1.14 and P2.12 evaluation before and after rewrite
+
+Figure 8: R speed-up on P¬Opt
+experiment and subsequently, whenever MLlib is absent, this is due to
+its lack of support for LA operations (here, sum of all cells in a matrix)
+on BlockMatrix. For P1.25, the important optimization is selecting
+the multiplication order in MN N T (Figure 6(b)). SystemML is ef-
+ficient here, due to its dedicated operator tsmm for transpose-self
+matrix multiplication and mmchain for matrix multiply chains.
+
+Figure 7 shows up to 42× rewriting speed-up achieved by turn-
+ing P1.14 and P2.12 into sum(t(colSums(M)) ∗ rowSums(N )). This
+exploits several properties: (i) (MN )T = N T MT , (ii) sum(MT ) =
+sum(M), (iii) sum(row/colSums(M)) = sum(M), and (iv) sum(MN ) =
+sum(t(colSums(M)) ∗ rowSums(N )). SystemML captures (ii), (iii),
+and (iv) as static rewrite rules, however, it is unable to exploit these
+performance-saving opportunities since it is unaware of (i). Other
+systems lack support for more or all of these properties.
+
+Figure 8 shows the distribution of the significant rewriting speed-
+up on P¬Opt running on R, and using the MNC-based cost model.
+For clarity, we split the distribution into two figures: on the left,
+25 P¬Opt pipelines with speed-up lower than 10×; on the right,
+the remaining 13 with greater speed-up. Among the former, 87%
+achieved at least 1.5× speed-up. The latter are sped up by 10× to
+60×. P1.5 is an extreme case here (not plotted): it is sped up by
+about 1000×, simply by rewriting ((D)−1)−1 into D.
+8.1.2 Rewriting Performance and Overhead. We now study
+of our rewriting algorithm, and the rewrite
+the running time RWf ind
+overhead defined as RWf ind
+), where Qex ec is the
+time to run the pipeline “as stated”. We ran each experiment 100
+times and report the average of the last 99 times. The global trends
+are as follows. (i) For a fixed pipeline and set of data matrices,
+the overhead is slightly higher using the MNC cost model, since his-
+tograms are built during optimization. (ii) For a fixed pipeline and
+cost model, sparse matrices lead to a higher overhead simply be-
+cause Qex ec tends to be smaller. (iii) Some (system, pipeline) pairs
+
+/(Qex ec + RWf ind
+
+0.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]M:Syn1,N:Syn2QexecRWexecRWfndX0.0010.010.1110SMRNPTFSPM:Syn1,N:Syn2XConference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+(a) P2.14
+(d) P2.27
+Figure 9: P2.14, P2.21, P2.25 and P2.27 performance before and after rewriting using the views Vexp
+
+(b) P2.21
+
+(c) P2.25
+
+computing u1vT
+2 , which results in a dense matrix of size 100K ×50K.
+Alone, SystemML is unable to exploit its own efficient operations
+for lack of awareness the LA property Av + Bv = (A + B)v.
+Scenario 2 (Hyb2): Netflix reviews. The dataset is in CSV form,
+and it contains movie id, customer id, overall rate and rating time.
+A query (in the pre-processing part) constructs a review matrix X ,
+where columns are movies, and rows are customers. In the same
+fashion as in the previous scenario, X is loaded for analysis in
+SystemML, where we filter rows with overall rate greater than 3.
+Next, we run the same analysis computation described in Scenario 1,
+where the obtained rewriting is also the same. The main difference
+here is that matrix X is much denser (0.261% non-zeros), and the
+rewriting does not involve using materialized views. The rewrite
+achieves ∼20× speed-up as shown in Figure 10.
+
+8.3 Experiments Summary
+We have shown that HADAD brings significant performance-saving
+across LA-oriented and potentially polystore engines/systems with-
+out the need to modify their internals. It improves their performance
+by order of magnitudes on typical LA-based and hybrid pipelines.
+Moreover, as we confirm experimentally, the time spent searching
+for rewritings is a small fraction of the query execution time for
+P¬Opt pipelines hence a worthwhile investment. In addition, the
+rewriting overhead of POpt pipelines is very negligible compared
+to the original pipeline execution time in the presence of sparse/-
+dense matrices and using naïve and MNC-based cost models.
+
+9 RELATED WORK AND CONCLUSION
+LA-oriented Systems, Libraries & Languages. SystemML [19]
+offers high-level R-like linear algebra abstractions, using a declar-
+ative language called Declarative Machine Learning (DML). The
+system applies some logical LA pattern-based rewrites and physi-
+cal execution optimizations, based on cost estimates for the latter.
+SparkMLlib [39] provides LA operations and built-in function im-
+plementations of popular ML algorithms, such as linear regression,
+etc. on Spark RDDs. The library supports sparse and dense matrices,
+but the user has to select this type explicitly. R [3] and NumPy [2]
+are two of the most popular computing environments for statistical
+data analysis, widely used in academia and industry. They provide a
+high-level abstraction that can simplify the programming of numer-
+ical and statistical computations, by treating matrices as first-class
+citizens and by providing a rich set of built-in LA operations and
+ML algorithms. However, LA properties in most of these systems
+remain unexploited, which makes them miss opportunities to use
+their own highly efficient operators (recall Hyb1 in Section 8.2). Our
+
+Figure 10: Hyb1 and Hyb2 evaluation before and after rewrite
+
+vectors, thus they were treated as dense. In R, the original pipeline
+triggers a memory allocation failure, which the rewriting avoids.
+Figure 9(d) shows that for P2.27 exploiting the views V2 = (D +
+C)−1 and V3 = DC leads to speed-ups of 4× to 41× on different
+systems. Properties enabling rewriting here are C + D = D + C,
+(DT )−1 = (D−1)T and (CD)E = C(DE).
+8.2 Hybrid (LA and RA) Scenarios
+We now study the benefits of rewriting on hybrid expressions com-
+bining relational and linear algebra.
+Scenario 1 (Hyb1): Amazon reviews. This JSON dataset contains
+product information, product reviews (text) and reviewer infor-
+mation. We defined two materialized views: V1 stores review id,
+product id, and the overall rate for “Kindle-Edition” books as a rela-
+tional table; V2 stores the reviewer id, product id, and the review text
+as a text datasource in Solr. A query constructs a product-review ma-
+trix X for “Kindle-Edition” books, where the review text mentions
+“mystery”. This matrix is loaded in SystemML, where we filter rows
+with rating less than 2. Next, an analysis is run, through the com-
+2 − X )v2, which appears in the ALS algorithm [46].
+putation: (u1vT
+Note that u1 and v2 are synthetic dense vectors of size 100K × 1 and
+50K × 1, respectively, and X is ultra sparse (0.00028% non-zeros).
+Rewriting modifies the pre-processing by introducing V1 and V2; it
+also pushes the rating filter into the pre-processing part. The analy-
+sis is rewritten into u1vT
+2 v2 − Xv2; this is the main reason for the
+60× speed-up we bring to SystemML (Figure 10). First, X is ultra
+sparse which makes the computation of Xv2 extremely efficient.
+Second, SystemML evaluates u1vT
+2 v2 efficiently in one go without
+intermediates, taking advantage of tsmm operator (discussed ear-
+lier) and mmchain for matrix multiply chains, where the best way to
+2 v2 first, which results in a scalar, instead of
+evaluate it computes vT
+
+0.0010.010.1110100SMRSPM:NS,N:Syn20.0010.010.11101001000SMRSPTotalExecutionTime(logscale)-[s]X:AL3,u1:Syn9,v2:Syn8020406080100SMRNPTFTotalExecutionTime-[s]M:Syn1,N:Syn2QexecRWexecRWfndX0.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5X0.0010.010.1110100SMRNPTFSPC:Syn5,D:Syn50.0010.010.11101001000SMRSPTotalExecutionTime(logscale)-[s]X:AL3,u1:Syn9,v2:Syn8020406080100SMRNPTFTotalExecutionTime-[s]M:Syn1,N:Syn2QexecRWexecRWfndX0.0010.010.1110100SMRNPTFSPC:Syn5,D:Syn5X0.0010.010.1110100Hyb1Hyb2020406080100SMRNPTFTotalExecutionTime-[s]M:Syn1,N:Syn2QexecRWexecRWfnd0.0010.010.11101001000SMRSPTotalExecutionTime(logscale)-[s]X:AL3,u1:Syn9,v2:Syn8HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+experiments (Section 8) show that LA pipeline evaluation in these
+systems can be sped up, often by more 10×, by our rewriting using
+(i) LA properties and (ii) materialized views.
+Bridging the Gap: Linear and Relational Algebra. There has
+been a recent increase in research for unifying the execution of rela-
+tional and linear algebra queries /pipelines [1, 27, 32, 35, 37, 39, 45].
+A key limitation of these works is that the semantics of linear al-
+gebra operations remains hidden behind built-in functions and/or
+UDFs, preventing performance-enhancing rewrites. Some of these
+works call LA packages through UDFs, where libraries such as R
+and NumPy are embedded in the host language [1]. Other works
+treat LA objects as first-class citizens and use built-in functions to
+express LA operations [28, 32, 37]. Closer to our work, LARA [35]
+relies on a declarative domain-specific language for collections and
+matrices, which can enable optimization across the two algebraic
+abstractions. SPORES [46] and SPOOF [21] optimize LA expressions,
+by converting them into RA, optimizing the latter, and then convert-
+ing the result back to an (optimized) LA expression. SPORES and
+SPOOF are restricted to a small set of selected LA operations (the
+ones that can be expressed in relational algebra), while we support
+significantly more (Section 5.1), and model properties allowing to
+optimize with them. Further, as they do not reason with constraints,
+they cannot exploit materialized views in an LA (or hybrid LA/RA)
+context; as shown in our experiments, such rewritings can bring
+large performance advantages. Our work can also complementing
+the optimizations of LARA, SPORES or SPOOF, to extend to these
+platforms the benefits of views-based rewriting.
+Conclusion. HADAD is an extensible lightweight approach for
+optimizing hybrid complex analytics queries, based on the powerful
+intermediate abstraction of a a relational model with integrity con-
+straints. HADAD extends [14] with a reduction from LA view-based
+rewriting to relational rewriting under constraints. It enables a full
+exploration of rewrites using a large set of LA operations, with
+no modification to the execution platform. Our experiments show
+performance gains of up to several orders of magnitude on LA and
+hybrid workloads. Future work includes reasoning about cell-wise
+operations, building upon the FAQ [13] framework.
+
+REFERENCES
+[1] Embedded python/numpy in monetdb. https://www.monetdb.org/blog/embedded-
+
+pythonnumpy-monetdb.
+[2] NumPy. https://numpy.org/.
+[3] R. https://www.r-project.org/other-docs.html.
+[4] Technical report. https://github.com/hadad-paper/HADAD_SIGMOD2021.
+[5] Kaggle Survey. https://www.kaggle.com/kaggle-survey-2019, 2019.
+[6] Amazon Review Data (2018).https://nijianmo.github.io/amazon/index.html, 2020.
+[7] Breeze Wiki.https://github.com/scalanlp/breeze/wiki, 2020.
+[8] Netflix movie rating dataset.https://www.kaggle.com/netflix-inc/netflix-prize-
+
+data, 2020.
+
+[9] Sparkmllib.https://spark.apache.org/mllib, 2020.
+[10] Using Native Blas in SystemDS. https://apache.github.io/systemds/native-
+
+backend, 2020.
+
+[11] M. Abadi, P. Barham, J. Chen, Z. Chen, A. Davis, J. Dean, M. Devin, S. Ghemawat,
+G. Irving, M. Isard, et al. Tensorflow: A system for large-scale machine learning.
+In 12th {USENIX} symposium on operating systems design and implementation
+({OSDI} 16), pages 265–283, 2016.
+
+[12] S. Abiteboul, R. Hull, and V. Vianu. Foundations of Databases. Addison-Wesley,
+
+1995.
+
+[13] M. Abo Khamis, H. Q. Ngo, and A. Rudra. Faq: questions asked frequently. In
+Proceedings of the 35th ACM SIGMOD-SIGACT-SIGAI Symposium on Principles of
+Database Systems, pages 13–28, 2016.
+
+[14] R. Alotaibi, D. Bursztyn, A. Deutsch, I. Manolescu, and S. Zampetakis. Towards
+scalable hybrid stores: Constraint-based rewriting to the rescue. In Proceedings
+
+of the 2019 International Conference on Management of Data, 2019.
+
+[15] R. Alotaibi, B. Cautis, A. Deutsch, M. Latrache, I. Manolescu, and Y. Yang. ESTO-
+CADA: towards scalable polystore systems. Proc. VLDB Endow., 13(12):2949–2952,
+2020.
+
+[16] M. Armbrust, R. S. Xin, C. Lian, Y. Huai, D. Liu, J. K. Bradley, X. Meng, T. Kaftan,
+M. J. Franklin, A. Ghodsi, et al. Spark sql: Relational data processing in spark. In
+Proceedings of the 2015 ACM SIGMOD international conference on management of
+data, pages 1383–1394, 2015.
+
+[17] S. Axler. Linear Algebra Done Right. Springer, 2015.
+[18] D. Baylor, E. Breck, H.-T. Cheng, N. Fiedel, C. Y. Foo, Z. Haque, S. Haykal, M. Ispir,
+V. Jain, L. Koc, et al. Tfx: A tensorflow-based production-scale machine learning
+platform. In Proceedings of the 23rd ACM SIGKDD International Conference on
+Knowledge Discovery and Data Mining, pages 1387–1395, 2017.
+
+[19] M. Boehm, M. W. Dusenberry, D. Eriksson, A. V. Evfimievski, F. M. Manshadi,
+N. Pansare, B. Reinwald, F. R. Reiss, P. Sen, A. C. Surve, et al. Systemml: Declara-
+tive machine learning on spark. Proceedings of the VLDB Endowment, 9(13):1425–
+1436, 2016.
+
+[20] M. Boehm, A. V. Evfimievski, N. Pansare, and B. Reinwald. Declarative ma-
+chine learning-a classification of basic properties and types. arXiv preprint
+arXiv:1605.05826, 2016.
+
+[21] M. Boehm, B. Reinwald, D. Hutchison, P. Sen, A. V. Evfimievski, and N. Pansare.
+On optimizing operator fusion plans for large-scale machine learning in systemml.
+Proceedings of the VLDB Endowment, 11(12), 2018.
+
+[22] J.-H. Böse, V. Flunkert, J. Gasthaus, T. Januschowski, D. Lange, D. Salinas, S. Schel-
+ter, M. Seeger, and Y. Wang. Probabilistic demand forecasting at scale. Proceedings
+of the VLDB Endowment, 10(12):1694–1705, 2017.
+
+[23] A. K. Chandra and P. M. Merlin. Optimal implementation of conjunctive queries
+in relational data bases. In Proceedings of the ninth annual ACM symposium on
+Theory of computing, pages 77–90, 1977.
+
+[24] T. A. Davis and Y. Hu. The university of florida sparse matrix collection. TOMS,
+
+2011.
+
+[25] A. Deutsch. Fol modeling of integrity constraints (dependencies).
+[26] A. Deutsch, L. Popa, and V. Tannen. Query reformulation with constraints. ACM
+
+SIGMOD Record, 35(1):65–73, 2006.
+
+[27] J. Duggan et al. The BigDAWG polystore system. In SIGMOD, 2015.
+[28] J. M. Hellerstein, C. Ré, F. Schoppmann, D. Z. Wang, E. Fratkin, A. Gorajek, K. S.
+Ng, C. Welton, X. Feng, K. Li, et al. The madlib analytics library: or mad skills,
+the sql. Proceedings of the VLDB Endowment, 5(12):1700–1711, 2012.
+
+[29] P.-S. Huang, H. Avron, T. N. Sainath, V. Sindhwani, and B. Ramabhadran. Kernel
+methods match deep neural networks on timit. In 2014 IEEE International Confer-
+ence on Acoustics, Speech and Signal Processing (ICASSP), pages 205–209. IEEE,
+2014.
+
+[30] I. Ileana. Query rewriting using views : a theoretical and practical perspective.
+
+Theses, Télécom ParisTech, Oct. 2014.
+
+[31] I. Ileana, B. Cautis, A. Deutsch, and Y. Katsis. Complete yet practical search for
+minimal query reformulations under constraints. In Proceedings of the 2014 ACM
+SIGMOD international conference on Management of data, pages 1015–1026, 2014.
+[32] D. Kernert, F. Köhler, and W. Lehner. Bringing linear algebra objects to life in
+a column-oriented in-memory database. In In Memory Data Management and
+Analysis, pages 44–55. Springer, 2013.
+
+[33] A. Kumar, M. Boehm, and J. Yang. Data management in machine learning:
+Challenges, techniques, and systems. In Proceedings of the 2017 ACM International
+Conference on Management of Data, pages 1717–1722. ACM, 2017.
+
+[34] A. Kumar, R. McCann, J. Naughton, and J. M. Patel. Model selection management
+systems: The next frontier of advanced analytics. ACM SIGMOD Record, 44(4):17–
+22, 2016.
+
+[35] A. Kunft, A. Katsifodimos, S. Schelter, S. Breß, T. Rabl, and V. Markl. An interme-
+diate representation for optimizing machine learning pipelines. Proceedings of
+the VLDB Endowment, 12(11):1553–1567, 2019.
+
+[36] K. Kuttler. Linear algebra: theory and applications. The Saylor Foundation, 2012.
+[37] S. Luo, Z. J. Gao, M. Gubanov, L. L. Perez, and C. Jermaine. Scalable linear
+algebra on a relational database system. IEEE Transactions on Knowledge and
+Data Engineering, 31(7):1224–1238, 2018.
+
+[38] C. Manning and D. Klein. Optimization, maxent models, and conditional estima-
+tion without magic. In Proceedings of the 2003 Conference of the North American
+Chapter of the Association for Computational Linguistics on Human Language
+Technology: Tutorials-Volume 5, pages 8–8, 2003.
+
+[39] X. Meng, J. Bradley, B. Yavuz, E. Sparks, S. Venkataraman, D. Liu, J. Freeman,
+D. Tsai, M. Amde, S. Owen, et al. Mllib: Machine learning in apache spark. The
+Journal of Machine Learning Research, 17(1):1235–1241, 2016.
+
+[40] M. Milani, S. Hosseinpour, and H. Pehlivan. Rule-based production of mathemat-
+
+ical expressions. Mathematics, 6:254, 11 2018.
+
+[41] D. Sculley, G. Holt, D. Golovin, E. Davydov, T. Phillips, D. Ebner, V. Chaudhary,
+M. Young, J.-F. Crespo, and D. Dennison. Hidden technical debt in machine
+learning systems. In Advances in neural information processing systems, pages
+2503–2511, 2015.
+
+[42] J. Sommer, M. Boehm, A. V. Evfimievski, B. Reinwald, and P. J. Haas. Mnc:
+Structure-exploiting sparsity estimation for matrix expressions. In Proceedings of
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+the 2019 International Conference on Management of Data, pages 1607–1623, 2019.
+[43] E. R. Sparks, A. Talwalkar, D. Haas, M. J. Franklin, M. I. Jordan, and T. Kraska.
+Automating model search for large scale machine learning. In Proceedings of the
+Sixth ACM Symposium on Cloud Computing, pages 368–380, 2015.
+
+[44] A. Thomas and A. Kumar. A comparative evaluation of systems for scalable linear
+algebra-based analytics. Proceedings of the VLDB Endowment, 11(13):2168–2182,
+2018.
+
+[45] J. Wang, T. Baker, M. Balazinska, D. Halperin, B. Haynes, B. Howe, D. Hutchison,
+S. Jain, R. Maas, P. Mehta, et al. The myria big data management and analytics
+system and cloud services.
+
+[46] Y. R. Wang, S. Hutchison, J. Leang, B. Howe, and D. Suciu. SPORES: sum-product
+optimization via relational equality saturation for large scale linear algebra. CoRR,
+2020.
+
+HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+A Lops OPERATIONS PROPERTIES (LApr op ) CAPTURED AS INTEGRITY CONSTRAINTS
+
+Table 7: Lops Operations Properties (LApr op ) Captured as Integrity Constraints
+
+LA Property
+
+Relational Encoding as Integrity Constraints
+
+M + N = N + M
+(M + N ) + D = M + (N + D)
+
+c(M + N ) = cM + cN
+
+(c + d)M = cM + dM
+
+M + 0 = M
+
+(MN )D = M(N D)
+
+M(N + D) = MN + MD
+
+(M + N )D = MD + MD
+
+d(MN ) = (dM)N
+
+c(dM) = (cd)M
+
+Ik M = M = MIz
+
+(MN )T = (N )T (M)T
+
+(M + N )T = (M)T + (N )T
+
+(cM)T = c(M)T
+
+((M)T )T = M
+(I )T = I , where I is identity matrix
+(O)T = O, where O is zero matrix
+
+((M)−1)−1 = M
+(MN )−1 = (N )−1(M)−1
+
+((M)T )−1 = ((M)−1)T
+
+((kM))−1 = k−1(M)−1
+
+M−1
+
+M = I = MM−1
+
+Addition of Matrices
+1, Mi
+1, Di
+
+∀Mi
+1, N i
+
+∀Mi
+
+1, Ro
+
+2, Ro ) → addM (Mi
+2, Mi
+1, Di
+1 ) ∧ addM (Ro
+1, N i
+3 ) ∧ addM (Mi
+3, Ro
+1, Ro
+2 )
+1 ) ∧ multiM S (c, Ro
+1, Ro
+
+2, RoaddM (Mi
+1, Ro
+1, Ro
+3addM (N i
+∃Ro
+1, Ro
+1, Ro
+4multiM S (c, Mi
+∀c, d, s, Mi
+1, Ro
+3multiM S (c, Mi
+
+1, Mi
+2 addM (Mi
+1, Ro
+1, Di
+2 addM (Mi
+1, N i
+3 ) ∧ multiM S (c, N i
+1, Ro
+1addS (c, d, s) ∧ multiM S (s, Mi
+1, Ro
+
+1, Ro
+4 ) ∧ addM (Ro
+1, Ro
+1 ) →
+3 ) ∧ addM (Ro
+
+1, Ro )
+1, Ro
+
+1, N i
+
+1, Ro
+
+∀c, Mi
+3, Ro
+
+∃Ro
+
+∃Ro
+
+2, Ro
+
+2 ) →
+
+2 ) →
+3, Ro
+
+4, Ro
+2 )
+
+2, Ro
+
+3, Ro
+1 )
+
+1, Ro
+
+2 ) ∧ multiM S (d, Mi
+→ ∃Zero(Oi
+1)
+1) → addM (Mi
+1, n), Zero(Oi
+1, Oi
+1, Oi
+1)
+
+1) → addM (Oi
+
+1name(Mi
+∀Oi
+
+1Zero(Oi
+
+1, Oi
+
+1, Mi
+1)
+
+∀Mi
+
+1, n, Oi
+
+1, Ro
+
+2 ) →
+
+∃Ro
+
+∃Ro
+
+∀Mi
+
+1, Ro
+
+∀Mi
+3, Ro
+∀Mi
+3, Ro
+∀d, Mi
+
+1, N i
+3 ) ∧ multiM (Mi
+1, Ro
+
+2multiM (Mi
+1, Ro
+1, Di
+2addM (N i
+1, Di
+3 ) ∧ multiM (Mi
+1, Ro
+1, Ro
+1, N i
+2addM (Mi
+3 ) ∧ multiM (N i
+1, Ro
+1, Ro
+1, N i
+
+Product of Matrices
+1, Ro
+1, Ro
+1, N i
+1, Di
+3multiM (N i
+∃Ro
+1, Ro
+1, N i
+1, Ro
+1, Di
+1, N i
+4multiM (Mi
+1, Ro
+1, Ro
+1, Di
+1, N i
+1, Di
+4multiM (Mi
+1, Ro
+1, Ro
+1, N i
+3multiM S (d, Mi
+∃Ro
+1, Ro
+1, Ro
+∃s multiS (c, d, s) ∧ multiM S (s, Mi
+
+1, Di
+1 ) ∧ multiM (Ro
+1, Ro
+3, Ro
+2 )
+1 ) ∧ multiM (Mi
+1, Ro
+1, Ro
+1, Ro
+4 ) ∧ addM (Ro
+1, Ro
+1, Di
+1 ) ∧ multiM (Ro
+1, Di
+1, Ro
+4 ) ∧ addM (Ro
+1, Ro
+1 ) ∧ multiMS (d, Ro
+1, Ro
+2 )
+1, Ro
+1 ) ∧ multiM S (c, Ro
+
+1, Ro
+2multiM S (d, Mi
+
+3 ) ∧ multiM (Ro
+1, Ro
+
+2multiM (Mi
+
+∀c, dMi
+
+3, N i
+
+1, Di
+
+2 ) →
+3, Ro
+2 ) →
+3, Ro
+2 ) →
+
+4, Ro
+2 )
+
+4, Ro
+2 )
+
+2 ) →
+
+∀Mi
+∀Mi
+
+1, n, k, z name(Mi
+1, n, k, z name(Mi
+
+1, n), size(Mi
+1, n), size(Mi
+
+1, k, z) → ∃I i
+1, k, z) → ∃I i
+
+∀Mi
+∀Mi
+
+1, I i
+1, I i
+
+1, n, k, z name(Mi
+1, n, k, z name(Mi
+
+1, n), size(Mi
+1, n), size(Mi
+
+1, k, z), Identity(I i
+1, k, z), Identity(I i
+
+1), size(I i
+1), size(I i
+
+1, Ro
+2 )
+1 Identity(I i
+1 Identity(I i
+
+1), size(I i
+1, k, k)
+1), size(I i
+1, z, z)
+1, k, k) → multiM (I i
+1, z, z) → multiM (Mi
+
+1, Mi
+1, I i
+
+1, Mi
+1)
+1, Mi
+1)
+
+1, Ro
+
+∀Mi
+∃Ro
+
+Transposition of Matrices
+1, Ro
+1, N i
+4tr (Mi
+3, Ro
+1, Ro
+1, N i
+∀Mi
+∃Ro
+4tr (Mi
+3, Ro
+∀c, Mi
+1, Ro
+1, Ro
+∃Ro
+3tr (Mi
+1name(Mi
+∀I i
+∀Oi
+
+1, N i
+2multiM (Mi
+1, Ro
+1, Ro
+3 ) ∧ tr (N i
+1, Ro
+1, N i
+2addM (Mi
+1, Ro
+1, Ro
+3 ) ∧ tr (N i
+1, Ro
+2multiM S (c, Mi
+
+1, Ro
+1 ) ∧ tr (Ro
+4, Ro
+4 ) ∧ multiM (Ro
+1, Ro
+1, Ro
+1 ) ∧ tr (Ro
+3, Ro
+4 ) ∧ addM (Ro
+1, Ro
+1, Ro
+1 ) ∧ tr (Ro
+3, Ro
+3 ) ∧ multiM S (c, Ro
+2 )
+1tr (Mi
+1, Ro
+1 ) ∧ tr (Ro
+1) → tr (I i
+1, I i
+1)
+1) → tr (Oi
+1, Oi
+1)
+
+1, Ro
+1, n) → ∃Ro
+1Identity(I i
+1Zero(Oi
+
+∀n, Mi
+
+2 ) →
+3, Ro
+2 )
+2 ) →
+4, Ro
+2 )
+2 ) →
+
+1, Mi
+1)
+
+∃Ro
+
+Inverses of Matrices
+∀n, Mi
+1name(Mi
+1, n) → ∃Ro
+1invM (Mi
+1, Ro
+1 ) ∧ invM (Ro
+∀Mi
+1, N i
+1, Ro
+1, Ro
+2multiM (Mi
+1, N i
+1, Ro
+1 ) ∧ invM (Ro
+1, Ro
+3, Ro
+4invM (Mi
+1, Ro
+3 ) ∧ invM (N i
+1, Ro
+4 ) ∧ multiM (Ro
+∀Mi
+1, Ro
+1, Ro
+2tr (Mi
+1, Ro
+1 ) ∧ invM (Ro
+1, Ro
+2 ) →
+3 ) ∧ tr (Ro
+∃Ro
+3, Ro
+1, Ro
+3invm (Mi
+2 )
+1 ) ∧ invM (Ro
+1, Ro
+1, Ro
+2multiM S (k, Mi
+1, Ro
+∀k, Mi
+∃Ro
+3 ) ∧ multiM S (s, Ro
+1, Ro
+3, s invS (k, s) ∧ invm (Mi
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+
+1 ) ∧ multiM (Ro
+1 ) ∧ multiM (Mi
+
+2 invM (Mi
+2 invM (Mi
+
+1, Mi
+1, Ro
+
+1, Ro
+1, Ro
+
+1, Ro
+
+∀Mi
+∀Mi
+
+2 ) →
+3, Ro
+2 )
+2 ) → Identity(Ro
+2 )
+2 ) → Identity(Ro
+2 )
+
+1, Mi
+1)
+2 ) →
+4, Ro
+3, Ro
+2 )
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+Table 8: Lops Operations Properties (LApr op ) Captured as Integrity Constraints
+
+LA Property
+
+Relational Encoding as Integrity Constraints
+
+det(MN ) = det(M) ∗ det(N )
+
+det((M)T ) = det(M)
+det((M)−1) = (det(M))−1
+det((cM)) = ckdet(M)
+
+det((I )) = 1
+
+adj(M) = RT
+adj(M)T = adj(MT )
+adj(M)−1 = adj(M−1)
+adj(MN ) = adj(N M)
+
+trace(M + N ) = trace(M) + trace(N )
+
+trace(MN ) = trace(N M)
+
+trace(MT ) = trace(M)
+trace(cM) = ctrace(M)
+trace(Ik ) = k
+
+(M ⊕ N ) + (C ⊕ D) = (M + C) ⊕ (N + D)
+
+(M ⊕ N ) + (C ⊕ D) = (MC) ⊕ (N D)
+
+c(M ⊕ N ) = (cM ⊕ cN )
+
+exp(0) = I
+exp(MT ) = exp(M)T
+
+1, Ro
+
+Determinant of Matrices
+1, N i
+∀Mi
+∃d1, d2det(Mi
+1, Ro
+∀Mi
+1, d invM (Mi
+1, Ro
+∀Mi
+
+1, d tr (Mi
+1, Ro
+
+1, c, k, dO size(Mi
+
+1, d multiM (Mi
+1, d1) ∧ det(N i
+1, Ro
+1 ) ∧ det(Ro
+
+∀Mi
+
+1, Ro
+
+1, N i
+1 ) ∧ det(Ro
+1, d) →
+1, d2) ∧ multiS (d1, d2, d)
+1, d) → det(Mi
+1, d)
+
+1 ) ∧ det(Ro
+
+1, d) → ∃d1det(Mi
+
+1, d1) ∧ invS (d1, d)
+
+1, k, k) ∧ multiM S (c, Mi
+
+1, dO ) → ∃s1, s2
+
+pow(c, k, s1) ∧ det(Mi
+1, dO Identity(I i
+∀I i
+
+1, s2) ∧ multiS (s1, s2, dO )
+1, dO ) → dO = 1
+
+1) ∧ det(I i
+
+∀Mi
+∀Mi
+1, Ro
+1, Ro
+1, Ro
+
+∀Mi
+
+∀Mi
+1, Ro
+2 adj(Mi
+
+Adjoint of Matrices
+1, Ro
+1 adj(Mi
+1, Ro
+1, Ro
+2 adj(Mi
+1 ) ∧ tr (Ro
+1, Ro
+1 ) ∧ invM (Ro
+1, Ro
+1, Ro
+1 ) ∧ adj(Ro
+1, Ro
+1, N i
+2 multM (Mi
+Trace of Matrices
+
+1 ) → ∃Ro
+1, Ro
+1, Ro
+1, Ro
+
+2 co f (Mi
+2 ) → ∃Ro
+2 ) → ∃Ro
+2 ) → ∃Ro
+
+2 ) ∧ tr (Ro
+1, Ro
+3 tr (Mi
+1, Ro
+3 invM (Mi
+3 multM (N i
+
+2, Ro
+1 )
+3 ) ∧ adj(Ro
+1, Ro
+1, Mi
+
+3, Ro
+2 )
+3 ) ∧ adj(Ro
+3, Ro
+2 )
+3, Ro
+3 ) ∧ adj(Ro
+1, Ro
+2 )
+
+trace(Ro
+
+1, Ro
+
+1, sO
+
+1, N i
+
+1 addM (Mi
+1, N i
+1, sO
+1, Ro
+∀Mi
+1, sO
+3 trace(Mi
+2 , sO
+1 ) → ∃sO
+1 multiM (Mi
+1, sO
+∀Mi
+1, Ro
+1, N i
+1, Mi
+2 multiM (N i
+1 ) → ∃Ro
+1, sO
+1 ) ∧ trace(Ro
+1, Ro
+1 tr (Mi
+1, sO
+1 ) ∧ trace(Ro
+1 ) → ∃sO
+1, Ro
+O , k, k) ∧ trace(I i
+) ∧ size(I i
+1 Identity(I i
+O
+O
+
+1 )∧
+2 ) ∧ trace(N i
+3 ) ∧ adds (sO
+1, sO
+1, N i
+1, Ro
+1 )∧
+2 ) ∧ trace(Ro
+1, Ro
+1 ) → trace(Mi
+1, sO
+2 trace(Mi
+1 ) → sO
+), sO
+
+1, sO
+trace(Ro
+∀Mi
+1, sO
+1, Ro
+1 multiM S (c, Mi
+∀I i
+
+O , k, sO
+
+2, sO
+1 )
+1, sO
+1 )
+2 ) ∧ multis (c, sO
+
+1 , sO
+2 )
+
+1 = k
+
+2 , sO
+
+3 , sO
+1 )
+
+∀Mi
+
+1, Ro
+
+1, c, sO
+
+∧sumD (Ci
+
+1, Di
+
+1, Ro
+
+∧sumD (Ci
+
+1, Di
+
+1, Ro
+
+Direct Sum
+1, N i
+∀Mi
+2 ) ∧ addm (Ro
+1, N i
+∀Mi
+2 ) ∧ multim (Ro
+∀Mi
+3, Ro
+
+2, Ro
+1, Ro
+1, Di
+1, Ci
+1, Ro
+3 ) → ∃Ro
+2, Ro
+1, Ro
+2, Ro
+1, Ro
+1, Di
+1, Ci
+1, Ro
+4, Ro
+3 ) → ∃Ro
+2, Ro
+1, Ro
+2 sumD (Mi
+1, c, Ro
+1, Ro
+1, N i
+1, c, Ro
+4multiM S (Mi
+
+1, Ro
+1, N i
+3 sumD (Mi
+1 )
+1, Ci
+4, Ro
+5addm (Mi
+1, Ro
+4 ) ∧ addm (N i
+1, Ro
+1, N i
+3 sumD (Mi
+1 )
+5multim (Mi
+1, Ro
+1, Ci
+1, Ro
+1, N i
+1 )
+3 ) ∧ multiM S (N i
+
+1, c, Ro
+
+4 ) ∧ multim (N i
+
+1, Di
+
+1, Ro
+5 )
+
+4 ) ∧ sumD (Ro
+
+3, Ro
+
+4, Ro
+2 )
+
+1, Di
+
+1, Ro
+5 )
+
+∧multiMS (c, Ro
+
+1, Ro
+
+2 ) → ∃Ro
+Exponential of Matrices
+
+∀Mi
+
+1, Ro
+
+1, Ro
+
+2tr (Mi
+
+∀Oi
+1, Ro
+
+1exp(Oi
+1, Ro
+1 ) ∧ exp(Ro
+
+1), Ro
+1, Ro
+
+1 ) → Identity(Ro
+1 )
+1, Ro
+3exp(Mi
+2 ) → ∃Ro
+
+3 ) ∧ exp(Ro
+
+3, Ro
+2 )
+
+HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Table 9: Matrix Decompositions Properties Captured as Integrity Constraints
+
+Decomposition Property
+
+Relational Encoding as Integrity Constraints
+
+Cholesky Decomposition (CD)
+
+cho(M) = L such that M = LLT , where M is symmetric positive definite
+
+∀Mi
+
+1 type(Mi
+
+1, “S”) → ∃ Lo
+1, Lo
+
+1∃Lo
+2 cho(Mi
+2) ∧ multiM (Lo
+
+tr (Lo
+
+1, Lo
+1, Lo
+
+1) ∧ type(Lo
+2, Mi
+1)
+
+1, “L”)∧
+
+QR(M) = [Q, R] such that M = QR
+
+QR Decomposition
+
+QR(Mi
+
+∀Qi
+
+1 type(Qi
+
+∀Mi
+1, Qo
+
+1∀n∀k name(Mi
+1 ) ∧ type(Qo
+1 , Ro
+size(Ro
+1, “O”) ∧ size(Qi
+
+∧size(I o
+
+1, n) ∧ size(Mi
+1, k, z) → ∃Qo, Ro
+1 , “O”) ∧ size(Qo
+1 , k, k) ∧ type(Ro
+1, k, z) ∧ multiM (Qo, Ro, Mi
+1)
+1, Qi
+1, I o
+1 , Qi
+1)
+1 , Ri
+1, I o
+1, Qi
+1)
+1, I i
+1)
+
+1, k, k) → ∃I o
+1 , k, k) ∧ multiM (Qi
+1, k, z) → ∃I o
+1 , k, k) ∧ multiM (I o
+1) → QR(I i
+
+1 QR(Qi
+1, I o
+1 QR(Ri
+1 , Ri
+1, I i
+
+∧size(I o
+∀I i
+
+1 identity(I i
+
+1, “U ”)∧
+
+1 ) ∧ identity(I o
+1 )
+
+1) ∧ identity(I o
+1 )
+
+∀Ri
+
+1 type(Ri
+
+1, “U ”) ∧ size(Qi
+
+LU (M) = [L, U ] such that M = LU
+
+LU Decomposition
+
+LU (Mi
+
+∀Li
+
+1 type(Li
+
+∀U i
+
+1 type(U i
+
+∀Mi
+1, Lo
+
+1∀n∀k name(Mi
+1 ) ∧ type(Lo
+1, U o
+size(U o
+1, “L”) ∧ size(Li
+
+∧multiM (Li
+1 , “U ”) ∧ size(U i
+
+1, n) ∧ size(Mi
+1, “L”) ∧ size(Lo
+1 , z, z) ∧ multiM (Lo
+1, k, z) → ∃I o
+1 , Li
+1 z, z) → ∃I o
+1 z, z) ∧ multiM (I o
+1) → LU (I i
+
+1, U o
+1, k, z) → ∃Lo
+1
+1 , “U ”)∧
+1, k, z) ∧ type(U o
+1 , Mi
+1, U o
+1)
+1, Li
+1 LU (Li
+1 ) ∧ identity(I o
+1, I o
+1 )
+1) ∧ size(I o
+1 , z, z)
+1 , I o
+1 LU (U i
+1 , U i
+1 , U o
+1 , U o
+1 )
+1, I i
+1, I i
+1)
+
+1 ) ∧ identity(I o
+1 )
+
+1, I o
+
+∧size(I o
+∀I i
+
+1 identity(I i
+
+Pivoted LU Decomposition
+
+LU (M) = [L, U , P] such that PM = LU , where M is a square matrix
+
+∀Mi
+LU P(Mi
+
+∀Li
+
+1 type(Li
+identity(I o
+
+1 , Po
+
+1∀n∀k name(Mi
+1 , Po
+1, U o
+1, Lo
+∧multiM (Lo
+1, U o
+1, “L”) ∧ size(Li
+
+1, n) ∧ size(Mi
+
+1, k, z) → ∃Lo
+
+1, “L”) ∧ type(U o
+1 ) ∧ multiM (Po
+
+1 , Ro
+1, U o
+1
+1 , “P”)
+1 , “U ”) ∧ type(Po
+1 ) ∧ type(Lo
+1 , Ro
+1, Ro
+1 , Mi
+1 )
+1, k, z) → ∃I o
+1 , I o
+1, Li
+2 LU P(Li
+2 ) ∧ size(I o
+1 , z, z) ∧ size(I o
+1, Li
+2 , Li
+1) ∧ multiM (I o
+1)
+1 , U i
+1 , I o
+1 LU P(U i
+1 , I o
+1 )∧
+1 , U i
+1 , U i
+1 )
+1, I i
+1, I i
+1)
+
+1 ) ∧ identity(I o
+1 , Li
+1 , “U ”) → ∃I o
+
+1 ) ∧ multiM (I o
+1) → LU (I i
+
+identity(I o
+∀I i
+
+1, I o
+1 , I o
+2 , k, k)
+
+1 identity(I i
+
+∧multiM (Li
+1 type(U i
+
+1, I o
+
+2 )∧
+
+∀U i
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+B SYSTEMML REWRITE RULES ENCODED AS INTEGRITY CONSTRAINTS
+
+Table 10: SystemML Algebraic Aggregate Rewrite Rules Captured as Integrity Constraints
+
+SystemML Algebraic Simplification Rule
+
+Integrity Constraints MMCSt at Aдд
+
+UnnecessaryAggregates
+
+sum(t(M))-> sum(M)
+sum(rev(M))-> sum(M)
+sum(rowSums(M))-> sum(M)
+sum(colSums(M))-> sum(M)
+min(rowMins(M))-> min(M)
+min(colMins(M))-> min(M)
+max(colMax(M))-> max(M)
+max(rowMax(M))-> max(M)
+
+rowSums(t(M))->t(colSums(M))
+colSums(t(M))->t(rowSums(M))
+rowMeans(t(M))->t(colMeans(M))
+colMeans(t(M))->t(rowMeans(M))
+rowVars(t(M))->t(colVars(M))
+colVars(t(X))->t(rowVars(X))
+rowMaxs(t(M))->t(colMaxs(M))
+colMaxs(t(M))->t(rowMaxs(M))
+rowMins(t(M))->t(colMins(M))
+colMins(t(M))->t(rowMins(M))
+
+trace(MN)->sum(M⊙t(N))
+
+sum(MN) -> sum(t(colSums(M))⊙rowSums(N))
+
+colSums(MN) -> colSums(M)N
+
+rowSums(MN) -> MrowSums(N)
+
+colSums(M)->M if x is row vector
+colMeans(M)->M if x is row vector
+colVars(M)->M if x is row vector
+colMaxs(M)->M if x is row vector
+colMins(M)->M if x is row vector
+colSums(M)->sum(M) if x is col vector
+colMeans(M)->Mean(M) if x is col vector
+colMaxs(X)->Max(M) if x is col vector
+colMins(M)->Min(X) if x is col vector
+colVars(M)->Var(M) if x is col vector
+
+1, s) → sum(Mi
+1, s) → sum(Mi
+
+1 ), sum(Ro
+1 ), sum(Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+
+1 ), sum(Ro
+1 ), sum(Ro
+1 ), min(Ro
+1 ), min(Ro
+1 ), max(Ro
+1 ), max(Ro
+
+1, s)
+1, s)
+1, s) → sum(Mi
+1, s) → sum(Mi
+1, s) → min(Mi
+1, s) → min(Mi
+1, s) → max(Mi
+1, s) → max(Mi
+
+1, s)
+1, s)
+1, s)
+1, s)
+1, s)
+1, s)
+
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+
+2 ) → ∃Ro
+2 ) → ∃Ro
+2 ) → ∃Ro
+2 ) → ∃Ro
+2 ) → ∃Ro
+2 ) → ∃Ro
+2 ) → ∃Ro
+2 ) → ∃Ro
+2 ) → ∃Ro
+2 ) → ∃Ro
+
+3 colSums(Mi
+3 rowSums(Mi
+3 rowMeans(Mi
+3 colMeans(Mi
+1, Ro
+3 colV ars(Mi
+1, Ro
+3 rowV ars(Mi
+1, Ro
+3 colMaxs(Mi
+1, Ro
+3 rowMaxs(Mi
+1, Ro
+3 colMins(Mi
+1, Ro
+3 rowMins(Mi
+
+3 ) ∧ tr (Ro
+1, Ro
+3 ) ∧ tr (Ro
+1, Ro
+3 ) ∧ tr (Ro
+1, Ro
+1, Ro
+3 ∧ tr (Ro
+3 ) ∧ tr (Ro
+3 ) ∧ tr (Ro
+3 ) ∧ tr (Ro
+3 ) ∧ tr (Ro
+3 ) ∧ tr (Ro
+3 ) ∧ tr (Ro
+
+3, Ro
+2 )
+3, Ro
+2 )
+3, Ro
+2 )
+3, Ro
+2 )
+3, Ro
+2 )
+3, Ro
+2 )
+3, Ro
+2 )
+3, Ro
+2 )
+3, Ro
+2 )
+3, Ro
+2 )
+
+∀Mi
+∀Mi
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+
+1, Ro
+1, s tr (Mi
+1, Ro
+1, Ro
+1, Ro
+1, s rev(Mi
+1, s rowSums(Mi
+1, s colSums(Mi
+1, s rowMins(Mi
+1, s colMins(Mi
+1, s colMax(Mi
+1, s rowMax(Mi
+
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+pushdownUnaryAggTransposeOp
+2 tr (Mi
+∀Mi
+2 tr (Mi
+∀Mi
+2 tr (Mi
+∀Mi
+2 tr (Mi
+∀Mi
+2 tr (Mi
+∀Mi
+2 tr (Mi
+∀Mi
+2 tr (Mi
+∀Mi
+2 tr (Mi
+∀Mi
+2 tr (Mi
+∀Mi
+∀Mi
+2 tr (Mi
+simplifyTraceMatrixMult
+
+1 ) ∧ rowSums(Ro
+1 ) ∧ colSums(Ro
+1 ) ∧ colMeans(Ro
+1 ) ∧ rowMeans(Ro
+1 ) ∧ rowV ars(Ro
+1 ) ∧ colV ars(Ro
+1 ) ∧ rowMaxs(Ro
+1 ) ∧ colMaxs(Ro
+1 ) ∧ rowMins(Ro
+1 ) ∧ colMins(Ro
+
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+
+1, N i
+
+1, Ro
+4tr (N i
+
+∀Mi
+3, Ro
+∃Ro
+simplifySumMatrixMult
+1, Ro
+
+∃Ro
+
+2, Ro
+
+3, Ro
+
+∀Mi
+4, Ro
+
+1, r multi(Mi
+1, Ro
+
+1, Ro
+3 ) ∧ multiE (Mi
+
+1, N i
+
+1 ) ∧ trace(Ro
+1, Ro
+
+3, Ro
+
+4 ) ∧ sum(Ro
+
+1, r ) →
+4, r )
+
+3 ) ∧ rowSums(N i
+
+1, Ro
+
+4 )∧
+
+1, r ) →
+
+1, r mult(Mi
+1, N i
+1, Ro
+5 colSums(Mi
+3, Ro
+multiE (Ro
+1, Ro
+2 multi(Mi
+3 colSums(Mi
+1, Ro
+2 multi(Mi
+3 rowSums(N i
+
+1, Ro
+1, N i
+2 ) ∧ tr (Ro
+4, Ro
+1, N i
+1, Ro
+1, N i
+1, Ro
+
+1 ) ∧ sum(Ro
+2, Ro
+5 ), ∧sum(Ro
+1, Ro
+
+5, r )
+1 ) ∧ colSums(Ro
+1, Ro
+1, Ro
+3, N i
+2 )
+1 ) ∧ rowSums(Ro
+1, Ro
+3, Ro
+2 )
+
+3 ) ∧ multi(Ro
+1, Ro
+3 ) ∧ multi(Mi
+
+1, Ro
+∃Ro
+1, Ro
+∃Ro
+
+1, Ro
+
+2 ) →
+
+2 ) →
+
+∀Mi
+
+1, N i
+
+∀Mi
+
+1, N i
+
+simplifyColWiseAgg
+1, n, i name(Mi
+1, n, j name(Mi
+1, n, j name(Mi
+
+∀Mi
+∀Mi
+
+∀Mi
+
+1, “1”, j) → colSums(Mi
+1, n) ∧ size(Mi
+1, “1”, j) → colSums(Mi
+1, n) ∧ size(Mi
+1, n) ∧ size(v“1”, j) → colV ars(Mi
+
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+
+1, n, j name(Mi
+1, n, j name(Mi
+1, i, Ro
+1, i, Ro
+1, i, Ro
+1, i, Ro
+1, i, Ro
+
+1 colSums(Mi
+1 colMeans(Mi
+1 colMaxs(Mi
+1 colMins(Mi
+1 colV ars(Mi
+
+1, n) ∧ size(Mi
+1, n) ∧ size(Mi
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+
+1 ) ∧ size(Mi
+1 ) ∧ size(Mi
+1 ) ∧ size(Mi
+1 ) ∧ size(Mi
+1 ) ∧ size(Mi
+
+1, “1”, j) → colMaxs(Mi
+1, “1”, j) → colMins(Mi
+1, i, “1”) → sum(Mi
+1, i, “1”) → Mean(Mi
+1, i, “1”) → Max(Mi
+1, i, “1”) → Min(Mi
+1, i, “1”) → V ar (Mi
+
+1, Mi
+1)
+1, Mi
+1)
+1, Mi
+1)
+1, Mi
+1)
+1, Mi
+1)
+1, Ro
+1 )
+1, Ro
+1 )
+1, Ro
+1 )
+1, Ro
+1 )
+1, Ro
+1 )
+
+HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+SystemML Algebraic Simplification Rule
+
+Integrity Constraints MMCSt at Aдд
+
+rowSums(M)->M if x is col vector
+rowMeans(M)->M if x is col vector
+rowVars(M)->M if x is col vector
+rowMaxs(M)->M if x is col vector
+rowMins(M)->M if x is col vector
+rowSums(M)->sum(M) if x is row vector
+rowMeans(M)->Mean(M) if x is row vector
+rowMaxs(M)->Max(M) if x is row vector
+rowMins(X)->Min(M) if x is row vector
+rowVars(X)->Var(M) if x is row vector
+
+sum(M+N) -> sum(A)+sum(B)
+
+colSums(M*N) -> t(M)N
+
+rowSums(M*M) -> Mt(N)
+
+simplifyRowWiseAgg
+1, n, i name(Mi
+1, n, i name(Mi
+1, n, i name(Mi
+1, n, i name(Mi
+1, n, i name(Mi
+1, j, Ro
+1, j, Ro
+1, j, Ro
+1, j, Ro
+1, j, Ro
+pushdownSumOnAdd
+
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+∀Mi
+
+1 rowSums(Mi
+1 rowMeans(Mi
+1 rowMaxs(Mi
+1 rowMins(Mi
+1 rowV ars(Mi
+
+1, n) ∧ size(Mi
+1, n) ∧ size(Mi
+1, n) ∧ size(Mi
+1, n) ∧ size(Mi
+1, n) ∧ size(Mi
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+1, Ro
+
+1, i, “1”) → rowSums(Mi
+1, i, “1”) → rowMeans(Mi
+1, i, “1”) → rowV ars(Mi
+1, i, “1”) → rowMaxs(Mi
+1, i, “1”) → rowMaxs(Mi
+1, “1”, j) → sum(Mi
+1, “1”, j) → Mean(Mi
+1, “1”, j) → Max(Mi
+1, “1”, j) → Min(Mi
+1, “1”, j) → V ar (Mi
+
+1, Mi
+1)
+1, Mi
+1)
+1, Mi
+1)
+1, Mi
+1)
+1, Mi
+1)
+1, Ro
+1 )
+1, Ro
+1 )
+1, Ro
+1 )
+1, Ro
+1 )
+1, Ro
+1 )
+
+1 ) ∧ size(Mi
+1 ) ∧ size(Mi
+1 ) ∧ size(Mi
+1 ) ∧ size(Mi
+1 ) ∧ size(Mi
+
+∀Mi
+
+1, N i
+∃s2, s3 sum(Mi
+
+1, s addM (Mi
+
+1, N i , s1) ∧ sum(Mi
+
+1, s1) →
+
+1, s2) ∧ sum(N i
+
+1, s3) ∧ ∧adds (s2, s3, s1)
+
+ColSumsMVMult
+1, Ro
+1, N i
+
+1, Ro
+
+∀Mi
+
+∀Mi
+
+1, N i
+
+1, Ro
+
+1, Ro
+
+2, j size(N i
+
+2, i size(N i
+∃Ro
+
+3tr (Mi
+
+1, Ro
+
+1, i, “1”) ∧ multiE (Mi
+3 ) ∧ multi(Ro
+1, “1”, j) ∧ multiE (Mi
+3 ) ∧ multi(Mi
+
+1, Ro
+
+1, N i
+3, N i
+1, N i
+1, Ro
+
+1 ) ∧ colSums(Ro
+1, Ro
+1, Ro
+2 )
+1, Ro
+1 ) ∧ rowSums(Ro
+3, Ro
+2 )
+
+∃Ro
+
+3tr (N i
+
+1, Ro
+2 )
+
+1, Ro
+2 )
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+C P¬Opt AND PV iews PIPELINES REWRITES
+
+No.
+P1.1
+P1.4
+P1.7
+P1.10
+P1.13
+P1.16
+P1.25
+
+Rewrite
+N T MT
+Av1 + Bv1
+A
+colSums(A)T
+sum(colSums(M)T ∗ rowSums(N ))
+sum(A)
+
+No.
+P1.2
+P1.5
+P1.8
+P1.11
+P1.14
+P1.17
+
+Rewrite
+(A + B)T
+D
+(s1 + s2)A
+colSums(A + B)T
+sum(colSums(M)T ∗ rowSums(N ))
+det(C) ∗ det(D) ∗ det(C)
+
+No.
+P1.3
+P1.6
+P1.9
+P1.12
+P1.15
+P1.18
+
+Rewrite
+(DC)−1
+s1trace(D)
+det(D)
+colSums(M)N
+M(N M)
+sum(A)
+
+M ⊙ (N T /(M(N N T )))
+
+Table 11: P¬Opt Pipelines (Part 1) Rewrites
+
+No.
+P2.1
+P2.4
+P2.7
+P2.10
+P2.13
+P2.16
+P2.25
+
+Rewrite
+trace(C) + trace(D)
+s1(A + B)
+C
+MrowSumsN )
+(M(N M))T
+trace((DC)−1) + traceD)
+
+No.
+P2.2
+P2.5
+P2.8
+P2.11
+P2.14
+P2.17
+
+Rewrite
+1/det(D)
+1/det((C + D))
+det(C) ∗ det(D)
+sum(A) + sum(B)
+(M(N M))N
+((((C + D)−1)T )D
+u1vT
+Table 12: P¬Opt Pipelines (Part 2) Rewrites
+
+No.
+P2.3
+P2.6
+P2.9
+P2.12
+P2.15
+P2.18
+
+2 v2 − Xv2
+
+Rewrite
+trace(D)
+(D−1
+C)T
+
+trace(DC) + trace(D)
+sum(colSums(M)T ∗ rowSums(N )
+sum(A)
+rowSums(A + B)T
+
+No. Expression No. Expression No. Expression
+V1
+V4
+V7
+V10
+
+V3
+V6
+V9
+V12
+Table 13: The set of views Vexp
+
+N M
+A + B
+(D + C)−1
+(DC)T
+
+(D)−1
+u1vT
+2
+C−1
+det(CD)
+
+(CT )−1
+DC
+CT D
+det(DC)
+
+V2
+V5
+V8
+V11
+
+No.
+P1.2
+P1.11
+P1.19
+P1.22
+P1.30
+P2.5
+P2.11
+P2.16
+P2.20
+P1.23
+
+Rewrite
+(V6)T
+colSums(V6)T
+V2
+trace(V9)
+V3 ⊙ V3RT
+det(V9)
+sum(V6)
+trace(V7V1) + traceD)
+(MV3)T
+det((V7V1) + D)
+
+No.
+P1.3
+P1.15
+P1.20
+P1.24
+P2.2
+P2.6
+P2.13
+P2.17
+P2.21
+P2.26
+
+Rewrite
+V7V1
+M(V3)
+trace(V7)
+trace(V1V7) + trace(D)
+det(V1)
+(V1C)T
+(MV3)T
+(V T
+9 )D
+1 (DT v1))
+exp(V9)
+
+V1(V T
+
+No.
+P1.4
+P1.17
+P1.21
+P1.29
+P2.4
+P2.9
+P2.14
+P2.18
+P2.25
+P2.27
+
+Rewrite
+(V6)v1
+V10 ∗ det(C)
+(C + V1)T
+V5CCC
+s1(V 6)
+trace(V12) + trace(D)
+MV3N
+rowSums(V6)T
+V4v1 − Xv1
+V T
+9 V5
+
+Table 14: PV iews Pipelines Rewrites
+
+HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+D ADDITIONAL RESULTS: P¬Opt PIPELINES - NAÏVE-BASED COST MODEL
+
+(a) P1.2
+
+(b) P1.2
+Figure 11: P1.2 evaluation time with and without rewriting
+
+(c) P1.2
+
+(a) P1.2
+
+(b) P1.2
+Figure 12: P1.2 evaluation time with and without rewriting
+
+(c) P1.2
+
+(a) P1.6
+
+(b) P1.6
+
+Figure 13: P1.6 evaluation time with and without rewriting
+
+(a) P1.8
+
+(b) P1.8
+Figure 14: P1.8 evaluation time with and without rewriting
+
+(c) P1.8
+
+ 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL2,B:AL2 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]A:NL2,B:NL2 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10 100SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn4,B:Syn4 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]D:Syn5 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]D:Syn6 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL2,B:AL2 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+(a) P1.8
+
+(b) P1.8
+Figure 15: P1.8 evaluation time with and without rewriting
+
+(c) P1.8
+
+(a) P1.9
+Figure 16: P1.9 evaluation time with and without rewriting
+
+(a) P1.10
+
+(b) P1.10
+Figure 17: P1.10 evaluation time with and without rewriting
+
+(c) P1.10
+
+(a) P1.10
+
+(b) P1.10
+Figure 18: P1.10 evaluation time with and without rewriting
+
+(c) P1.10
+
+ 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]A:NL2,B:NL2 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn4,B:Syn40.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]D:Syn5X 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL2 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL2 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn4HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+(a) P1.11
+
+(b) P1.11
+Figure 19: P1.11 evaluation time with and without rewriting
+
+(c) P1.11
+
+(a) P1.11
+
+(b) P1.11
+Figure 20: P1.11 evaluation time with and without rewriting
+
+(c) P1.11
+
+(a) P1.12
+
+(b) P1.12
+Figure 21: P1.12 evaluation time with and without rewriting
+
+(c) P1.12
+
+(a) P1.14
+
+(b) P1.14
+
+Figure 22: P1.14 evaluation time with and without rewriting
+
+ 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL2,B:AL2 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]A:NL2,B:NL2 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10 100SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn4,B:Syn40.0010.010.1110SMRSPTotalExecutionTime(logscale)-[s]M:AS,N:Syn2X 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn20.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]M:Syn1,N:Syn2X0.0010.010.1110SMRSPTotalExecutionTime(logscale)-[s]M:AS,N:Syn2X 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn2Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+(a) P1.15
+
+(b) P1.15
+
+Figure 23: P1.15 evaluation time with and without rewriting
+
+(a) P1.16
+
+(b) P1.16
+Figure 24: P1.16 evaluation time with and without rewriting
+
+(c) P1.16
+
+(a) P1.16
+
+(b) P1.16
+Figure 25: P1.16 evaluation time with and without rewriting
+
+(c) P1.16
+
+(a) P1.17
+Figure 26: P1.17 evaluation time with and without rewriting
+
+ 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]M:AS,N:Syn2 0.001 0.01 0.1 1 10 100SMRNPTFSPTotal Execution Time (logscale) -[s]M:Syn1,N:Syn2 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL2 0.001 0.01 0.1SMRTotal Execution Time (logscale) -[s]A:NL1 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL2 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn40.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]D:Syn5,C:Syn5XXHADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+(a) P1.18
+
+(b) P1.18
+Figure 27: P1.18 evaluation time with and without rewriting
+
+(c) P1.18
+
+(a) P1.18
+
+(b) P1.18
+Figure 28: P1.18 evaluation time with and without rewriting
+
+(c) P1.18
+
+(a) P1.25
+
+(b) P1.25
+
+Figure 29: P1.25 evaluation time with and without rewriting
+
+(a) P2.1
+
+(b) P2.1
+
+Figure 30: P2.1 evaluation time with and without rewriting
+
+ 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL2 0.001 0.01 0.1SMRTotal Execution Time (logscale) -[s]A:NL1 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL2 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn4X0.0010.010.1110SMRSPTotalExecutionTime(logscale)-[s]M:AS,N:Syn2 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn2 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn5 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]C:Syn6,D:Syn6Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+(a) P2.2
+Figure 31: P2.2 evaluation time with and without rewriting
+
+(a) P2.3
+
+(b) P2.3
+
+Figure 32: P2.3 evaluation time with and without rewriting
+
+(a) P2.4
+
+(b) P2.4
+Figure 33: P2.4 evaluation time with and without rewriting
+
+(c) P2.4
+
+(a) P2.4
+
+(b) P2.4
+Figure 34: P2.4 evaluation time with and without rewriting
+
+(c) P2.4
+
+X0.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]D:Syn5X 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]D:Syn5 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]D:Syn6 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL2,B:AL2 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL2,B:NL2 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn4,B:Syn4HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+(a) P2.5
+
+(b) P2.6
+Figure 35: P2.5, P2.6 and P2.8 evaluation time with and without rewriting
+
+(c) P2.8
+
+(a) P2.9
+
+(b) P2.9S
+
+Figure 36: P2.9 evaluation time with and without rewriting
+
+(a) P2.10
+
+(b) P2.10
+Figure 37: P2.10 evaluation time with and without rewriting
+
+(c) P2.10
+
+(a) P2.11
+
+(b) P2.11
+Figure 38: P2.11 evaluation time with and without rewriting
+
+(c) P2.11
+
+0.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5XX0.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5X0.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5XX 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn5 0.001 0.01 0.1 1 10 100SMRNPTFSPTotal Execution Time (logscale) -[s]C:Syn6,D:Syn60.0010.010.1110SMRSPTotalExecutionTime(logscale)-[s]M:AS,N:Syn2X 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn20.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]M:Syn1,N:Syn2XX 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1 1 10 100SMRSPTotal Execution Time (logscale) -[s]A:AL2 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+(a) P2.11
+
+(b) P2.11
+Figure 39: P2.11 evaluation time with and without rewriting
+
+(c) P2.11
+
+(a) P2.13
+
+(b) P2.13
+Figure 40: P2.13 evaluation time with and without rewriting
+
+(c) P2.13
+
+(a) P2.14
+
+(b) P2.14
+
+Figure 41: P2.14 evaluation time with and without rewriting
+
+(a) P2.15
+
+(b) P2.15
+Figure 42: P2.15 evaluation time with and without rewriting
+
+(c) P2.15
+
+ 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL2 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn4 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]M:AS,N:Syn2 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn2 0.001 0.01 0.1 1 10 100SMRNPTFSPTotal Execution Time (logscale) -[s]M:Syn1,N:Syn2 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]M:AS,N:Syn2 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn2 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL2 0.001 0.01 0.1SMRTotal Execution Time (logscale) -[s]A:NL1HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+(a) P2.15
+
+(b) P2.15
+Figure 43: P2.15 evaluation time with and without rewriting
+
+(c) P2.15
+
+(a) P2.16
+Figure 44: P2.16 evaluation time with and without rewriting
+
+(a) P2.18
+
+(b) P2.18
+Figure 45: P2.18 evaluation time with and without rewriting
+
+(c) P2.18
+
+(a) P2.18
+
+(b) P2.18
+Figure 46: P2.18 evaluation time with and without rewriting
+
+(c) P2.18
+
+ 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL2 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn40.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5X 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL2,B:AL2 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]A:NL2,B:NL2 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10 100SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn4,B:Syn4Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+E ADDITIONAL RESULTS: P¬Opt PIPELINES - MNC-BASED COST MODEL
+
+(a) P1.2
+
+(b) P1.2
+Figure 47: P1.2 evaluation time with and without rewriting
+
+(c) P1.2
+
+(a) P1.6
+Figure 48: P1.6 evaluation time with and without rewriting
+
+(a) P1.8
+
+(b) P1.8
+Figure 49: P1.8 evaluation time with and without rewriting
+
+(c) P1.8
+
+(a) P1.9
+Figure 50: P1.9 evaluation time with and without rewriting
+
+ 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]D:Syn5 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn30.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]D:Syn5XXHADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+(a) P1.10
+
+(b) P1.10
+Figure 51: P1.10 evaluation time with and without rewriting
+
+(c) P1.10
+
+(a) P1.11
+
+(b) P1.11
+Figure 52: P1.11 evaluation time with and without rewriting
+
+(c) P1.11
+
+(a) P1.12
+
+(b) P1.12
+Figure 53: P1.12 evaluation time with and without rewriting
+
+(c) P1.12
+
+(a) P1.14
+
+(b) P1.14
+
+Figure 54: P1.14 evaluation time with and without rewriting
+
+ 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3X0.0010.010.1110SMRSPTotalExecutionTime(logscale)-[s]M:AS,N:Syn2 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn2X0.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]M:Syn1,N:Syn2X0.0010.010.1110SMRSPTotalExecutionTime(logscale)-[s]M:AS,N:Syn2X 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn2Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+(a) P1.15
+
+(b) P1.15
+
+Figure 55: P1.15 evaluation time with and without rewriting
+
+(a) P1.16
+
+(b) P1.16
+Figure 56: P1.16 evaluation time with and without rewriting
+
+(c) P1.16
+
+(a) P1.17
+Figure 57: P1.17 evaluation time with and without rewriting
+
+(a) P1.18
+
+(b) P1.18
+Figure 58: P1.18 evaluation time with and without rewriting
+
+(c) P1.18
+
+ 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]M:AS,N:Syn2 0.001 0.01 0.1 1 10 100SMRNPTFSPTotal Execution Time (logscale) -[s]M:Syn1,N:Syn2 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1SMRTotal Execution Time (logscale) -[s]A:NL1 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn30.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]D:Syn5,C:Syn5XX 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1SMRTotal Execution Time (logscale) -[s]A:NL1 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+(a) P1.25
+
+(b) P1.25
+
+Figure 59: P1.25 evaluation time with and without rewriting
+
+(a) P2.1
+
+(b) P2.2
+Figure 60: P2.1 evaluation time with and without rewriting
+
+(c) P2.3
+
+(a) P2.4
+
+(b) P2.4
+Figure 61: P2.4 evaluation time with and without rewriting
+
+(c) P2.4
+
+(a) P2.5
+
+(b) P2.6
+
+(c) P2.8
+
+(d) P2.9
+
+Figure 62: P2.5, P2.6, P2.8 and P2.9evaluation time with and without rewriting
+
+0.0010.010.1110SMRSPTotalExecutionTime(logscale)-[s]M:AS,N:Syn2X 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn2 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn50.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]D:Syn5XX 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]D:Syn5 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn30.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5XX0.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5X0.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5XX 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn5Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+(a) P2.10
+
+(b) P2.10
+Figure 63: P2.10 evaluation time with and without rewriting
+
+(c) P2.10
+
+(a) P2.11
+
+(b) P2.11
+Figure 64: P2.11 evaluation time with and without rewriting
+
+(c) P2.11
+
+(a) P2.13
+
+(b) P2.13
+Figure 65: P2.13 evaluation time with and without rewriting
+
+(c) P2.13
+
+(a) P2.14
+
+(b) P2.14
+
+Figure 66: P2.14 evaluation time with and without rewriting
+
+0.0010.010.1110SMRSPTotalExecutionTime(logscale)-[s]M:AS,N:Syn2X0.0010.010.1110SMRTotalExecutionTime(logscale)-[s]M:NS,N:Syn20.0010.010.1110SMRNPTFSPTotalExecutionTime(logscale)-[s]M:Syn1,N:Syn2XX 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]M:AS,N:Syn2 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn2 0.001 0.01 0.1 1 10 100SMRNPTFSPTotal Execution Time (logscale) -[s]M:Syn1,N:Syn2 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]M:AS,N:Syn2 0.001 0.01 0.1 1 10SMRTotal Execution Time (logscale) -[s]M:NS,N:Syn2HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+(a) P2.15
+
+(b) P2.15
+Figure 67: P2.15 evaluation time with and without rewriting
+
+(c) P2.15
+
+(a) P2.16
+Figure 68: P2.16 evaluation time with and without rewriting
+
+(a) P2.18
+
+(b) P2.18
+Figure 69: P2.18 evaluation time with and without rewriting
+
+(c) P2.18
+
+ 0.001 0.01 0.1 1SMRSPTotal Execution Time (logscale) -[s]A:AL1 0.001 0.01 0.1SMRTotal Execution Time (logscale) -[s]A:NL1 0.001 0.01 0.1 1SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn30.0010.010.1110100SMRNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5X 0.001 0.01 0.1 1 10SMRSPTotal Execution Time (logscale) -[s]A:AL1,B:Syn3 0.001 0.01 0.1 1SMRTotal Execution Time (logscale) -[s]A:NL1,B:Syn3 0.001 0.01 0.1 1 10SMRNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+F ADDITIONAL RESULTS: PV iews PIPELINES
+
+(a) P1.2
+(c) P1.3
+(b) P1.2
+Figure 70: P1.2 and P1.3 evaluation time with and without rewriting
+
+(a) P1.4
+
+(b) P1.4
+
+(c) P1.11
+
+(d) P1.11
+
+Figure 71: P1.4 and P1.11 evaluation time with and without rewriting
+
+(a) P1.17
+
+(b) P1.19
+
+(c) P1.20
+
+(d) P1.21
+
+Figure 72: P1.17,P1.19,P1.20 and P1.21 evaluation time with and without rewriting
+
+(a) P1.22
+
+(b) P1.23
+
+(c) P1.24
+
+(d) P1.29
+
+Figure 73: P1.22,P1.23,P1.24 and P1.29 evaluation time with and without rewriting
+
+ 0.001 0.01 0.1 1 10RNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]A:Syn4,B:Syn4 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn50.0010.010.11RNPTFSPTotalExecutionTime(logscale)-[s]A:Syn3,B:Syn3X0.0010.010.1110RNPTFSPTotalExecutionTime(logscale)-[s]A:Syn4,B:Syn4X 0.001 0.01 0.1 1 10RNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]A:Syn4,B:Syn4 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn5 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn5 0.001 0.01 0.1 1 10RNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]C:Syn5 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn50.0010.010.1110100RNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5XX 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn5 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn5HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+(a) P2.2
+
+(b) P2.4
+
+(c) P2.4
+
+(d) P2.5
+
+Figure 74: P2.2,P2.4 and P2.5 evaluation time with and without rewriting
+
+(a) P2.9
+
+(b) P2.11
+
+(c) P2.11
+
+(d) P2.16
+
+Figure 75: P2.9,P2.11 and P2.16 evaluation time with and without rewriting
+
+0.0010.010.1110100RNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5X 0.001 0.01 0.1 1RNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10RNPTFSPTotal Execution Time (logscale) -[s]A:Syn4,B:Syn4X0.0010.010.1110100RNPTFSPTotalExecutionTime(logscale)-[s]C:Syn5,D:Syn5 0.001 0.01 0.1 1 10RNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn5 0.001 0.01 0.1 1 10RNPTFSPTotal Execution Time (logscale) -[s]A:Syn3,B:Syn3 0.001 0.01 0.1 1 10RNPTFSPTotal Execution Time (logscale) -[s]A:Syn4,B:Syn4 0.001 0.01 0.1 1 10 100RNPTFSPTotal Execution Time (logscale) -[s]C:Syn5,D:Syn5Conference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+G P¬Opt AND PV iews PIPELINES REWRITES
+
+No.
+P1.1
+P1.4
+P1.7
+P1.10
+P1.13
+P1.16
+P1.25
+
+Rewrite
+N T MT
+Av1 + Bv1
+A
+colSums(A)T
+sum(colSums(M)T ∗ rowSums(N ))
+sum(A)
+
+No.
+P1.2
+P1.5
+P1.8
+P1.11
+P1.14
+P1.17
+
+Rewrite
+(A + B)T
+D
+(s1 + s2)A
+colSums(A + B)T
+sum(colSums(M)T ∗ rowSums(N ))
+det(C) ∗ det(D) ∗ det(C)
+
+No.
+P1.3
+P1.6
+P1.9
+P1.12
+P1.15
+P1.18
+
+Rewrite
+(DC)−1
+s1trace(D)
+det(D)
+colSums(M)N
+M(N M)
+sum(A)
+
+M ⊙ (N T /(M(N N T )))
+
+Table 15: P¬Opt Pipelines (Part 1) Rewrites
+
+No.
+P2.1
+P2.4
+P2.7
+P2.10
+P2.13
+P2.16
+P2.25
+
+Rewrite
+trace(C) + trace(D)
+s1(A + B)
+C
+MrowSumsN )
+(M(N M))T
+trace((DC)−1) + traceD)
+
+No.
+P2.2
+P2.5
+P2.8
+P2.11
+P2.14
+P2.17
+
+Rewrite
+1/det(D)
+1/det((C + D))
+det(C) ∗ det(D)
+sum(A) + sum(B)
+(M(N M))N
+((((C + D)−1)T )D
+u1vT
+Table 16: P¬Opt Pipelines (Part 2) Rewrites
+
+No.
+P2.3
+P2.6
+P2.9
+P2.12
+P2.15
+P2.18
+
+2 v2 − Xv2
+
+Rewrite
+trace(D)
+(D−1
+C)T
+
+trace(DC) + trace(D)
+sum(colSums(M)T ∗ rowSums(N )
+sum(A)
+rowSums(A + B)T
+
+No. Expression No. Expression No. Expression
+V1
+V4
+V7
+V10
+
+V3
+V6
+V9
+V12
+Table 17: The set of views Vexp
+
+N M
+A + B
+(D + C)−1
+(DC)T
+
+(D)−1
+u1vT
+2
+C−1
+det(CD)
+
+(CT )−1
+DC
+CT D
+det(DC)
+
+V2
+V5
+V8
+V11
+
+No.
+P1.2
+P1.11
+P1.19
+P1.22
+P1.30
+P2.5
+P2.11
+P2.16
+P2.20
+P1.23
+
+Rewrite
+(V6)T
+colSums(V6)T
+V2
+trace(V9)
+V3 ⊙ V3RT
+det(V9)
+sum(V6)
+trace(V7V1) + traceD)
+(MV3)T
+det((V7V1) + D)
+
+No.
+P1.3
+P1.15
+P1.20
+P1.24
+P2.2
+P2.6
+P2.13
+P2.17
+P2.21
+P2.26
+
+Rewrite
+V7V1
+M(V3)
+trace(V7)
+trace(V1V7) + trace(D)
+det(V1)
+(V1C)T
+(MV3)T
+(V T
+9 )D
+1 (DT v1))
+exp(V9)
+
+V1(V T
+
+No.
+P1.4
+P1.17
+P1.21
+P1.29
+P2.4
+P2.9
+P2.14
+P2.18
+P2.25
+P2.27
+
+Rewrite
+(V6)v1
+V10 ∗ det(C)
+(C + V1)T
+V5CCC
+s1(V 6)
+trace(V12) + trace(D)
+MV3N
+rowSums(V6)T
+V4v1 − Xv1
+V T
+9 V5
+
+Table 18: PV iews Pipelines Rewrites
+
+HADAD
+
+Conference’21, June 21, Xi’an, Shaanxi, China
+
+H ADDITIONAL RESULTS: FACTORIZED LA EXPERIMENTS
+[RA: Still more results to plot .. waiting for the experiments to finish]
+
+=⇒
+
+(b) P1.14
+Figure 76: Speed-ups of MorpheusR (with HADAD rewrites) over MorpheusR (without HADAD rewrites) for pipelines 1.12,
+1.14 and 2.11 on synthetic data for a PK-FK join.
+
+(a) P1.12
+
+(c) P2.11
+
+Figure 77: Speed-ups of MorpheusR (with HADAD rewrites) over MorpheusR (without HADAD rewrites) for pipelines 2.12
+and 2.15 on synthetic data for a PK-FK join.
+
+(a) P2.12
+
+(b) P2.15
+
+(b) P1.10
+Figure 78: RWf ind overhead as a percentage (%) of the total time (Qex ec + RWf ond ) for pipelines 1.1,1.10 and 1.13
+
+(c) P1.13
+
+(a) P1.1
+
+0510152012345Speedupspeedup > 1510<= speedup < 152<= speedup <10TimeoutTuple Ratio Feature Ratio0510152012345Speedup2<= speedup <1010<= speedup < 15speedup > 15TimeoutTuple Ratio Feature Ratio0510152012345Speedup1.4<=speedup <=2Timeout1.2<= speedup <1.4Tuple Ratio Feature Ratio0510152012345Speedup2<= speedup <1010<= speedup < 15speedup > 15TimeoutTuple Ratio Feature Ratio0510152012345Speedup1.4<=speedup <=2Timeout1.2<= speedup <1.4Tuple Ratio Feature Ratio0510152012345Speedup1< speedup <22<= speedup < 33<=speedup > 5Tuple Ratio Feature Ratio0510152012345Rewriting Overhead0.1%<= Overhead <0.3%Overhead <0.1%TimeoutTuple Ratio Feature Ratio0510152012345Rewriting Overhead4%<= Overhead <6%2%<= Overhead <4%1%<= Overhead <2%Overhead <1%Tuple Ratio Feature Ratio0510152012345Rewriting Overhead0.2%<= Overhead <0.4%0.1%<= Overhead <0.3%Overhead <0.1%TimeoutTuple Ratio Feature RatioConference’21, June 21, Xi’an, Shaanxi, China
+
+Rana Alotaibi†, Bogdan Cautis‡, Alin Deutsch†, Ioana Manolescu§
+
+(a) P1.16
+Figure 79: RWf ind overhead as a percentage (%) of the total time (Qex ec + RWf ond ) for pipelines 1.16 and 1.18
+
+0510152012345Rewriting Overhead4%<= Overhead <6%2%<= Overhead <4%1%<= Overhead <2%Overhead <1%Tuple Ratio Feature Ratio

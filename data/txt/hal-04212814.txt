@@ -1,0 +1,1445 @@
+Scalable Analytics on Multi-Streams Dynamic Graphs
+Angelos Anadiotis, Muhammad Ghufran Khan, Ioana Manolescu
+
+To cite this version:
+
+Angelos Anadiotis, Muhammad Ghufran Khan, Ioana Manolescu. Scalable Analytics on Multi-Streams
+Dynamic Graphs. BDA 2023 - 39th Conference on Data Management –   Principles, Technologies and
+Applications, Oct 2023, Montpellier, France. ￿hal-04212814￿
+
+HAL Id: hal-04212814
+
+https://hal.science/hal-04212814
+
+Submitted on 20 Sep 2023
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Distributed under a Creative Commons Attribution 4.0 International License
+
+Scalable Analytics on Multi-Streams Dynamic Graphs
+
+Angelos Anadiotis
+Oracle
+Lausanne, Switzerland
+
+Muhammad Ghufran Khan
+Inria & Institut Polytechnique de Paris
+Palaiseau, France
+
+Ioana Manolescu
+Inria & Institut Polytechnique de Paris
+Palaiseau, France
+
+ABSTRACT
+Several real-time applications rely on dynamic graphs to model
+and store data arriving from multiple streams. In addition to the
+high ingestion rate, the storage and query execution challenges are
+amplified in contexts where consistency should be considered when
+storing and querying the data. Our work addresses the challenges
+associated with multi-stream dynamic graph analytics. We propose
+a database design that can provide scalable storage and indexing,
+to support consistent read-only analytical queries (present and
+historical), in the presence of real-time dynamic graph updates that
+arrive continuously from multiple streams.
+
+KEYWORDS
+Dynamic graph, read-only present and historical queries, multi-
+stream graph processing
+
+1 INTRODUCTION
+Dynamic graphs are omnipresent in the context of real-time appli-
+cations that generate massive amounts of events. These events can
+be seen as high-velocity data streams, whose timely analysis is crit-
+ical for applications such as monitoring of cyber attacks in system
+security applications [16], fraud detection in financial institutions
+[16], anomaly detection in computer networks [8] and many more.
+Our work considers the above-mentioned real-time use cases.
+We consider a database modeled as a labeled property graph (LPG),
+that is continuously updated. Updates may arrive from multiple
+streams, creating a need for appropriate transaction support, in
+order to avoid inconsistencies; on such a graph, we must be able to
+answer analytical queries about the current graph state, as well as
+historical queries.
+
+In this paper, we present the challenges (Section 2), outline the
+approach we investigate (Section 3), describe a new data structure
+we propose for storing dynamic graph data, named HAL (Section 4),
+together with its associated algorithms (Section 5 to Section 7).
+We present an experimental evaluation showing that our system’s
+specific optimizations allow it to cut a good compromise between
+memory and speed, and outperform comparable systems, in Sec-
+tion 9, before discussing more related work and concluding.
+
+2 CHALLENGES
+In our problem setting, we focus on systems that can continuously
+ingest temporal labeled property graph (LPG) updates from multiple
+streams while at the same time supporting a diverse set of graph
+analytic queries with snapshot isolation consistency guarantees. Fur-
+ther, we assume that the clocks at the sites where streams originate
+are synchronized; this can be achieved by various techniques well-
+known in the distributed systems area, e.g., [9].
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+2023. ACM ISBN 978-x-xxxx-xxxx-x/YY/MM. . . $15.00
+https://doi.org/10.1145/nnnnnnn.nnnnnnn
+
+Figure 1: Example scenario for out-of-order update
+
+Systems providing snapshot isolation guarantees typically order
+transactions based on their timestamps. Ideally, these timestamps
+would reflect the generation time of each ingested event, especially
+given that the clocks on the sources are synchronized. However,
+updates from a given stream may arrive later with respect to other
+streams due to any kind of transmission delay, leading to out-of-
+order [6] updates. Therefore, for every pair of events, the order of
+their ingestion time does not necessarily correspond to the order
+of creation time, and hence, any causal order between events may
+not be reflected by the database at all times.
+
+Figure 1 exemplifies a sequence of updates labeled A to E, con-
+sidering the update generation time (the time when the update is
+generated by a given stream) 𝑉𝑇 . Note that update B arrives out
+of order (after D, which was emmitted later than B). After the first
+three received updates have been ingested, that is, reflected in the
+database state, query 𝑄 arrives and requires two iterations on the
+updates ingested up to that time. In the first iteration, the query
+𝑄𝑖 computes on the updates (A, C, and D), and before starting the
+second iteration 𝑄 (𝑖+1) , the delayed update B arrives. At this point,
+if B became visible to the query, then the database state would be
+consistent with respect to the data sources, but it would also break
+snapshot the isolation guarantees, which is not acceptable.
+
+Existing systems, e.g., [8, 11, 13, 16], support temporal queries
+in a multi-stream setting, such as the one that the paper studies, by
+storing the event generation time as a property and then considering
+it during querying. However, in such a case, each query would need
+to access the whole database in order to filter out the events that
+do not match the time frame that the query considers. Therefore,
+the event generation time needs to be treated as a first-class citizen
+in dynamic graph databases.
+
+A straight-forward approach to the above problem is to use an
+index on the event generation time. Nevertheless, graph queries
+already require indices to efficiently navigate through the graph
+with varying access patterns per query/graph traversal type. Ac-
+cordingly, there is a need for a system design that addresses the
+challenges that are present both in traditional and in temporal
+graph queries.
+
+In summary, this paper identifies the following challenges in
+building a scalable temporal graph database management system:
+• C1: Provide scalable and consistent storage for multi-stream
+
+graph data ingestion.
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+A. Anadiotis, G. Khan, I. Manolescu
+
+• C2: Enable scalable time-based graph analytics for point
+
+4 DATA STORE: HISTORY ADJACENCY LIST
+
+queries.
+
+• C3: Design storage organization and layout for dynamic
+
+property graphs.
+
+Prior work addressing some of the challenges described above
+
+will be discussed in more detail in Section 10.
+
+3 APPROACH
+We aim at a scalable system that can answer analytical queries
+(present, historical) over dynamic graphs, updated multiple streams,
+whose updates may arrive out-of-order. To address the challenges
+listed in Section 2:
+
+• We maintain a data store that follows the multi-version
+concurrency control (MVCC, in short) [15] storage model.
+In this store, the temporal graph updates from multiple
+streams are considered write-only transactions, while analyt-
+ical queries (present and historical) are executed as read-only
+transactions. This ensures consistent graph analytics even in
+the presence of out-of-order updates, addressing challenges
+C1. Furthermore, to ensure correct edge semantics and con-
+sistency, we assume that each sender (stream) is coherent,
+which means that:
+– No sender ever sends a redundant edge insertion; an in-
+sertion is redundant if the stream previously sent such
+an insertion with no deletion of the same data item in
+between;
+
+– Similarly, there are no redundant edge deletions; a delete
+is redundant if the stream has already sent such a deletion,
+and the stream has not sent an insertion of an identical
+same data in between;
+
+– No sender will send a deletion of an entry for which it has
+
+not sent an insertion previously.
+
+• To efficiently process point queries based on source time,
+we ensure that the per-source neighbors lists are sorted by
+source time (the time when an event originates on its source
+machine) in descending order, i.e., from the latest to the oldest.
+We use an Adaptive Radix Tree (ART) [10] index to preserve
+this order in the presence of an out-of-order update; this
+addresses the challenge C2. Details of the use of the ART
+appear in Section 4.
+
+• To address challenge C3, we design the system in such a way
+that the graph topology and graph properties are stored sepa-
+rately, thus updates to the topology are processed separately
+from graph property updates. This allows us to optimize
+data access paths separately for these two largely orthogo-
+nal components of the property graph.
+
+Core Design Decisions We consider an in-memory dynamic graph
+database management system. The graph is stored in an adjacency
+list, which provides a good trade-off between data access locality,
+required in queries, and high ingestion throughput, required in
+insertions. In the following, the data structures and algorithms that
+we propose achieve low computational complexity while main-
+taining high data access locality to optimize the use of modern
+hardware in scale-up servers.
+
+(HAL)
+
+In this section, we describe the main data structure we use to address
+challenges C1 and C2.
+
+We introduce the append-only History Adjacency List (HAL,
+in short) data store, which ensures scalable data ingestion in the
+multi-stream scenarios as well as graph analytics in the presence
+of present and historical read-only queries.
+
+As a general rule, each update is an edge addition or deletion,
+and we organize such updates primarily according to the source
+vertex of the added/deleted edge (not to be confused with an update
+source, one stream or site from which updates originate).
+
+Within the HAL, we use a Vertex Array (VA, in short), and
+Source Time sorted Adjacency List (STAL, in short) as shown
+in Figure 2. Both the VA and the STAL have an entry for each graph
+vertex, denoted, respectively, VA[𝑠] and STAL[𝑠].
+
+Each VA[𝑠] entry stores five fields:
+
+(1) A reference to the STAL entry corresponding to this vertex;
+(2) The Latest Source Time (LST, in short), i.e., the latest
+source time of an in-order update received so far for this
+vertex;
+
+(3) A Hash table (HT[𝑠], in short) keyed by the destination
+vertices 𝑑 connected to 𝑠 by some an edge 𝑠 → 𝑑 . The HT
+value associated to a given 𝑑 is the Update Position and
+Indicator (UPI, in short) of 𝑠 → 𝑑, denoted UPI[𝑠, 𝑑]. It
+compactly encodes the position of the latest (in-order or
+out-of-order) 𝑠 → 𝑑 entry in the STAL, together with a few
+more fields. Details of the HT and UP will be provided in
+Section 7;
+
+(4) Degree: the number of edge entries in the STAL;
+(5) A lock, used to prevent conflicts between transactions up-
+
+dating 𝑠.
+
+For each source vertex 𝑠, its Source-Time ordered Adjacency
+
+List (STAL, in short), denoted STAL[𝑠], contains:
+
+• References to STAL blocks (STALBs, see below);
+• STAL metadata, specifically:
+
+– curPos, which points to the STALB most recently inserted
+
+in STAL[𝑠];
+
+– size, the length of STAL[𝑠] vector;
+– isDeletion, stating whether updates in STAL[𝑠] comprise
+
+one or more deletions;
+
+– emptySpace, the number of slots that have been freed by
+
+successive deletions in STAL[𝑠].
+
+STAL[𝑠] is ordered by source update time, in the following sense:
+if the address of a block 𝑆0 appears in STAL[𝑠] before the address
+of another 𝑆1, all the source update times appearing in 𝑆1 are after
+those appearing in 𝑆0 (as illustrated in Figure 2).
+
+Each STALB stores information about a (fixed) number of edges
+going from 𝑠 to various destination nodes. Specifically, the STALB
+comprises:
+
+(1) Metadata in the first 8 bytes (items (5) to (9) below);
+(2) DestEntries stores edge entries whose source is 𝑠 and having
+various destination ids. These are sorted in the descending
+order of the source time of the update 𝑠 → 𝑑;
+
+Scalable Analytics on Multi-Streams Dynamic Graphs
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+State-of-the-art Present query Historical queries Out-of-order update
+
+YES
+LiveGraph
+YES
+Teseo
+YES
+Sortledton
+Our system (Hal) YES
+
+YES
+NO
+NO
+YES
+
+NO
+NO
+NO
+YES
+
+Table 1: Comparison of state-of-the-art systems in the context of our dynamic graph challenges.
+
+Figure 2: History Adjacency List (HAL)
+
+(3) IEMEntries, storing addresses of In-order Edge Entry
+Metadata (IEM), in short (see below) entries for each of the
+above edge updates.
+
+(4) PropertyRef, a reference to a vector with the same number
+of entries storing, for each of the above edge updates, the
+properties that the edge may have, e.g., edge weight, etc.
+PropertyRef is stored in the last 8 bytes of STALB;
+
+(5) Blocksize, the size of the STALB;
+(6) CurIndex, the position of the most recently inserted entry
+
+in the STALB.
+
+(7) Two boolean flags (IsDelete and OOO) indicating whether
+there are deletions, or out-of-order updates in the STALB;
+(8) DeletedEntries stores the number of deleted entries in the
+
+STALB.
+
+(9) The PerEdgeLock field is used to lock the STALB if needed.
+
+DestEntries and IEMEntries each occupy half of the STALB space
+not taken by the metadata or by PropertyRef. For instance, Figure 2
+illustrates the STALB labeled S0, over 64 bytes: 8 bytes for metadata
+
+(at the left), 8 bytes for edge properties (at the right), 24 bytes (3
+entries) for DestEntries and 24 bytes (3 entries) for IEMEntries.
+Each IEM (In-order Edge entry Metadata) block consists of:
+(1) The write time-stamp (WTS) is the transaction time of the
+edge, that is, the time when it is received at the database site;
+(2) The SrcTime is the time when an edge is emitted from the
+
+source machine;
+
+(3) The Invalidation Time Metadata (ITM) stores informa-
+
+tion about edge deletion (if applicable):
+• The source time of the deletion request, SrcTime;
+• The transaction time of the deletion request, WTS.
+(4) The out-of-order update (OOO) field stores the root of an
+ART [10] in which out-of-order edge entry metadata (OEM,
+in short) will be inserted. The order among entries in the
+ART is that of the update source time (recall that we con-
+sider the stream sources “reasonably” synchronized among
+themselves, thus a single timeline can be constructed from
+their source times).
+
+Overall, the STAL structure ensures the update entries for a given
+source vertex 𝑠 are stored in the descending order of their source time.
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+A. Anadiotis, G. Khan, I. Manolescu
+
+This is achieved on one hand through the ARTs, and on the other
+hand by keeping other data structures time-sorted during insertions,
+updates, and when querying, while also ensuring low complexity
+(in 𝑂 (1)) for the operations we expect to be most common: in-order
+insertions and deletions. We discuss these algorithms next.
+
+5 INSERTION
+We detail the steps necessary in our platform for recording the
+arrival of a new edge, denoted 𝑠 → 𝑑. As a recall, we need to ensure
+scalable and consistent storage (challenge C1) whether updates
+arrive in order (the database site receives them in the order of
+their emission at the source sites), or out of order. Our algorithms
+leverage our proposed storage organization and layout for dynamic
+graphs (challenge C3). Further, meeting this challenges will enable
+to also provide efficient querying of the dynamic graphs (challenge
+C2), as we will show in Section 8. A new edge (insertion) entry
+𝑠 → 𝑑 received at the database site is procesed as follows:
+
+(1) Locate in the VA the position corresponding to 𝑠, e.g., if
+the new edge is 0 → 1 arriving at 10:00 am (𝑉𝑇 ), this is
+the VA[0]. Lock this position to prevent conflicts between
+several write-transactions having the source vertex 𝑠.
+(2) Compare the new edge entry update source time (𝑆𝑇 ) to the
+
+LST value in VA[𝑠].
+(a) If LST < 𝑆𝑇 , then 𝑠 → 𝑑 is an in-order update; follow the
+
+steps in Section 5.1 below.
+
+(b) Otherwise, it is an out-of-order update; follow the steps in
+
+Section 5.2 below.
+
+(3) Unlock STAL[𝑠].
+
+We next show how each of these insertions is handled.
+
+5.1 In-order insertion
+We handle these as follows.
+
+(1) Create an IEM block with: the edge’s source time in SrcTime,
+NULL in the ITM, NULL in the OOO, WTS as the edge’s
+transaction time.
+
+(2) Locate the STALB, say 𝑆𝑖𝑜 , which is currently receiving up-
+dates. If 𝑆𝑖𝑜 is full (that is, it contains L2Size entries), proceed
+to (3) below, otherwise, to (4).
+
+(3) If the L2Size of 𝑆𝑖𝑜 is still smaller than an upper bound
+MaxBlockSize, then double the size of 𝑆𝑖𝑜 , update the meta-
+data accordingly, and follow step (4). The aggressive resizing
+(by doubling up), on top of a small initial size, is adopted
+since it has been shown [5] to yield good performance in
+the (frequent) case when the number of edges adjacent to a
+node follows a power-law distribution. Otherwise (𝑆𝑖𝑜 had
+already been extended up to size MaxBlockSize), create a
+new STALB, call it 𝑆𝑛𝑒𝑤, of size 1, with the appropriate meta-
+data, and insert 𝑆𝑛𝑒𝑤 in STAL[𝑠]. The role of 𝑆𝑖𝑜 below (4)
+will be played by 𝑆𝑛𝑒𝑤.
+
+(4) In 𝑆𝑖𝑜 , at position 𝑆𝑖𝑜 .CurIndex-1, store 𝑑 in the DestEntries,
+the IEM block in the IEMEntries, the 𝑠 → 𝑑 edge properties
+in the Property vector. Then, update 𝑆𝑖𝑜 .CurIndex, decre-
+menting it by 1.
+
+(5) Create a new UPI, denoted UPI𝑒 , storing the position (in
+the STAL) of the newly inserted edge entry. We say UPI𝑒
+is an in-order UPI, since it is due to an in-order insertion.
+
+Concretely, UPI𝑒 is an 8-bytes bit vector, structured in six
+fields. Figure 3 details their relative positions and lengths in
+the UPI, starting with the 0-th bit at the right:
+
+𝑖𝑢
+63
+
+𝑑𝑠
+(52, 62)
+
+𝑏𝑠
+(48, 51)
+
+𝑏𝑖
+(37, 47)
+
+𝑠𝑠
+(32, 36)
+
+𝑠𝑖
+(0, 31)
+
+Figure 3: In-order Update position indicator (UPI) Bit Vector
+
+• 𝑠𝑖 , starting at position 0, stores on 32 bits 𝑆𝑖𝑜 .CurrPos, the
+
+current position where 𝑠 → 𝑑 was inserted;
+
+• 𝑠𝑠 stores on 5 bits as required to store the currrent size of
+STAL[𝑠]. Recall that STAL[𝑠] is created with an initial size
+of 1 and then its size is always a power of 2; for example,
+in Figure 2, the size of the 𝑆𝑇 𝐴𝐿[𝑠] is 1, we store 𝑙𝑜𝑔2 (1)
+= 0. With 5 bits we can store values up to 32, leading to
+MaxBlockSize=232.
+
+• 𝑏𝑖 stores on 11 bits 𝑆𝑖𝑜 .CurIndex.
+• 𝑏𝑠 stores the size of S𝑖𝑜 , the STALB where the edge entry
+
+is inserted.
+
+• 𝑑𝑠 stores the 11-bit suffix of 𝑑’s node ID;
+• The 𝑖𝑢 flag (bit at position 63) is set to 1.
+Then, UPI𝑒 is added to the hash table HT[𝑠]. More details on
+the UPI and the hash table will be provided in Section 7.
+For instance, assume we receive the following successive inser-
+tions: 0 → 1 and 0 → 2 at timestamps 10:00 am, and 10:05 am
+respectively. The resulting entries in our data structures are shown
+in black in Figure 2, while the newly created UPI (at the bottom left
+in Figure 2) has the values 1
+0 in its six fields.
+1
+Note that we store in 𝑑𝑠 only an 11-bit suffix of 𝑑’s identifier (not the
+full ID). While we rely on suffices for compactness, extra measures
+are taken when reading the data, to avoid confusing nodes whose
+IDs have the same suffix. We detail how this is achieved in Section 7.
+As shown above, the computational complexity of handling an
+in-order insertion is 𝑂 (1), since each step (including doubling
+up a STALB) takes constant time.
+
+2
+
+3
+
+0
+
+5.2 Out-of-order insertion
+To handle the out-of-order insertion 𝑠 → 𝑑:
+
+(1) Create an out-of-order edge entry metadata (OEM) block. In
+this block, DNode stores 𝑑, WTS refers to the transaction
+time, SrcTime is the source time of the out-of-order update,
+and the ITM block is set to null.
+
+(2) Through binary search on STAL[𝑠], using the update source
+timestamp, find the STALB, say 𝑆𝑜𝑜 , where the out-of-order
+update should be placed.
+
+(3) Through binary search on 𝑆𝑜𝑜 .IEMEntries, using the update
+source timestamp, locate the IEM block where the out-of-
+order update should be placed.
+
+(a) If the OOO field of that IEM block is null, create an ART
+tree ordered by update source time, and holding the newly
+created OEM block as its first leaf. Otherwise (the ART
+exists), insert the OEM block to the ART.
+
+(b) Set the OOO field of 𝑆𝑜𝑜 field to true.
+
+(4) Create a new UPI denoted UPI𝑒 , to record the position of the
+newly inserted edge entry. UPI𝑒 is itself called out-of-order
+
+Scalable Analytics on Multi-Streams Dynamic Graphs
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+UPI, with a structure simpler than that of in-order UPIs (see
+Figure 4). It is also a 8-byte array, where:
+• the 𝑖𝑢 bit (position 63) is 0;
+• 𝑑𝑜 stores the 15-bits suffix of the destination node ID 𝑑;
+• the entry source time is stored in SrcTimestamp.
+Then, UPI𝑒 is added in the hash table HT[𝑠].
+
+𝑖𝑢
+63
+
+𝑑𝑜
+(48, 62)
+
+𝑡𝑠
+(0, 47)
+
+Figure 4: Out-of-order UPI for sample insertion.
+
+9
+
+For instance, assume that after the insertion illustrated in black
+text Figure 2, we receive the out-of-order insertion 0 → 9 with
+timestamp 10:02 am. The resulting entries are shown in red font in
+Figure 2, while the new UPI𝑒 is 0
+10:02 in Figure 2. Unlike
+in-order insertions, out-of-order ones accumulate in ART trees, and
+only the ART roots are stored in the in-order IEM blocks. Thus,
+out-of-order updates never lead to STAL blocks becoming full (or
+splitting); only in-order updates do that. Out-of-order insertions
+require binary search (in STAL[𝑠] based on SrcTimestamp, then
+in the STALB to find the IEM block where the ART root is/should
+be stored), and also incurs the cost of searching the ART, lead-
+ing to a worst-case complexity of 𝑂 (𝑙𝑜𝑔(|𝐸|)). While this is not
+constant-time, we can reasonably expect out-of-order updates to
+be less frequent than in-order ones; ours is the first dynamic graph
+management system capable of correctly handling a mix of in-order
+and out-of-order updates.
+
+6 DELETION
+We now consider the deletion of an edge 𝑒 of the form 𝑠 → 𝑑.
+Recall that we assume that an edge deletion only occurs after the
+respective edge has been inserted. We proceed as follows:
+(1) Locate the position of the source vertex 𝑠 in the VA.
+(2) Lock it to prevent conflicts with other write transactions
+(insertions or deletions) where 𝑠 is the source node, and get
+its hash table, say HT[𝑠].
+
+(3) Look up 𝑑 in HT[𝑠], to get the UPI (Section 4) associated to
+the insertion entry for 𝑒, let’s call this UPI𝑒 . UPI𝑒 encodes
+whether the deletion request is related to in-order update,
+respectively, an out-of-order update. We handle them as
+discussed below.
+
+(4) After handling the deletion, unlock HT[𝑠].
+
+6.1 In-order deletion
+
+(1) From UPI𝑒 (recall Figure 3), access 𝑠𝑖 to get the position, in
+STAL[𝑠], of the STAL block, call it 𝑆𝑖 , where the insertion
+𝑠 → 𝑑 had been stored, at the time of that insertion. Note that
+this position may no longer be correct, in case the STAL[𝑠]
+has been resized at some point in time after 𝑒 was inserted!
+We discuss how to handle such situations shortly below.
+(2) To account for the possible resize that may have changed the
+position of 𝑆𝑖 , from the STAL metadata, we get the current
+size of STAL[𝑠] (Size in Figure 2). We then compute the
+current position of 𝑆𝑖 in STAL[𝑠], of as
+
+STAL[𝑒].Size − (UPI𝑒 .𝑠𝑠 − UPI𝑒 .𝑠𝑖 )
+
+In the above, UPI𝑒 .𝑠𝑠 − UPI𝑒 .𝑠𝑖 computes how far the 𝑆𝑖 posi-
+tion is, from the last index of STAL[𝑒] when the edge entry
+was inserted. Call this difference Δ𝑠𝑖 . Then, we substract Δ𝑠𝑖
+from STAL[𝑒].Size to obtain the current entry position in
+the STAL[𝑒].
+For instance, in Figure 2, UPI𝑒 .𝑠𝑖 is 0, UPI𝑒 .𝑠𝑠 is 1, and the
+current STAL[𝑒].Size is 1, thus (1 − (1 − 0) is 0, indicating
+the current position of 𝑆𝑖 .
+
+(3) Locate 𝑆𝑖 in STAL[𝑠] as the block at the position computed
+
+as above.
+
+(4) UPI𝑒 .𝑏𝑖 is the position of the 𝑒 insertion entry in 𝑆𝑖 .IEMEntries,
+
+when 𝑒 was inserted.
+
+(5) UPI𝑒 .𝑏𝑠 is the size of 𝑆𝑖 when 𝑒 was inserted say.
+(6) Compute the exact position of the insertion in 𝑆𝑖 .IEMEntries
+
+as:
+
+𝑆𝑖 .BlockSize − (UPI𝑒 .𝑠𝑠 − UPI𝑒 .𝑠𝑖 )
+
+The reasoning behind the calculation is the same as above
+(leveraging the same Δ𝑠𝑖 ).
+Then, we take the following steps:
+(a) Access the IEM block in 𝑆𝑖 .IEMEntries, call it IEM𝑖 , corre-
+
+sponding to the insertion of 𝑒 in 𝑆𝑖 .
+
+(b) Create an ITM block, call it ITM𝑑 , with SrcTime as the
+timestamp when the deletion request originated from the
+source machine. Store ITM𝑑 in the ITM field of 𝐼𝐸𝑀𝑒 .
+
+(c) Set the 𝑆𝑖 IsDelete flag to true.
+(d) Commit the deletion request by storing the current (trans-
+
+action) time in the WTS of ITM𝑑 .
+
+For instance, assume that we receive the in-order deletion 0 → 1
+with timestamp 10:08 am. The resulting ITM entry is shown in
+green font in Figure 2: 10:08
+
+10:09 .
+As shown above, the complexity of handling in-order dele-
+
+tions is 𝑂 (1).
+
+6.2 Out-of-order deletion
+This process is slightly different, given that for OOO updates we
+need to store the source timestamp in UPI𝑒 (see Figure 4). To keep
+the data structures compact, UPI𝑒 does not store the STAL position
+of the insertion entry. Instead, we have to retrieve it by binary
+search on the ordered data structures, as follows.
+
+(1) Get the source timestamp of the insertion of 𝑒, from UPI𝑒 .
+(2) Based on this, in STAL[𝑠], find the STALB, say 𝑆𝑖 , where the
+
+out-of-order insertion of 𝑒 was placed.
+
+(3) Locate the IEM block, say IEM𝑖 , corresponding to the inser-
+
+tion of 𝑒, by binary search on 𝑆𝑖 .IEMEntries.
+
+(4) IEM𝑖 .OOO field is the root of an ART, in which we look up
+the OEM block, call it OEM𝑖 , corresponding to the insertion.
+(5) Create an ITM block, ITM𝑑 , with the deletion request source
+
+time as SrcTime.
+
+(6) Store ITM𝑑 in the ITM field of OEM𝑖 .
+(7) Set the IsDelete flag of 𝑆𝑖 to true.
+(8) Commit the deletion request by storing the current (transac-
+
+tion) time in the WTS of ITM𝑑 .
+
+For instance, assume that we receive the out-of-order deletion 0 →
+9 with timestamp 10:10 am. The resulting ITM entry is shown in
+blue font in Figure 2: 10:10
+
+10:11 .
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+A. Anadiotis, G. Khan, I. Manolescu
+
+Similarly to out-of-order insertions, the complexity of han-
+
+dling out-of-order deletions is 𝑂 (𝑙𝑜𝑔(|𝐸|)).
+
+7 PER-SOURCE VERTEX TABLE (HT)
+Recall that we store for each destination node 𝑑 present in the
+STAL[𝑠], the most recent position of the each destination node’s
+entry, called Update Position Indicator of 𝑠 and 𝑑 (or UPI[𝑠, 𝑑],
+in short). Each edge insertion leads to creating an UPI; each edge
+look-up needs to read the UPI, and similarly, each edge deletion
+must locate, then delete an UPI. In this section, we describe these
+operations: UPI creation on one hand, UPI look-up or deletion (their
+processing is quite similar) on the other hand. We store UPIs in
+a dedicated optimized hash table, based on the open-addressing
+technique [12]; we call this structure Per-Source Vertex Hash
+Table (HT[𝑠, 𝑑], in short).
+
+Below, Sections 7.1, 7.2, respectively, describe how we insert,
+
+look up, and delete content from the HT.
+
+7.1 UPI Insertion
+For inserting the UPI of a newly inserted edge entry 𝑠 → 𝑑, call this
+edge 𝑒, in the HT. Insertions of in-order UPIs are described under
+(1) below, while out-of-order UPI insertions follow (2).
+
+(1)
+
+In-order UPI
+• Create an in-order UPI, call it 𝑈 𝑃𝐼𝑖 , then store the 𝑒 posi-
+
+tion of STAL[𝑠] as described in Section 5.1.
+
+• Compute the position, say 𝑖, in the HT where 𝑈 𝑃𝐼𝑖 should
+be stored, as (𝑑 modulo HT size), and store 𝑈 𝑃𝐼𝑖 there
+HT[𝑖] is empty; otherwise, increase 𝑖 until we find a free
+position HT[𝑖] and store 𝑈 𝑃𝐼𝑖 there.
+
+(2) Out-of-order UPI
+
+• Create an out-of-order UPI, call it 𝑈 𝑃𝐼𝑜 , then store the 𝑒
+source timestamp in 𝑈 𝑃𝐼𝑜 .𝑡𝑠 as described in Section 5.2.
+• Compute the position, say 𝑖, in the HT where 𝑈 𝑃𝐼𝑜 should
+be stored, as (𝑑 modulo HT size) and store 𝑈 𝑃𝐼𝑜 there if
+HT[𝑖] is free; otherwise, increase 𝑖 until we find a free
+position and store 𝑈 𝑃𝐼𝑜 there.
+
+As shown above, collision handling is potentially expensive. To
+keep its cost under control in practice, the HT size is twice as large
+as its number of entries, making it likely to find an empty space
+very fast.
+
+More generally, collisions could be further avoided by using the
+double hashing techniques proposed in Robin Hood hashing [3]
+and GraphTango [1] (not published yet). An important observation
+is that the former causes cache misses in case of collision; the more
+recent GraphTango [1] presents a cache-friendly double hashing
+technique; we could also experiment with it in the future.
+
+7.2 UPI Deletion or Lookup
+Now assume we need to find, in the HT, the UPI of an edge entry 𝑒
+corresponding to 𝑠 → 𝑑, in order to delete the UPI. We do that as
+follows:
+
+(1) Compute the position, say 𝑙, where the UPI related to 𝑒 may
+exist in the HT, as (𝑑 modulo HT size). Call that 𝑈 𝑃𝐼𝑒 .
+
+(2) Check the field 𝑈 𝑃𝐼𝑒 .𝑖𝑢 field to see whether 𝑈 𝑃𝐼𝑒 is an in-
+order or out-of-order UPI. In the former case, follow with
+step (2a) below; in the latter, follow with (2b).
+
+(a)
+
+In-order UPI
+
+(i) Access the field 𝑈 𝑃𝐼𝑒 .𝑑𝑠 (suffix of the destination node
+for which 𝑈 𝑃𝐼𝑒 was created). Compare the 11-bit suffix
+of 𝑑, the destination node in 𝑒, with 𝑈 𝑃𝐼𝑒 .𝑑𝑠 : if they
+match, then follow step (2(a)ii); otherwise, read the UPI
+at the the next HT position 𝑙 + 1 into 𝑈 𝑃𝐼𝑒 , and return
+to step (2). This search stops when we find the precise
+UPI created when 𝑒 was inserted, or we find an empty
+position in the HT.
+
+(ii) Go to the 𝑈 𝑃𝐼𝑒 indicated position in the STAL, read the
+destination id, and compare it with the ID of destination
+node 𝑑.
+• If they are equal, we have found the 𝑈 𝑃𝐼 related to 𝑒.
+If we are handling a deletion, delete the UPI at HT[𝑙].
+• Otherwise, read the UPI at the next HT position 𝑙 + 1
+
+into 𝑈 𝑃𝐼𝑒 , and return to (2).
+
+Search stops when we find the UPI created when in-
+serting 𝑒, or we find an empty position in the STAL,
+signifying that the desired UPI does not exist.
+
+(b) Out-of-order UPI
+
+(i) Access the field 𝑈 𝑃𝐼𝑒 .𝑑𝑠 and compare it with the 15-bit
+suffix of the destination node ID 𝑑. If they match, then
+follow with step (2(b)ii); otherwise, increment the HT
+index by 1 to get the next 𝑈 𝑃𝐼𝑒 and return to step (2).
+Search stops when we find a UPI related to 𝑒𝑖 or we find
+an empty space in the HT which means 𝑒𝑖 does not exist
+in the STAL.
+
+(ii) Access the source timestamp field 𝑈 𝑃𝐼𝑒 .𝑡𝑠 , and follow
+
+these steps:
+• Apply a binary search on STAL[𝑠] using 𝑈 𝑃𝐼𝑒 .𝑡𝑠 to get
+the STALB to which 𝑡𝑠 belongs, again apply a binary
+search on that STALB to get the IEM block where
+the out-of-order update is placed, further access the
+OOO field of that IEM block to get the ART root, and
+search the ART with 𝑡𝑠 as a key, to get the OEM block
+of 𝑈 𝑃𝐼𝑒 .
+
+• Access the DNode field of the OEM block, and com-
+
+pare it with the destination node id 𝑑.
+– If they match, 𝑈 𝑃𝐼𝑒 indeed corresponds to the in-
+sertion of 𝑒. If we are handling a deletion, delete
+𝑈 𝑃𝐼𝑒 from HT[𝑙].
+
+– Otherwise, increment the HT index to 𝑙 + 1, read
+into 𝑈 𝑃𝐼𝑒 the entry at that index, and repeat from
+(2).
+
+The search stops when we find a UPI related to 𝑒 or
+an empty space in the HT.
+
+8 QUERIES
+Dynamic graph systems, including ours, can be used for a large
+variety of computations. Popular benchmarks compare them on
+algorithms including such as Breadth-First Search, PageRank, Com-
+munity Detection, etc. The computation steps necessary for imple-
+menting any of these algorithms are well-known, and remain the
+
+Scalable Analytics on Multi-Streams Dynamic Graphs
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+same regardless of the graph data management system. Thus, exist-
+ing evaluation frameworks implement a set of graph algorithms, on
+top of a uniform graph data access API, whereas dynamic graph sys-
+tems implement simple getEdge(s, d, time) and getVertex(id,
+time)-style operations. Since the graph algorithm costs are the
+same, the remaining performance differences can directly be attrib-
+uted to the efficiency of the data store.
+
+The main operations dynamic graph systems have to support are
+simple edge requests, of several forms. Present queries require the
+last committed state of the edge at the database site, i.e., the edge’s
+current state. Historical queries explicitly specify time information.
+They can be either point (or snapshot) queries request an edge
+such as it was at a certain point in the past, or interval queries
+focused on a specific past time interval. Interval querries can be
+implemented as a sequence of point queries, one for each timestamp
+in the interval. Thus, below, we discuss the processing of present
+and point edge queries. Without loss of generality, below, we show
+how to evaluate a query requesting all the edges whose source node
+is 𝑠 (the query node). The modifications needed to handle variants
+of this elementary query, e.g., asking for the edges’ properties,
+or filtering based on them, etc., are quite straightforward. Each
+query also specifies either the present time, or a specific requested
+timestamp.
+
+8.1 Present queries
+We denote the present query by 𝑝𝑞, and the time when the query is
+asked, by 𝜏. For each STALB in STAL[𝑠], starting from the currently
+inserted STALB towards the oldest STALB:
+
+(1) Check the IsDelete and OOO fields of each STALB. Four
+
+cases can occur:
+
+(a) If both are true, the STALB contains both deletion entries
+and out-of-order updates. In this case, when traversing
+the metadata entries associated with this STALB, we will
+check each IEM entry’s ITM and OOO fields to ensure
+that we do not read a deleted IEM entry, and do not miss
+out-of-order updates.
+
+(b) If IsDelete is true and OOO is false, the STALB contains
+deleted entries but no out-of-order one. We will check the
+ITM field only.
+
+(c) If OOO is true and IsDelete is false, there are out-of-order
+updates in the STALB, but no deletion. We will check the
+OOO field only.
+
+(d) Both are false: we will not check ITM nor OOO fields in the
+IEM entries, thus speeding up the STALB traversal. This
+case analysis is done once per STALB; it may avoid access-
+ing and testing fields in all the IEM entries for this STALB.
+Avoiding to access and read these boolean fields makes
+our system more cache-friendly. As our experiments show
+(Section 9), competitor systems such as LiveGraph, which
+makes some checks for each traversed edge, suffer, among
+others, from their poor usage of the cache.
+
+(2) Traverse IEMEntries and in parrallel DestEntries, from the
+position IEMEntries.CurIndex. For each IEM entry 𝑚, at
+position 𝑝𝑚 in IEMEntries:
+(a) Check whether 𝑚.WTS < 𝜏: recall that WTS is the trans-
+action time of 𝑚. If this holds, and the current STALB is
+
+in case (1d), return DestEntries[𝑝𝑚], the destination node
+corresponding to the position of 𝑚 (recall from Section 4
+that IEMEntries and DestEntries are parallel, same-size
+arrays). Otherwise, ignore 𝑚 it and move to the next IEM
+entry. The check helps ensuring snapshot isolation: we
+only read the (non-deleted) edge entries that existed in
+the STALB before 𝜏.
+
+(b) Check 𝑚’s OOO and/or ITM fields, or both, when the
+STALB is in case (1a), (1b) or (1c) above. If 𝑚 has out-of-
+order updates, its OOO field points to an ART. For each
+OEM entry in that ART, call it 𝑜, proceed as follows:
+(i) Check that 𝑜.WTS < 𝜏; WTS is the transaction time of
+the out-of-order entry 𝑜. If this holds, and the current
+STALB meets only case (1c), return 𝑜.𝐷𝑁𝑜𝑑𝑒; otherwise
+move to the next ART entry.
+
+(ii) If the current STALB includes deletions (IsDelete flag),
+also check the ITM field of 𝑜, to see whether 𝑜 is deleted
+or not. If it is not deleted, return 𝑜.𝐷𝑁𝑜𝑑𝑒; otherwise,
+the OEM entry is ignored.
+
+If 𝑚 has ITM, then ignore the entry; otherwise, return
+𝐷𝑒𝑠𝑡𝐸𝑛𝑡𝑟𝑖𝑒𝑠 [pm].
+
+For present queries, the worst-case complexity is 𝑂 (|𝑅|), where
+
+𝑅 ⊆ 𝑄 is the set of edges that belong to the query result.
+
+8.2 Point queries
+Let ℎ𝑞 be a point query, issued at the query transaction time 𝜏ℎ, and
+containing a user-specified source timestamp 𝜏. This query asks for
+all the nodes 𝑑 such that an edge 𝑠 → 𝑑 had been inserted in the
+graph, and had not been deleted, by 𝜏ℎ. We proceed as follows:
+
+(1) Through binary search on STAL[𝑠], with 𝜏 as the search key,
+find the STALB from where we start reading, call it 𝑆𝑝 . We
+will read up to the oldest STALB.
+
+(2) Through binary search on 𝑆𝑝 with 𝜏 as search key, get the
+
+entry location to start reading, say, 𝑒𝑖 .
+
+(3) Access the IEMEntries, and DestEntries fields of each STALB.
+For 𝑆𝑝 , scanning starts from the IEMEntries[𝑒𝑖 ]; for older
+STALBs, it starts from the IEMEntries[CurIndex]. For each
+IEM entry in the STALB, call it 𝑚, we check the below con-
+ditions:
+(a) 𝑚.WTS < 𝜏ℎ, where WTS is the transaction time of the IEM
+entry. If it is true and the current STALB is in the case (1d)
+introduced in the Section 8.1, return DestEntries[current
+index]; otherwise, ignore it and move to the next. This
+ensures that ℎ𝑞 only reads edge entries that existed before
+the 𝜏ℎ timestamp, contributing to consistency (snapshot
+isolation).
+
+(b) Check the 𝑚’s OOO and/or ITM fields, or both, when the
+current STALB is in one among the cases (1a), (1c), or
+(1b, introduced in Section 8.1. If 𝑚.ITM exists, proceed as
+follows:
+(i) Check if 𝑚.SrcTime > 𝜏. If yes, 𝑚 belongs to the result,
+because at timestamp 𝜏, 𝑚 was valid (not yet deleted).
+Hence, return DestEntries[DestEntries.CurIndex].
+If 𝑚.OOO exists, access the root of the ART, and for each
+OEM entry in that ART, call it 𝑜, do the following:
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+A. Anadiotis, G. Khan, I. Manolescu
+
+(i) Check if 𝑜.WTS < 𝜏ℎ; WTS refers to the transaction
+time of out-of-order entry. If this holds, and if the cur-
+rent STALB is in the case (1c) introduced in Section 8.1,
+return 𝑜.DNode; otherwise move to the next ART entry.
+(ii) If the STALB currently read contains some deletions,
+check 𝑜.ITM to see whether the 𝑜 is deleted or not. If
+it is not deleted, return 𝑜.DNode. If 𝑜 is deleted, follow
+the below steps:
+
+(A) Access the 𝑜.ITM block, say 𝐼𝑇 𝑀𝑜 .
+(B) Check if 𝐼𝑇 𝑀𝑜 .SrcTime < 𝜏. If yes, then 𝑜 should
+contribute to the result, because at the 𝜏 timestamp,
+𝑜 was valid; hence, return the 𝑜.DNode.
+The worst-case computational complexity is 𝑂 (𝑙𝑜𝑔(|𝐸|) + |𝑅|)
+
+where the edge set 𝑅 is the query result.
+
+9 EVALUATION
+We implemented the data structures and algorithms previously de-
+scribed, and describe experiments which confirm its performance
+advantages with respect to the state of the art. Below, we de-
+scribe our hardware and software experimental setup (Section 9.1);
+the benchmark dataset and the algorithm used for analytics (Sec-
+tion 9.2); the qualitative analysis of related systems (Section 9.3).
+We conclude by performance studies on insertions (Section 9.4),
+updates (Section 9.5), and analytic querying (Section 9.6).
+
+9.1 Hardware and software settings
+We run our experiments on a dual-socket machine with intel Xeon
+E5-2640 v4, which has 40 hardware threads and 256 GB of RAM.
+All system source code is written in C++ and compiled on GCC
+v10.2, with the optimization flag -O3. In our system, the maximum
+number of entries allowed per block is 2047; for the competitor
+Sortledton [5], it is set to 512 entries per block. All reported times
+are medians over five runs.
+
+9.2 Workloads
+We use the synthetic graph datasets graph-500 [7] with scale fac-
+tors (SF) 22, 24, and 26; the node fan-out in these graphs follows a
+power-law degree distribution. We also use one real-world graph,
+namely dota-league from [7]. These datasets, used in previous com-
+parable works, are undirected, and do not contain multiple edges
+between two vertices. Translating them in our framework designed
+for directed graphs, like in prior work, we replace each undirected
+edge (𝑠, 𝑑) by two directed edges, 𝑠 → 𝑑 and 𝑑 → 𝑠. Each edge
+has just one property, namely weight, that is double precision real
+number; we generate these weights at random between 0 and 1
+with a uniform distribution The main dataset metrics appear in
+Figure 5.
+
+We compare our system with existing competitors using the
+LDBC graph analytics benchmark [7], from which we use five graph
+algorithms: Breadth-First Search (BFS), PageRank (PR), Single-Source
+Shortest Path (SSSP), Community Detection Via Label Propagation
+(CDLP), and the Weakly Connected Components (WCC). For fair
+comparison, the implementation of the graph algorithms is taken
+from the Graph Algorithm Platform Benchmark Suite (GAP BS) [2],
+and runs on the driver implemented by Teseo [11].
+
+Dataset
+Graph500-22
+Graph500-24
+Graph500-26
+dota-league
+
+Vertices |𝑉 |
+2,396,657
+8,870,942
+32,804,978
+61,170
+
+Edges |𝐸| Average degree |D|
+26
+64,155,735
+29
+260,379,520
+1,051,922,853
+33
+836
+50,870,313
+
+Figure 5: Dataset description
+
+9.3 Competitors and complexity comparison
+We compared our system with three other cache-friendly hybrid
+analytical/transactional processing (HTAP) systems for graphs,
+namely: LiveGraph [16], Teseo [11], and Sortledton [5]. LiveGraph
+stores graph edges in adjacency list, one for each source node; it
+supports random vertex access, and sequential neighborhood ac-
+cess. The edges in each adjacency list are stored contiguously, thus
+reading them does not cause random accesses. To handle graph
+updates, LiveGraph manages versions of edge entries in the vector.
+This is costly in terms of memory, as we need to store, for each
+edge update, the transaction timestamp and the possible invalida-
+tion timestamp. Its advantage is to efficiently support historical
+queries, by appending new edges to their respective adjacency lists
+as they arrive. Thus, edges are naturally sorted by transaction time,
+allowing historical queries to run in 𝑂 (𝑙𝑜𝑔(|𝐸|)).
+
+In contrast, Sortledton and Teseo follow a set-based neighborhood
+design, where the blocks of edges are sorted by destination id. The
+maintenance of edge entry versions is done by the Hyper Multi-
+Version Concurrency Control [14] protocol: both systems store the
+latest version of the edges in a sequential block, and older versions
+are stored in a linked list. In Sortledton, blocks of edges are sorted
+and connected through a skiplist. Teseo follows a Compressed
+Sparse Row (CSR) design, where the vertices and edges are stored in
+a B+ tree with 2MB-size leaves, called a FAT tree, which is a packed
+memory array supporting sequential vertex access and sequential
+neighborhood access. However, the set-based neighborhood design
+(sorted by destination ids) does not maintain the arrival order of the
+edges; hence, for historical queries, its complexity is worse, 𝑂 (|𝐸|),
+than the one of LiveGraph, 𝑂 (𝑙𝑜𝑔(|𝐸|)).
+
+System
+Sortledton
+Teseo
+LiveGraph
+HAL in-order
+HAL out-of-order
+
+Edge insertion Edge deletion
+𝑂 (|𝑙𝑜𝑔(𝐸)|)
+𝑂 (|𝑙𝑜𝑔(𝐸)|)
+𝑂 (|𝑙𝑜𝑔(𝐸)|)
+𝑂 (|𝑙𝑜𝑔(𝐸)|)
+𝑂 (|𝐸|)
+𝑂 (1)
+𝑂 (1)
+𝑂 (1)
+𝑂 (|𝑙𝑜𝑔(𝐸)|)
+𝑂 (|𝑙𝑜𝑔(𝐸)|)
+
+Find edge
+𝑂 (𝑙𝑜𝑔(|𝐸|))
+𝑂 (𝑙𝑜𝑔(|𝐸|))
+𝑂 (1)
+𝑂 (1)
+𝑂 (𝑙𝑜𝑔(|𝐸|))
+
+Figure 6: Complexity comparison for elementary graph op-
+erations
+
+Figure 6 shows the time complexity of for the main operations
+(edge insertion, edge deletion, and edge look-up) on related systems.
+In practice, edge insertion requires two steps: (𝑖) check if the edge
+exists already, (𝑖𝑖) insert it if not already there. Sortledton and Teseo
+perform (𝑖,𝑖𝑖) in 𝑂 (𝑙𝑜𝑔(|𝐸|)). LiveGraph does not sort but simply
+appends the edges in the neighborhood list; it uses Bloom filters
+to check the edge’s existence, which takes 𝑂 (1). However, if false
+
+Scalable Analytics on Multi-Streams Dynamic Graphs
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+competitor systems do not support out-of-order insertions, we do
+not have them in our workload.
+
+Figure 7 reports the insertion throughput, measured in Million
+(of inserted) Edges Per Second (MEPS, in short), as we increase
+the number of threads (on the 𝑥 axis) from 1 to 2, 4, 6, . . . until 40.
+HAL scales up very well, better than the other systems, as we
+increase the number of threads. While Sortledton and Teseo also
+gain from parallelism, they do so much less than HAL; LiveGraph
+does not benefit at all from it. This is due to contention between
+multiple writer threads, simultaneously trying to (𝑖) search linearly
+in the adjacency list for many edge existence checks, and (𝑖𝑖) resize
+requests. At maximum parallelism, HAL outperforms Sortledton
+and Teseo by 3×, and LiveGraph by 30×. From now on, we report
+on experiments with 40 threads.
+
+Figure 8 shows insertion throughput, again in MEPS, on different
+systems for our four datasets. HAL performs better in all cases.
+Its running time shows some variability when increasing the size
+of the datasets; this reflects the cost we pay for maintaining the HT
+and resizing the STAL vector. HAL performs better since we simply
+append the edges in adjacency lists, without sorting by destination
+id (insertions mostly in 𝑂 (1)).
+
+Sortledton and Teseo perform very similarly on all the datasets,
+because of their similar set-based neighborhood design; for edge
+existence check, this requires takes 𝑂 (𝑙𝑜𝑔2|𝐸|)). Even though Live-
+Graph append newly arrived edges (without sorting by destination
+ids) in the adjacency list, it still performs significantly slower than
+the other systems. This is because LiveGraph provides completely
+sequential access to the adjacency list, which in turn leads to more
+resize requests as the edge vector, initially of size 1, is resized. The
+cost to check for the existence of the new edge also plays a role
+(see the discussion of false positives in Bloom filters above).
+
+As previously explained, in our setting, edge existence checks are
+not needed upon insertions. But just to check whether HAL could
+efficiently also perform these checks, we ran an extra experiment,
+inserting the graph500-24 dataset with 40 threads and existence
+checks. The throughput decreased modestly, from 9.3 MEPS to
+9.1 MEPS (2%), which is not significant, still leaves HAL the best-
+performing system.
+
+Lesson learned: In systems that follow the set-based neighbor-
+hood design, with edge blocks that are connected through B+ tree
+(Teseo) or skip lists (Sortledton), the necessary sorting steps limit
+the throughput due to contention between writer threads; their
+advantage is that they do not need an extra index when checking
+for edge existence. In contrast, HAL simply appends edges in the
+adjacency list without sorting by destination ids, hence, its through-
+put is significantly better, because of lower contention between
+writer threads. However, it needs extra space for maintaining the
+secondary index (our hash table HT).
+
+9.5 Updates (insertions and deletions)
+Next, we evaluate our system on a mixed workload made of inser-
+tions and deletions, introduced in Teseo [11]. Unlike the previous
+insertion experiments, 10% of the operations in the update workload
+load the graph, after which, 90% of the operations are insertions
+and deletions keeping the (already large) graph of more or less the
+same size. The size of the update workload is 10 × |𝐸|.
+
+Figure 7: Graph500-24 scalability analysis.
+
+Figure 8: Insertion throughput on all systems and datasets.
+
+positives occur, the verification raises the cost to 𝑂 (|𝐸|). For in-
+order insertion, our system HAL does not need (𝑖), as we treat each
+insertion (from a distinct site) as a separate update; we perform (𝑖𝑖)
+in 𝑂 (1) as we simply append edges to the neighborhood list. At
+the same time, we are able to check for the existence of an edge in
+𝑂 (1) thanks to our HT. Out-of-order insertions, supported only in
+HAL, take 𝑂 (𝑙𝑜𝑔|𝐸|) for step (𝑖𝑖). HAL’s complexity is better than
+competitors’ for in-order insertion. For out-of-order insertion, the
+complexity is similar to those of Sortledton and Teseo, but worse
+than LiveGraph’s best-case scenario (no false positive in the Bloom
+filter).
+
+To find and delete edges, Sortledton and Teseo take 𝑂 (𝑙𝑜𝑔(|𝐸|))
+because of the set-based neighborhood design, while HAL needs
+𝑂 (1) for in-order updates and 𝑂 (𝑙𝑜𝑔(|𝐸|)) for out-of-order updates.
+LiveGraph takes 𝑂 (1) (without false positive) for deletions, and up
+to 𝑂 (|𝐸|) (with false positives) to find an edge. For both deletions
+and edge search, for in-order updates, HAL has better complexity
+than the existing systems; for out-of-order updates, its complex-
+ity is the same as that of Sortledton and Teseo, and better than
+LiveGraph’s.
+
+9.4 Edge insertions
+To measure insertion performance, we insert successively all the
+edges of the graph500-24 dataset, in a random order. Since the
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+A. Anadiotis, G. Khan, I. Manolescu
+
+flag in each STALB helps to read the edge entry directly, if there is
+no deletion in the STALB.
+
+Teseo performs significantly worse than HAL mainly because:
+(𝑖) Teseo needs a per-edge entry mapping from sparse to dense
+vertex ids in the analytics part of the graph algorithm using a hash
+table, which is costly. (𝑖𝑖) In Teseo, sorted neighborhood block con-
+tains up to 512 edges as compared to HAL, where the maximum
+number of edges in a STALB is 2047, resulting in fewer random
+accesses. Sortledton’s performance is slightly slower than HAL’s
+because of the number of edges allowed in the block (512 for Sor-
+tledton, there are 512 edges per block, 2047 for HAL), leading to
+more random accesses for Sortledton.
+
+Lessons learned Set-based systems (Sortledton and Teseo) incur
+fewer cache misses than LiveGraph, since the former read the latest
+version of the destination ids, while LiveGraph must traverse all
+versions of the destination ids in the adjacency list, together with
+per-edge information. LiveGraph is also hampered by the need to
+check invalidation timestamps, to see if an edge entry is still valid.
+Thus, set-based systems outperform LiveGraph. However, set-based
+systems do not preserve edge entry order, slowing down historical
+queries.
+
+To provide scalable support for both present and historical queries,
+HAL adopts an approach in-between the two above. Specifically,
+HAL stores the destination ids separately from the edge entry meta-
+data in the STALB, given that destination IDs are accessed more of-
+ten. HAL spares per-edge deletion checks by checking each STALB’s
+isDelete flag, which may signal that a block contains no deletion,
+thus no check is needed on its edges.
+
+Finally, converting sparse vertex identifiers into dense ones dur-
+ing analytics computation (like Teseo does) is costly. In contrast,
+HAL (like Sortledton) makes this conversion at edge insertion time.
+
+10 RELATED WORK
+Existing systems supporting multi-stream dynamic graph analytics
+can be classified into two main categories: those which provide
+transactional guarantees, such as LiveGraph [16], Teseo [11], and
+Sortledton [5], and those that do not, such as Llama [13], GraphOne
+[8], and STINGER [4].
+
+Our work belongs to the former group, and Table 1 summarizes
+the challenges associated with these systems. Further, there are
+two main different data storage designs in transactional systems:
+(𝑖) set-based neighborhood blocks, where the edges are sorted by
+destination ids and edge entry version maintenance is done by the
+Hyper protocol [14]; sample systems are Sortledton [5] and Teseo
+[11], and (𝑖𝑖) edges stored in the adjacency blocks without sorting
+by destination ids, with per-entry version management within the
+adjacency block, represented by LiveGraph [16]. We discussed these
+systems’ details in Section 9.3.
+
+The advantage of the set-based design is that we do not need any
+extra index on the adjacency list to delete or lookup any specific
+destination entry. Also, it takes less space, as we do not manage
+the version in the adjacency list. However, it does not preserve
+the historical arrival order; hence, historical queries run on top of
+set-based systems are not efficient. On the other hand, in LiveGraph
+[16], the order of edge arrival is maintained.
+
+Figure 9: Graph500-24 update workload result
+
+Figure 9 shows different systems’ throughput except for LiveG-
+raph, which ran out of memory, on the graph500-24 datasets. The
+𝑦 axis counts Millions of Updates Per Second (MUPS). HAL per-
+forms more than 3× faster than Sortledton and Teseo, due to: (𝑖) the
+append-only operations needed to record edge updates, whereas
+competitors need to use sorted list and/or linked lists (Hyper proto-
+col), which incur on one hand sorting costs, and on the other hand
+more random memory accesses, thus lower cache usage; (𝑖𝑖) dele-
+tions in constant time compared to competitors that need binary
+search, and incur random accesses to the blocks accessed via skip
+lists in Sortledton and B+ trees in Teseo.
+
+Lesson learned: Set-based systems have a lower update through-
+put as compared to HAL due to the reasons described above. How-
+ever, these competitors need less space to manage different versions
+of the edges, compared to HAL which needs to store with each edge
+a transaction time (WTS), and invalidation time (deletion time of
+an edge), as well as the HT. Thus, HAL’s performance is obtained
+trading some space for more throughput.
+
+9.6 Analytics
+We run the LDBC graph analytics benchmark [7] on top of Teseo,
+Sortledton, LiveGraph and HAL, for our four datasets. We choose
+Sortledton (the latest system in the literature) as baseline, and
+measure the slowdown of other systems with respect to it.
+
+Figure 10 shows the benchmark analytics algorithm results on
+these datasets and systems: the algorithms on the 𝑥 axis, and the
+slowdowns on the 𝑦 axis, the lower, the better. BFS and SSSP re-
+quire random vertex access and sequential neighborhood access,
+where HAL performs three times better than the baseline system.
+In contrast, PageRank, WCC, and CDLP require sequential vertex
+access and sequential neighborhood access, in which HAL performs
+significantly better than LiveGraph and Teseo, and slightly better
+than Sortledton.
+
+LiveGraph is slower than HAL due to storing edge entry meta-
+data (transaction timestamp, invalidation timestamp, property size)
+with destination ids, which causes more cache misses during the ac-
+cess. For instance, a single edge entry takes 32 bytes, which means
+a cache miss occurs every two edge entries. On the other hand,
+in HAL, destination ids (DestEntries in STALBs) are stored sepa-
+rately from the edge entry metadata (IEMs), hence, cache misses
+occur more rarely, after eight edge entries. Additionally, LiveGraph
+checks each entry’s invalidation time to see whether the edge entry
+is deleted or safe to read. In contrast, in HAL system, the IsDelete
+
+Scalable Analytics on Multi-Streams Dynamic Graphs
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+Figure 10: Performance evaluation on graph analytics.
+
+All the systems mentioned in Table 1, as well as the one we aim
+for, support queries based on the current state of the dynamic graph.
+Except for LiveGraph [16] and this paper, no other system supports
+historical state queries. In our work, we follow the LiveGraph [16]
+MVCC protocol with the optimization described in Section 4 to
+improve update throughput and performance on analytics. Live-
+Graph [16] supports historical queries based on transaction time;
+on the other hand, we are supporting historical queries based on
+source time (time when the update was emitted from the source
+machine). Existing systems do not provide consistency guarantees
+in the presence of out-of-order updates, while our system attains
+this goal, as explained in Section 4 to 7 and validated through our
+experiments (Section 9).
+
+11 CONCLUSION AND PERSPECTIVES
+This paper aims to provide a scalable storage and indexing solution
+that can ingest real-time graph updates from multiple streams and,
+on top of that, provide consistent graph analytics (read-only present
+and historical queries) even in the presence of out-of-order updates.
+Our system performs approximately 9 million updates per second,
+which is three times faster than the Sortledton. We are still doing
+further experimentation to proof our system. In the future, we will
+provide mixed-workload (updates and analytics in parallel) and
+historical query results.
+
+Acknowledgments This work received support from the ANR AI
+Chair SourcesSay project.
+
+REFERENCES
+[1] Alif Ahmed, Farzana Ahmed Siddique, and Kevin Skadron. 2022. GraphTango:
+A Hybrid Representation Format for Efficient Streaming Graph Updates and
+Analysis. arXiv:2212.11935 [cs.DS]
+
+[2] Scott Beamer, Krste Asanović, and David Patterson. 2017. The GAP Benchmark
+
+Suite. arXiv:1508.03619 [cs.DC]
+
+[3] Pedro Celis, Per-Åke Larson, and J. Ian Munro. 1985. Robin hood hashing. 26th
+Annual Symposium on Foundations of Computer Science (sfcs 1985) (1985), 281–288.
+[4] David Ediger, Rob McColl, Jason Riedy, and David A. Bader. 2012. STINGER:
+High performance data structure for streaming graphs. In 2012 IEEE Conference
+on High Performance Extreme Computing. 1–5. https://doi.org/10.1109/HPEC.
+2012.6408680
+
+[5] Per Fuchs, Domagoj Margan, and Jana Giceva. 2022. Sortledton: A Univer-
+sal, Transactional Graph Data Structure. Proc. VLDB Endow. 15, 6 (feb 2022),
+1173–1186. https://doi.org/10.14778/3514061.3514065
+
+[6] Hassan Halawa and Matei Ripeanu. 2021. Position Paper: Bitemporal Dynamic
+
+Graph Analytics (GRADES-NDA ’21).
+
+[7] Alexandru Iosup, Tim Hegeman, Wing Lung Ngai, Stijn Heldens, Arnau Prat-
+Pérez, Thomas Manhardto, Hassan Chafio, Mihai Capotă, Narayanan Sundaram,
+Michael Anderson, Ilie Gabriel Tănase, Yinglong Xia, Lifeng Nai, and Peter
+Boncz. 2016. LDBC Graphalytics: A Benchmark for Large-scale Graph Analysis
+on Parallel and Distributed Platforms. Proc. VLDB Endow. 9, 13 (Sept. 2016),
+1317–1328.
+
+[8] Pradeep Kumar and H. Howie Huang. 2019. GraphOne: A Data Store for Real-
+time Analytics on Evolving Graphs. In 17th USENIX Conference on File and Storage
+Technologies (FAST 19). USENIX Association, Boston, MA, 249–263.
+
+[9] Leslie Lamport. 1978. Time, Clocks, and the Ordering of Events in a Distributed
+System. Commun. ACM 21, 7 (jul 1978), 558–565. https://doi.org/10.1145/359545.
+359563
+
+[10] Viktor Leis, Alfons Kemper, and Thomas Neumann. 2013. The adaptive radix
+tree: ARTful indexing for main-memory databases. In 2013 ICDE. 38–49.
+[11] Dean De Leo and Peter A. Boncz. 2021. Teseo and the Analysis of Structural
+
+Dynamic Graphs. Proc. VLDB Endow. 14 (2021), 1053–1066.
+
+[12] Dapeng Liu and Shaochun Xu. 2015. Comparison of Hash Table Performance with
+Open Addressing and Closed Addressing: An Empirical Study. Int. J. Networked
+Distributed Comput. 3 (2015), 60–68.
+
+BDA 2023, October 23–26, 2023, Montpellier, France
+
+A. Anadiotis, G. Khan, I. Manolescu
+
+[13] Peter Macko, Virendra J. Marathe, Daniel W. Margo, and Margo I. Seltzer. 2015.
+LLAMA: Efficient graph analytics using Large Multiversioned Arrays. In 2015
+IEEE 31st International Conference on Data Engineering. 363–374.
+
+[14] Thomas Neumann, Tobias Mühlbauer, and Alfons Kemper. 2015. Fast Serializ-
+able Multi-Version Concurrency Control for Main-Memory Database Systems.
+Proceedings of the 2015 ACM SIGMOD International Conference on Management of
+Data (2015).
+
+[15] Yingjun Wu, Joy Arulraj, Jiexi Lin, Ran Xian, and Andrew Pavlo. 2017. An em-
+pirical evaluation of in-memory multi-version concurrency control. Proceedings
+of the VLDB Endowment 10 (03 2017), 781–792.
+
+[16] Xiaowei Zhu, Guanyu Feng, Marco Serafini, Xiaosong Ma, Jiping Yu, Lei Xie,
+Ashraf Aboulnaga, and Wenguang Chen. 2020. LiveGraph: a transactional graph
+storage system with purely sequential adjacency list scans. Proceedings of the
+VLDB Endowment 13 (03 2020), 1020–1034.
+
+

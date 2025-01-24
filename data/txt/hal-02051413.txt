@@ -1,0 +1,1491 @@
+Reformulation-based query answering for RDF graphs
+with RDFS ontologies
+Maxime Buron, François Goasdoué, Ioana Manolescu, Marie-Laure Mugnier
+
+To cite this version:
+
+Maxime Buron, François Goasdoué, Ioana Manolescu, Marie-Laure Mugnier. Reformulation-based
+query answering for RDF graphs with RDFS ontologies. ESWC 2019 - 16th European Semantic Web
+Conference, Jun 2019, Portoroz, Slovenia. pp.19-35, ￿10.1007/978-3-030-21348-0_2￿. ￿hal-02051413￿
+
+HAL Id: hal-02051413
+
+https://hal.science/hal-02051413
+
+Submitted on 12 Mar 2019
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Reformulation-based query answering for RDF
+graphs with RDFS ontologies
+
+Maxime Buron1,2, Fran¸cois Goasdou´e3, Ioana Manolescu1,2, and Marie-Laure
+Mugnier4
+
+1 Inria Saclay, firstname.lastname@inria.fr
+2 LIX (UMR 7161, CNRS and Ecole polytechnique, France)
+3 Univ Rennes, CNRS, IRISA, fg@irisa.fr
+4 Univ. Montpellier, LIRMM, Inria, mugnier@lirmm.fr
+
+Abstract. Query answering in RDF knowledge bases has traditionally
+been performed either through graph saturation, i.e., adding all implicit
+triples to the graph, or through query reformulation, i.e., modifying the
+query to look for the explicit triples entailing precisely what the orig-
+inal query asks for. The most expressive fragment of RDF for which
+Reformulation-based quey answering exists is the so-called database frag-
+ment [12], in which implicit triples are restricted to those entailed using
+an RDFS ontology. Within this fragment, query answering was so far
+limited to the interrogation of data triples (non-RDFS ones); however, a
+powerful feature speciﬁc to RDF is the ability to query data and schema
+triples together. In this paper, we address the general query answering
+problem by reducing it, through a pre-query reformulation step, to that
+solved by the query reformulation technique of [12]. We also report on
+experiments demonstrating the low cost of our reformulation algorithm.
+
+Keywords: Query answering · Query reformulation · RDF · RDFS
+
+1
+
+Introduction
+
+RDF is the standard model for sharing data and knowledge bases. The rapid
+increase in number and size of RDF graphs makes eﬃcient query answering on
+RDF quite a challenging task. Reasoning raises a performance challenge: query
+answering on an RDF graph no longer reduces to evaluating the query on the
+graph (by ﬁnding all the homomorphisms, or embeddings, of the query in the
+graph). Instead, it requires taking into account also the possible ontology (or
+knowledge) rules, which specify how diﬀerent classes and properties of an RDF
+graph relate to each other, and may lead to query answers that evaluation alone
+cannot compute. Moreover, SPARQL, the standard query language of RDF,
+allows querying the data and the ontology together. This is a radical departure
+both from relational databases, and from Description Logics (DL)-style models
+for RDF data and queries.
+For what concerns reasoning, two main methods have been explored: graph sat-
+uration, which injects the ontology knowledge into the graph, and query refor-
+mulation, which pushes it into the query. Saturation adds to the graph all the
+triples it entails through the ontology. Evaluating a query on a saturated graph
+
+2
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+Triple notation
+(s, τ, o)
+(s, p, o) with p (cid:54)∈ {τ, ≺sc, ≺sp, ←(cid:45)d, (cid:44)→r}
+
+RDF assertions
+Class assertion
+Property assertion
+RDFS constraints Triple notation
+Subclass
+Subproperty
+Domain typing
+Range typing
+
+(s, ≺sc, o)
+(s, ≺sp, o)
+(s, ←(cid:45)d, o)
+(s, (cid:44)→r, o)
+
+Table 1. RDF statements.
+can be quite eﬃcient; however, saturation takes time to compute, space to store,
+and needs to be updated when the data and/or ontology rules change. Refor-
+mulation leaves the graph unchanged and builds a reformulated query which,
+evaluated on the original graph, computes all the answers, including those that
+hold due to entailed triples. Each query reformulation method, thus, targets a
+certain ontology language and a query dialect. The most expressive RDF frag-
+ment for which sound and complete reformulation-based query answering exists
+is the so-called database fragment [12], in which RDF Schema (RDFS, in short)
+is used to describe the ontology, while queries only carry over the data triples.
+In this work, we present a novel reformulation-based query answering under
+RDFS ontologies for Basic Graph Pattern (BGP) queries over both the data and
+the ontology. This goes beyond the closest algorithm previously known [12] which
+is restricted to queries over the data only (not over the ontology). The algorithm
+we present here also goes beyond those of RDF platforms such as Jena, Virtuoso
+or Stardog, which we found experimentally to be incomplete when answering
+through reformulation queries over the data and the ontology of an RDF graph.
+Below, we recall some terminology (Section 2) and discuss the state of the art
+(Section 3). Then, Section 4 introduces our novel query reformulation algorithm,
+which we implemented in the platform used in [12, 9], leveraging an eﬃcient re-
+lational database (RDBMS) engine for query answering. Our experiments (Sec-
+tion 5) demonstrate the practical interest of our reformulation approach.
+
+2 Preliminaries
+
+We present the basics of the RDF graph data model (Section 2.1), of RDF
+entailment used to make explicit the implicit information RDF graphs encode
+(Section 2.2), as well as how they can be queried using the widely-considered
+SPARQL Basic Graph Pattern queries (Section 2.3).
+
+2.1 RDF Graph
+We consider three pairwise disjoint sets of values: I of IRIs (resource iden-
+tiﬁers), L of literals (constants) and B of blank nodes modeling unknown
+IRIs or literals, a.k.a. to labelled nulls
+[4]. A well-formed triple belongs to
+(I ∪ B) × I × (L ∪ I ∪ B), and an RDF graph G is a set of well-formed
+triples. A triple (s, p, o) states that its subject s has the property p with the
+object value o [1]. We denote by Val(G) the set of all values (IRIs, blank nodes
+and literals) occurring in an RDF graph G, and by Bl(G) its set of blank nodes.
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+3
+
+Within an RDF graph, triples model either factual assertions for unary rela-
+tions called classes and binary relations called properties, or RDFS ontological
+constraints between classes and properties. The RDFS constraints are of four
+ﬂavours: subclass constraints, subproperty constraints, typing of the domain
+(ﬁrst attribute) or of the range (second attribute) of a property. The triple no-
+tations we adopt for RDF assertions and constraints are shown in Table 1. In
+a triple, we use :b (possibly with indices) to denote blank nodes, and strings
+between quotes to denote literals.
+We consider RDF graphs with RDFS ontologies, i.e., constraints of the four
+ﬂavors above, excluding constraints which would alter the commonly-accepted
+RDFS semantics. For instance, (←(cid:45)d, ≺sp, (cid:44)→r) is not allowed as it would make
+domain typing a particular case of range typing. Let RDFS(G) denote the RDFS
+constraints of a graph G. We deﬁne:
+Deﬁnition 1 (RDF graph with an RDFS ontology). An RDFS ontology
+(or ontology in short) is a set of RDFS constraints, whose subjects and objects
+are either IRIs (other than ≺sc, ≺sp, ←(cid:45)d, (cid:44)→r, τ ) or blank nodes.
+An RDF graph G with ontology O is such that: RDFS(G) = O.
+
+Example 1 (Running example). Consider the following RDF graph:
+Gex = {(:worksFor, ←(cid:45)d, :Person), (:worksFor, (cid:44)→r, :Org), (:PubAdmin, ≺sc, :Org)
+(:Comp, ≺sc, :Org), ( :bC, ≺sc, :Comp), (:hiredBy, ≺sp, :worksFor)
+(:ceoOf, ≺sp, :worksFor), (:ceoOf, (cid:44)→r, :Comp),
+(:p1, :ceoOf, :c), (:c, τ, :bC), (:p2, :hiredBy, :a), (:a, τ, :PubAdmin)}
+The ontology of Gex, i.e., the ﬁrst eight triples, states that persons are working for
+organizations, some of which are public administrations or companies. Further,
+there exists a special kind of company (modeled by :bC). Being hired by or
+being CEO of an organization are two ways of working for it; in the latter case,
+this organization is a company. The assertions of Gex, i.e., the four remaining
+triples, states that :p1 is CEO of :c, which is a company of the special kind :bC,
+and :p2 is hired by the public administration :a.
+A homomorphism between RDF graphs allows characterizing whether an RDF
+graph simply entails another, based on their explicit triples only:
+Deﬁnition 2 (RDF graph homomorphism). Let G and G(cid:48) be two RDF
+graphs. A homomorphism from G to G(cid:48) is a function ϕ from Val(G) to Val(G(cid:48)),
+which is the identity on IRIs and literals, such that for any triple (s, p, o) in G,
+the triple (ϕ(s), ϕ(p), ϕ(o)) is in G(cid:48).
+
+Note that, according to the previous deﬁnition, a G blank node can be mapped
+to any G(cid:48) value. A graph G(cid:48) simply entails a graph G if there is a homomorphism
+ϕ from G to G(cid:48), which we denote by G(cid:48) |=ϕ G.
+
+2.2 RDF Entailment Rules
+The semantics of an RDF graph consists of the explicit triples it contains, and
+of the implicit triples that can be derived from it using RDF entailment rules.
+Deﬁnition 3 (RDF entailment rule). An RDF entailment rule r has the
+form body(r) → head(r), where body(r) and head(r) are RDF graphs, respectively
+called body and head of the rule r.
+
+4
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+Rule [2] Entailment rule
+
+(p, ←(cid:45)d, o), (s1, p, o1) → (s1, τ, o)
+(p, (cid:44)→r, o), (s1, p, o1) → (o1, τ, o)
+(p1, ≺sp, p2), (p2, ≺sp, p3) → (p1, ≺sp, p3)
+(p1, ≺sp, p2), (s, p1, o) → (s, p2, o)
+(s, ≺sc, o), (s1, τ, s) → (s1, τ, o)
+
+rdfs2
+rdfs3
+rdfs5
+rdfs7
+rdfs9
+rdfs11 (s, ≺sc, o), (o, ≺sc, o1) → (s, ≺sc, o1)
+(p, ←(cid:45)d, o), (o, ≺sc, o1) → (p, ←(cid:45)d, o1)
+ext1
+(p, (cid:44)→r, o), (o, ≺sc, o1) → (p, (cid:44)→r, o1)
+ext2
+(p, ≺sp, p1), (p1, ←(cid:45)d, o) → (p, ←(cid:45)d, o)
+ext3
+(p, ≺sp, p1), (p1, (cid:44)→r, o) → (p, (cid:44)→r, o)
+ext4
+
+Table 2. RDFS entailment rules.
+The standard RDF entailment rules are deﬁned in [2]. In this work, we consider
+the rules shown in Table 2, which we call RDFS entailment rules; all values
+except the τ, ≺sc, ≺sp, ←(cid:45)d, (cid:44)→r properties are blank nodes. These rules are the
+most frequently used for RDFS entailment; they produce implicit triples by
+exploiting the RDFS ontological constraints of an RDF graph. For example,
+the rule rdfs9, which propagates values from subclasses to their superclasses, is
+deﬁned by body(rdfs9) = {(s, ≺sc, o), (s1, τ, s)} and head(rdfs9) = {(s1, τ, o)}.
+The direct entailment of an RDF graph G with a set of RDF entailment rules
+R, denoted by CG,R, characterizes the set of implicit triples resulting from rule
+applications that use solely the explicit triples of G. It is deﬁned as:
+
+CG,R = {ϕ(head(r)) | r ∈ R, G |=ϕ body(r)}
+For instance, the rule rdfs9 applies to the graph Gex: Gex |=ϕ body(rdfs9)
+through the homomorphism ϕ deﬁned as {s (cid:55)→ :bC, o (cid:55)→ :Comp, s1 (cid:55)→ :c},
+hence allows deriving the implicit triple (:c, τ, :Comp).
+The saturation of an RDF graph allows materializing its semantics, by iteratively
+augmenting it with the triples it entails using a set R of RDF entailment rules,
+until reaching a ﬁxpoint; this process is ﬁnite [2]. Formally:
+Deﬁnition 4 (RDF graph saturation). Let G be an RDF graph and R a set
+of entailment rules. We recursively deﬁne a sequence (GR
+i )i∈N of RDF graphs as
+follows:
+– GR
+– GR
+
+i ,R for 0 ≤ i.
+The saturation of G w.r.t. R, denoted by GR, is GR
+such that GR
+Example 2. The saturation of Gex w.r.t. the set R of RDFS entailment rules
+shown in Table 2 is attained after the following two saturation steps:
+
+n for n the smallest integer
+
+0 = G, and
+i+1 = GR
+
+n = GR
+
+i ∪ CGR
+
+n+1.
+
+(Gex)R
+
+1 =Gex ∪ {( :bC, ≺sc, :Org), (:hiredBy, ←(cid:45)d, :Person), (:hiredBy, (cid:44)→r, :Org),
+
+(:ceoOf, ←(cid:45)d, :Person), (:ceoOf, (cid:44)→r, :Org),
+(:p1, :worksFor, :c), (:c, τ, :Comp), (:p2, :worksFor, :a), (:a, τ, :Org)}
+
+(Gex)R
+
+2 =(Gex)R
+
+1 ∪ {(:p1, τ, :Person), (:p2, τ, :Person), (:c, τ, :Org)}
+
+Simple entailment between RDF graphs, which is based on their explicit triples
+only, generalizes to entailment between RDF graphs w.r.t. a set of RDF entail-
+ment rules, to also take into account their implicit triples.
+A graph G entails a graph G(cid:48) w.r.t. a set of rules R, noted G |=ϕ
+
+R G(cid:48), whenever
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+5
+
+there is a homomorphism ϕ from G(cid:48) to GR. Of course, simple entailment and
+entailment between RDF graphs coincide when R = ∅. For simplicity, we will
+just write G |=R G(cid:48) whenever ϕ is not needed for the discussion.
+In this work, unless otherwise speciﬁed, R denotes the rules from Table 2.
+
+2.3 Basic Graph Pattern Queries
+A popular fragment of the SPARQL query language consists of conjunctive
+queries, also known as basic graph pattern queries. Let V be a set of variable
+symbols, disjoint from I ∪ B ∪ L . A basic graph pattern (BGP) is a set of triple
+patterns (triples in short) belonging to (I ∪B ∪V )×(I ∪V )×(I ∪B ∪L ∪V ).
+For a BGP P , we denote by Var(P) the set of variables occurring in P , by Bl(P )
+its set of blank nodes, and by Val(P ) its set of values (IRIs, blank nodes, literals
+and variables).
+Deﬁnition 5 (BGP query). A BGP query (BGPQ) q is of the form q(¯x) ←
+P , where P is a BGP also denoted by body(q) and ¯x ⊆ Var(P) is the set of q’s
+answer variables. The arity of q is that of ¯x, i.e., |¯x|.
+Partially instantiated BGPQs generalize BGPQs and have been used for
+reformulation-based query answering [12]. Starting from a BGPQ q, partial in-
+stantiation replaces some variables and/or blank nodes with values from I ∪
+L ∪ B, as speciﬁed by a substitution σ; the partially instantiated query is de-
+noted qσ. Observe that when σ = ∅, qσ coincides with q. Further, due to σ, and
+in contrast with standard BGPQs, some answer variables of qσ can be bound:
+
+Example 3. Consider the BGPQ asking for who is working for which kind of
+company: q(x, y) ← (x, :worksFor, z), (z, τ, y), (y, ≺sc, :Comp), and the substi-
+tution σ = {x (cid:55)→ :p1}. The partially instantiated BGPQ qσ corresponds to
+q(:p1, y) ← (:p1, :worksFor, z), (z, τ, y), (y, ≺sc, :Comp).
+
+The semantics of a (partially instantiated) BGPQ on an RDF graph is deﬁned
+through homomorphisms from the query body to the saturation of the queried
+graph. The homomorphisms needed here are a straightforward extension of RDF
+graph homomorphisms (Deﬁnition 2) to also take variables into account.
+Deﬁnition 6 ((Non-standard) BGP to RDF graph homomorphism).
+A homomorphism from a BGP q to an RDF graph G is a function ϕ from
+Val(body(q)) to Val(G) such that for any triple (s, p, o) ∈ body(q), the triple
+(ϕ(s), ϕ(p), ϕ(o)) is in G. For a standard homomorphism, as per the SPARQL
+recommendation, ϕ is the identity on IRIs and literals; for a non non-standard
+one, ϕ is the identity on IRIs, literals and on blank nodes.
+We distinguish query evaluation, whose result is just based on the explicit triples
+of the graph, i.e., on BGP to RDF graph homomorphisms, from query answering
+that also accounts for the implicit graph triples, i.e., based on both BGP to RDF
+graph homomorphisms and RDF entailment. In this paper, we use two ﬂavors
+of query evaluation and of query answering, which diﬀer in relying either on
+standard or on non-standard BGP to RDF graph homomorphisms.
+Deﬁnition 7 ((Non-standard) evaluation and answering). Let qσ be a
+partially instantiated BGPQ qσ obtained from a BGPQ q and a substitution σ.
+
+6
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+The standard answer set to qσ on an RDF graph G w.r.t. a set R of RDF
+entailment rules is:
+
+qσ(G, R) = {ϕ(¯xσ) | G |=ϕ
+
+R body(q)σ}
+
+where ¯xσ and body(q)σ denote the result of replacing the variables and blank
+nodes in ¯x and body(q), respectively, according to σ.
+If ¯x = ∅, qσ is a Boolean query, in which case qσ is false when qσ(G, R) = ∅
+and true when qσ(G, R) = {(cid:104)(cid:105)}, i.e., the answer to qσ is an empty tuple.
+We call qσ(G, ∅) the standard evaluation of qσ on G, written qσ(G) for short,
+which solely amounts to standard BGP to RDF graph homomorphism ﬁnding.
+
+The non-standard answer set, denoted
+(cid:122) (cid:125)(cid:124) (cid:123)
+qσ(G) of qσ on G w.r.t. R only diﬀer from the standard ones by using non-
+standard BGP to RDF graph homomorphisms.
+
+(cid:122)
+qσ(G, R), and non-standard evaluation
+
+(cid:125)(cid:124)
+
+(cid:123)
+
+These notions and notations naturally extend to unions of BGPQs.
+
+Example 4. Consider again the BGPQs from the preceding example. Their stan-
+dard evaluations on Gex are empty because Gex has no explicit :worksFor asser-
+tion, while their standard answer sets on Gex w.r.t. R are {(cid:104):p1, :bC(cid:105)} because
+:p1 being CEO of :c, :p1 implicitly works for it, and :c is explicitly a company
+of the particular unknown type :bC.
+Consider now the BGPQ q(x) ← (x, :worksFor, y), (y, τ, :bC). Under standard
+query answering, it asks for who is working for some kind of organization and its
+answer set is {(cid:104):p1(cid:105), (cid:104):p2(cid:105)}; by contrast, under non-standard query answering, it
+asks for who is working for an organization of the particular unknown type :bC
+in Gex and its answer set is just {(cid:104):p1(cid:105)}.
+
+3 Prior related work
+
+(cid:122) (cid:125)(cid:124) (cid:123)
+q(G, R) =
+
+Two main techniques for answering BGPQs on RDF graphs have been investi-
+gated in the literature.
+Saturation-based query answering. This technique directly follows from the def-
+inition of query answers in the W3C’s SPARQL recommendations [3], recalled
+in Section 2.3 for BGPQs. Indeed, it trivially follows from Deﬁnition 7 that
+(cid:122) (cid:125)(cid:124) (cid:123)
+q(GR)), i.e., query answering reduces to
+
+q(G, R) = q(GR) (resp.
+query evaluation on the saturated RDF graph.
+Saturation-based query answering is typically fast, because it only requires query
+evaluation, which can be eﬃciently performed by a data management engine.
+However, saturation takes time to be computed, requires extra space to be stored,
+and must be recomputed or maintained (e.g., [8, 7, 12]) upon updates. Many RDF
+data management systems use saturation-based query answering. They either
+allow computing graph saturation, e.g., Jena and RDFox, or simply assume that
+RDF graphs have been saturated before being stored, e.g., DB2RDF.
+Reformulation-based query answering. This technique also reduces query an-
+swering to query evaluation, however, the reasoning needed to ensure complete
+answers is performed on the query and not on the RDF graph. A given query
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+7
+
+q, asked on an RDF graph G w.r.t. R is reformulated into a query q(cid:48) such that
+
+(cid:122) (cid:125)(cid:124) (cid:123)
+q(cid:48)(G) holds. Standard or non-standard query eval-
+q(G, R) = q(cid:48)(G) or q(G, R) =
+uation is needed on the reformulated query, depending on the considered RDF
+fragment: when blank nodes are allowed in RDFS constraints, non-standard
+evaluation is used [12], while standard evaluation is suﬃcient otherwise [5, 11].
+Diﬀerent SPARQL dialects have been adopted for BGPQ reformulation in more
+limited settings than the one considered in this paper, i.e., the database frag-
+ment of RDF and unrestricted BGPQs. Unions of BGPQs (UBGPQs in short)
+have been used in [5, 11, 12]. However, these works are restricted to input BG-
+PQs that must be matched on RDF assertions only. BGPQs aiming at inter-
+rogating solely the RDFS ontology, or the ontology and the assertions are not
+considered, even though such joint querying is a major novelty of RDF and
+SPARQL. The techniques adopt unions of BGPQs [5] or of partially instanti-
+ated BGPQs [11, 12], depending on whether variables can be used in class and
+property positions in queries, e.g., whether a query triple (x, τ, z) or (x, y, z)
+is allowed. Reformulation-based query answering in the DL fragment of RDF,
+which is strictly contained in the database fragment of RDF, has been investi-
+gated for relational conjunctive queries [5, 10], while the slight extension thereof
+considered in [6, 11, 13, 17] has been investigated for one-triple BGPQs [13, 17],
+BGPQs [11], and SPARQL queries [6]. In [6], SPARQL queries are reformulated
+into nested SPARQL, allowing nested regular expressions in property position in
+query triples. These reformulations allow sound and complete query answering
+on restricted RDF graphs with RDFS ontologies: these graph must not contain
+blank nodes. While such nested reformulations are more compact, the queries
+we produce are more practical, since their evaluation can be delegated to any
+oﬀ-the-shelf RDBMS, or to an RDF engine such as RDF-3X [16] even if it is
+unaware of reasoning; further, we do not impose restrictions on RDF graphs.
+In Section 4, we devise a reformulation-based query answering technique for the
+entire database fragment of RDF and unrestricted BGPQs.
+Reformulation-based query answering is well-suited to frequently updated RDF
+graphs, because it uses the queried RDF graph at query time (and not its satura-
+tion). However, reformulated queries tend to be more complex than the original
+ones, thus costly to evaluate. To mitigate this, [9] provides an optimized refor-
+mulation framework whereas an incoming BGPQ is reformulated into a join of
+unions of BGPQs (JUBGPQ in short). This approach being based on a database-
+style cost model, JUBGPQ reformulations are very eﬃciently evaluated.
+Some available RDF data management systems use reformulation-based query
+answering but return incomplete answer sets in the RDF setting we consider5,
+e.g., AllegroGraph6 and Stardog7 miss answers because they cannot evaluate
+
+5See discussion at
+
+https://team.inria.fr/cedar/rdfs-reasoning-experiments/.
+
+6https://franz.com/agraph/support/documentation/current/
+
+reasoner-tutorial.html
+
+7https://www.stardog.com/docs/#_owl_rule_reasoning
+
+8
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+triples with a variable property on the schema, while Virtuoso8 only exploits
+subclass and subproperty constraints, but not domain and range ones.
+Finally, Hybrid approaches have also been studied, e.g., in [18], where some one-
+triple queries are chosen for materialization and reused during reformulation-
+based answering.
+
+4 Extending query reformulation to queries over the
+
+ontology
+
+We now present the main contribution of this paper: a reformulation-based query
+answering (QA) technique able to compute all answers to a BGPQ against all
+the explicit and implicit triples of an RDF graph, i.e., its RDF assertions and
+RDFS constraints, as per the SPARQL and RDF recommendations [3, 2].
+The central idea is to reduce this full QA problem to an assertion-level QA, i.e.,
+where the query is conﬁned to just the explicit and implicit RDF assertions.
+To this aim, we divide query reformulation in two steps: the ﬁrst reformulation
+step implements the reduction, while the second step relies on the reformulation
+technique of [12], which considers assertion-level QA.
+
+4.1 Overview of our query reformulation technique
+Let us ﬁrst notice that the body of any BGPQ q can be divided into three
+disjoint subsets of triples (s, p, o), according to the nature of term p: the set bc
+of RDFS triples where p is a built-in RDFS property (≺sc, ≺sp, ←(cid:45)d, (cid:44)→r); the
+set ba of assertion triples where p is τ or a user-deﬁned property; and the set
+bv where p is a variable. We denote by qc, qa and qv the subqueries respectively
+associated with these bodies. If bv is not empty, q can be reformulated as a
+union of BGPQs, say Q, composed of all BGPQs that can be obtained from q
+by substituting some (possibly none) variables occurring in qv with one of the
+four built-in RDFS properties. We assume this preprocessing step to simplify
+the explanations, even if in practice it may not be performed. Then, the answers
+to any BGPQ q(cid:48) ∈ Q can be computed in two steps:
+1. compute the answers to the subquery q(cid:48)
+
+c, i.e., with body restricted to the
+c has no answer, neither has q(cid:48). Otherwise, each answer to
+
+RDFS triples; if q(cid:48)
+c deﬁnes a (partial) instantiation σ of the variables in q(cid:48).
+q(cid:48)
+
+2. compute the assertion-level answers to each partially instantiated query
+v, and return the union
+
+a,v is the subquery with body b(cid:48)
+
+a,v)σ, where q(cid:48)
+
+a ∪ b(cid:48)
+
+(q(cid:48)
+of all the obtained answers.
+
+To summarize, Step 1 computes answers to RDFS triples, which allows one to
+produce a set of partially instantiated queries that no longer contain RDFS
+triples. Hence, these queries can then be answered using RDF assertions only,
+which is the purpose of Step 2. Our two-step query reformulation follows this
+decomposition. It furthermore considers a partition of the set R of RDFS entail-
+ment rules (recall Table 2) into two subsets: the set of rules Rc that produces
+RDFS constraints and the set of rules Ra that produces RDF assertions:
+
+8http://docs.openlinksw.com/virtuoso/rdfsparqlruleimpl
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+9
+
+– Rc = {rdfs5, rdfs11, ext1, ext2, ext3, ext4};
+– Ra = {rdfs2, rdfs3, rdfs7, rdfs9}.
+
+The reason of this decomposition is that query answering remains complete if,
+on the one hand, only Rc is considered to answer queries made of RDFS triples
+(Step 1: for any graph G, q(cid:48)
+c(G, Rc)), and, on the other hand, only
+Ra is considered to answer queries on RDF assertions only, as shown in [12].
+Query reformulation does not directly work on the entailment rules as classical
+backward-chaining techniques would do. Instead, a set of so-called reformulation
+rules is speciﬁcally associated with Rc (resp. Ra). We can now outline the two-
+step query reformulation algorithm:
+
+c(G, R) = q(cid:48)
+
+Step 1. Reformulation w.r.t. Rc: The input BGPQ q is ﬁrst reformulated
+into a union Qc of partially instantiated BGPQs, using the set of reformulation
+rules associated with Rc (see Figure 1). This reformulation step is sound and
+(cid:122) (cid:125)(cid:124) (cid:123)
+Qc(G);
+complete for query answering w.r.t. Rc, i.e., for any graph G, q(G, Rc) =
+furthermore, it preserves the answers with respect to the set R, i.e., q(G, Rc ∪
+
+Ra) =
+
+(cid:122)
+Qc(G, Rc ∪ Ra) (see Theorem 1 in Section 4.3).
+
+(cid:125)(cid:124)
+
+(cid:123)
+
+Step 2. Reformulation w.r.t. Ra: We recall that Qc consists of queries that
+do not contain RDFS triples. It is given as input to the query reformulation
+algorithm of [12], which relies on a set of reformulation rules associated with Ra
+to output a union Qc,a of partially instantiated BGPQs. This reformulation step
+being sound and complete for query answering on the RDF assertions of an RDF
+graph, we obtain the soundness and completeness of the two-step reformulation,
+(cid:122) (cid:125)(cid:124) (cid:123)
+Qc,a(G) (see Theorem 2 in Section 4.3).
+
+i.e., q(G, Rc ∪ Ra) =
+
+(cid:122)
+(cid:125)(cid:124)
+Qc(G, Ra) =
+
+(cid:123)
+
+4.2 Reformulation rules associated with Rc
+
+We now detail reformulation rules associated with Rc, see Figure 1. Each re-
+formulation rule is of the form input
+output , where the input is composed of a triple
+from a partially instantiated query qσ and a triple from O and the output is
+a new query obtained from qσ by instantiating a variable, removing the input
+triple, or replacing it by one or two triples. The notation old triple/new triple(s)
+means that old triple is replaced by new triple(s). The speciﬁc case where old
+triple is simply removed is denoted by old triple/−. The notations for the triples
+themselves are the following:
+
+– a bold character like c, p, s or o represents an IRI or a blank node
+– a v character represents a variable of the query
+– s and o characters represent either variables, IRIs or blank nodes, in subject
+
+and object positions respectively.
+
+The four rules (1) substitute a variable in a property position by one of the four
+built-in RDFS properties. All the other rules take as input query triples of the
+form (s, p, o), where p is a built-in RDFS property. Rule (2) simply removes from
+qσ an (instantiated) input triple found in O.
+Query triples with a domain (←(cid:45)d) or range property ((cid:44)→r) are processed by
+Rules (3)-(11). Given a triple (p, ←(cid:45), c) in O (where ←(cid:45) stands for ←(cid:45)d or (cid:44)→r),
+
+10
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+(s, v, o) ∈ qσ
+qσ∪{v→≺sc}
+
+,
+
+(s, v, o) ∈ qσ
+qσ∪{v→≺sp}
+
+,
+
+(s, v, o) ∈ qσ
+qσ∪{v→←(cid:45)d}
+
+,
+
+(s, v, o) ∈ qσ
+qσ∪{v→(cid:44)→r }
+
+(s, p, o) ∈ qσ, (s, p, o) ∈ O
+qσ[(s, p, o)/−]
+
+(v1, ←(cid:45), v2) ∈ qσ, (p, ←(cid:45), c) ∈ O
+qσ[(v1, ←(cid:45), v2)/(v1, ≺sp, p), (c, ≺sc, v2)]
+
+(v1, ←(cid:45), v2) ∈ qσ, (p, ←(cid:45), c) ∈ O
+qσ∪{v1→p}
+
+(v1, ←(cid:45), v2) ∈ qσ, (p, ←(cid:45), c) ∈ O
+qσ∪{v2→c}
+
+(v, ←(cid:45), c) ∈ qσ, (p, ←(cid:45), c) ∈ O
+qσ∪{v→p}
+
+(p, ←(cid:45), v) ∈ qσ, (p, ←(cid:45), c) ∈ O
+qσ∪{v→c}
+
+(v, ←(cid:45), c) ∈ qσ, (p, ←(cid:45), c) ∈ O
+qσ[(v, ←(cid:45), c)/(v, ≺sp, p)]
+
+(p, ←(cid:45), v) ∈ qσ, (p, ←(cid:45), c) ∈ O
+qσ[(p, ←(cid:45), v)/(c, ≺sc, v)]
+
+(s, ←(cid:45), c1) ∈ qσ, (c, ≺sc, c1) ∈ O, c (cid:54)= c1
+qσ[(s, ←(cid:45), c1)/(s, ←(cid:45), c)]
+
+(p, ←(cid:45), o) ∈ qσ, (p, ≺sp, p1) ∈ O, p (cid:54)= p1
+qσ[(p, ←(cid:45), o)/(p1, ←(cid:45), o)]
+
+(v1, ≺, v2) ∈ qσ, (c1, ≺, c2) ∈ O
+qσ∪{v1→c1}
+
+(v, ≺, c2) ∈ qσ, (c1, ≺, c2) ∈ O
+qσ∪{v→c1}
+
+(c1, ≺, v) ∈ qσ, (c1, ≺, c2) ∈ O
+qσ∪{v→c2}
+
+(c1, ≺, o) ∈ qσ, (c1, ≺, c2) ∈ O, c1 (cid:54)= c2
+qσ[(c1, ≺, o)/(c2, ≺, o)]
+
+(s, ≺, c2) ∈ qσ, (c1, ≺, c2) ∈ O, c1 (cid:54)= c2
+qσ[(s, ≺, c2)/(s, ≺, c1)]
+
+(1)
+
+(2)
+
+(3)
+
+(4)
+
+(5)
+
+(6)
+
+(7)
+
+(8)
+
+(9)
+
+(10)
+
+(11)
+
+(12)
+
+(13)
+
+(14)
+
+(15)
+
+(16)
+
+Fig. 1. Reformulation rules for a partially instantiated query qσ w.r.t. an RDFS on-
+tology O. For compactness, we factorize similar rules, using the symbol ←(cid:45) to denote
+either ←(cid:45)d or (cid:44)→r, and ≺ to denote either ≺sc or ≺sp.
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+11
+
+Rule (3) replaces a query triple of the form (v1, ←(cid:45), v2) by two triples (v1, ≺sp, p)
+and (c, ≺sc, v2). This rule relies on the fact that a triple (p(cid:48), ←(cid:45), c(cid:48)) belongs to
+the saturation of the RDF graph by Rc if and only if p(cid:48) is a subproperty of
+p (including p = p(cid:48)) and c is a subclass of c(cid:48) (including c = c(cid:48)), see Lemma
+1 in Section 4.3. However, we do not assume that the ontology ensures the
+reﬂexivity of the subclass and subproperty relations, hence Rules (4)-(7), whose
+sole purpose is to deal with the cases c = c(cid:48) and p = p(cid:48). Should the ontology
+contain axiomatic triples ensuring the reﬂexivity of subclass and subproperty,
+these four rules would be useless. Note that a natural candidate rule to deal with
+the case where c (cid:54)= c(cid:48) and p (cid:54)= p(cid:48) would have been the following:
+
+(p(cid:48), ←(cid:45), c(cid:48)) ∈ qσ, (p, ←(cid:45), c) ∈ O
+qσ[(p(cid:48),←(cid:45),c(cid:48))/(p(cid:48),≺sp,p),(c,≺sc,c(cid:48))]
+
+(17)
+
+However, such a rule is ﬂawed: it would blindly consider all triples (p, ←(cid:45), c) from
+O, which causes a combinatorial explosion. Instead, we propose Rules (10) and
+(11), which use p(cid:48) and c(cid:48) as guides to replace (p(cid:48), ←(cid:45), c(cid:48)) by other domain / range
+triples based on the subproperty-chains from p(cid:48) and the subclass-chains to c(cid:48).
+Query triples with a subclass (≺sc) or subproperty (≺sp) property are processed
+by Rules (12)-(16). Rules (12), (13), (14) instantiate a variable using an ontology
+triple of the form (c1, ≺, c2). In Rule (12), which considers a query triple with
+two variables and instantiates one of these variables, we arbitrarily chose to
+instantiate the ﬁrst variable. The two last rules allow to go up or down in the
+class and property hierarchies.
+
+4.3 Reformulation algorithm associated with Rc
+
+The reformulation algorithm itself, denoted by Reformulatec, is presented in Al-
+gorithm 1. The set of queries to be explored (named toExplore) initially contains
+q. Exploring a query consists of generating all new queries that can be obtained
+from it by applying a reformulation rule (lines 7–9). Newly generated queries
+are put in the set named produced. The algorithm proceeds in a breadth-ﬁrst
+manner, exploring at each step the queries that have been generated at the pre-
+vious step. When no new query can be generated at a step, the algorithm stops,
+otherwise the next step will explore the newly generated queries (line 11). Note
+the use of a set named explored, which contains all explored queries; the purpose
+of this set is to avoid inﬁnite generation of the same queries when the subclass or
+subproperty hierarchy contains cycles (other than loops), otherwise it is useless.
+Importantly, not all explored queries are returned in the resulting set, but only
+those that no longer contain RDFS triples (lines 5–6). Indeed, on the one hand
+RDFS triples that contain variables are instantiated by the rules in all possible
+ways using the ontology, and, on the other hand, instantiated triples that belong
+to the ontology are removed (by Rule (2)). Finally, note that a variable v in a
+triple of the form (s, v, o) is replaced by a built-in RDFS property in some queries
+(by Rule (1)) and left unchanged in others as it may also be later mapped to a
+user-deﬁned property in the RDF graph G.
+A simple analysis of the reformulation rule behavior shows that the worst-case
+time complexity of algorithm Reformulatec is polynomial in the size of O and
+
+12
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+Algorithm 1: Reformulatec
+
+Input : BGPQ q and ontology O
+Output: the reformulation of q with the rules from Fig. 1
+
+1 result ← ∅; toExplore ← {q}; explored ← ∅
+2 while toExplore (cid:54)= ∅ do
+produced ← ∅
+3
+for each qσ ∈ toExplore do
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+if qσ does not contain any RDFS triple then
+
+result ← result ∪ {qσ}
+
+for each RDFS triple t in qσ do
+
+for each q(cid:48)
+
+σ obtained by applying a reformulation rule to t do
+
+produced ← produced ∪ {q(cid:48)
+
+σ}
+
+explored ← explored ∪ {qσ}
+
+toExplore ← produced \ explored
+
+12 return result
+
+simply exponential in the size of q. More precisely:
+Proposition 1. The algorithm Reformulatec runs in time O(|V al(O)|6|q|), where
+|q| is the number of triples in the body of q.
+
+The correctness of the algorithm relies on the following lemma, which charac-
+terizes the saturated graph GRc from the triples of G. We call ≺sc-chain (resp.
+≺sp-chain) from s to o a possibly empty sequence of triples (si, ≺sc, oi) (resp.
+(si, ≺sp, oi)) with 1 ≤ i ≤ n, such that s1 = s, on = o and, for i > 1, si = oi−1.
+Since we do not enforce the reﬂexivity of the subclass relation, a triple (c, ≺sc, c)
+belongs to GR if and only if there is a non-empty ≺sc-chain from c to c (which
+includes the case (c, ≺sc, c) ∈ G). The same holds for the subproperty relation.
+
+Lemma 1. Let G be an RDF graph. It holds that:
+
+– (c, ≺sc, c(cid:48)) ∈ GRc iﬀ G contains a non-empty ≺sc-chain from c to c(cid:48);
+– (p, ≺sp, p(cid:48)) ∈ GRc iﬀ G contains a non-empty empty ≺sp-chain from p to p(cid:48);
+– (p(cid:48), ←(cid:45)d, c(cid:48)) ∈ GRc iﬀ G contains a triple (p, ←(cid:45)d, c), a (possibly empty) ≺sp-
+chain from p(cid:48) to p and a (possibly empty) ≺sc-chain from c to c(cid:48). The case
+for (p(cid:48), (cid:44)→r, c(cid:48)) ∈ GRc is similar (replace ←(cid:45)d by (cid:44)→r in the statement above).
+
+Below, we assume without loss of generality that the input query does not con-
+tain blank nodes; if needed, these have been equivalently replaced by variables.
+Therefore, all blank nodes that occur in the output reformulation have been
+introduced by the reformulation rules, and speciﬁcally refer to unknown classes
+and properties they identify within the ontology at hand. This justiﬁes the subse-
+quent use of non-standard query evaluation and answering in the next theorems.
+Theorem 1. Let G be an RDF graph with ontology O and q be a BGP query
+without blank nodes. Let Qc be the output of Reformulatec(q, O). Then:
+
+q(G, Rc) =
+
+(cid:125)(cid:124)
+(cid:122)
+q(G, Rc) =
+
+(cid:123)
+
+(cid:122) (cid:125)(cid:124) (cid:123)
+Qc(G)
+
+(18)
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+13
+
+q(G, Rc ∪ Ra) =
+
+(cid:122)
+(cid:125)(cid:124)
+q(G, Rc ∪ Ra) =
+
+(cid:123)
+
+(cid:123)
+(cid:125)(cid:124)
+(cid:122)
+Qc(G, Rc ∪ Ra)
+
+(19)
+
+Example 5. Consider the BGPQ asking for how someone is related to some par-
+ticular kind of company: q(x, y) ← (x, y, z), (z, τ, t), (y, ≺sp, :worksFor), (t, ≺sc
+, :Comp). Its answer set on Gex w.r.t. R, which can be easily checked using
+(Gex)R provided in Section 2, is: q(Gex, R) = {(cid:104):p1, :ceoOf(cid:105)}.
+The output of Reformulatec(q, RDFS(Gex)) is:
+
+Qc = {q(cid:48)(x, :ceoOf) ← (x, :ceoOf, z), (z, τ, :bC),
+
+q(cid:48)(cid:48)(x, :hiredBy) ← (x, :hiredBy, z), (z, τ, :bC)}
+
+where q(cid:48) and q(cid:48)(cid:48) are obtained by binding, using Rule (13), y to either :ceoOf
+or :hiredBy, and t to :bC. Further, these bindings have also produced the fully
+instantiated RDFS constraints (:ceoOf, ≺sp, :worksFor) and ( :bC, ≺sc, :Comp)
+in q(cid:48), as well as (:hiredBy, ≺sp, :worksFor) and ( :bC, ≺sc, :Comp) in q(cid:48)(cid:48), which
+have then been eliminated by Rule (2).
+
+(cid:122)
+(cid:123)
+(cid:125)(cid:124)
+q(cid:48)(cid:48)(Gex, R)
+The non-standard answering of Qc on Gex w.r.t. R, i.e.,
+provides the correct answer set {(cid:104):p1, :ceoOf(cid:105)}, whose only tuple results from q(cid:48).
+Note that, using standard answering, the incorrect answer (cid:104):p2, :hiredBy(cid:105) would
+have also been obtained from q(cid:48)(cid:48), since under this semantics q(cid:48)(cid:48) asks for who is
+hired by an organization of some type (this is the case of :p2 who is hired by a
+public administration) and not who is hired by an organization of the particular
+unknown type of company designated by :bC in Gex.
+
+(cid:122)
+(cid:125)(cid:124)
+q(cid:48)(Gex, R) ∪
+
+(cid:123)
+
+We now rely on the query reformulation algorithm, from [12], say Reformulatea,
+which takes as input a partially instantiated BGPQ q without RDFS triples, and
+a graph G and, using a set of reformulation rules associated with Ra, outputs a
+
+(cid:122) (cid:125)(cid:124) (cid:123)
+reformulation Qa such that: q(G, Rc ∪ Ra) = q(G, Ra) =
+Qa(G). The adapation
+of Reformulatea to an input UBGPQ instead of a BGPQ is straightforward.
+Furthermore, we notice that the algorithm would consider potential blank nodes
+in the input query as if they were IRIs. Hence, denoting by Qc,a the output of
+Reformulatea(Qc, O), we obtain:
+
+(cid:122)
+(cid:125)(cid:124)
+Qc(G, Rc ∪ Ra) =
+
+(cid:123)
+
+(cid:122)
+(cid:125)(cid:124)
+Qc(G, Ra) =
+
+(cid:123)
+
+(cid:122) (cid:125)(cid:124) (cid:123)
+Qc,a(G)
+
+(20)
+
+Putting together (20) and statement (19) in Theorem 1, we can prove the cor-
+rectness of the global reformulation algorithm:
+
+Theorem 2. Let G be an RDF graph and q be a BGPQ without blank nodes.
+Let Qc,a be the reformulation of q by the 2-step algorithm described in Section
+4.1. Then:
+
+q(G, Rc ∪ Ra) =
+
+(cid:122) (cid:125)(cid:124) (cid:123)
+Qc,a(G)
+
+14
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+Fig. 2. Query answering times through reformulation and saturation.
+
+5 Experimental evaluation
+
+We have implemented our reformulation algorithm on top of OntoSQL (https:
+//ontosql.inria.fr), a Java platform providing eﬃcient RDF storage, satura-
+tion, and query evaluation on top of an RDBMS [9, 12]; we used Postgres v9.6.
+To save space, OntoSQL encodes IRIs and literals into integers, and a dictionary
+table which allows going from one to the other. It stores all resources of a certain
+type in a one-attribute table, all subject, object pairs for each data property in a
+table, and all schema triples in another table; the tables are indexed. Our server
+has a 2,7 GHz Intel Core i7 and 160 GB of RAM; it runs CentOs Linux 7.5.
+We generated LUBM∃ data graphs [15] of 10M triples and restricted the ontology
+to RDFS, leading to 175 triples (123 ≺sc, 5 ≺sp, 25 ←(cid:45)d and 22 (cid:44)→r). We devised
+14 queries having from 3 to 7 triples; one has no result, while the others have
+a few dozen to three hundred thousand results. Each has 1 or 2 triples which
+match the ontology (and must be evaluated on it for correctness), including
+(but not limited to) the generic triple (x, y, z), which appears 7 times overall
+in our workload. Some of our queries are not handled through reformulation by
+AllegroGraph and Stardog, nor by Virtuoso (recall Section 3).
+Figure 2 shows for each query: the size of the UBGPQ reformulation (in paren-
+thesis after the query name on the x axis), i.e., the number of BGPQs it con-
+tains; the reformulation time (with both Rc and Ra); the time to translate the
+reformulation into SQL; the time to evaluate this SQL query; the total query
+answering time through reformulation, and (for comparison) through saturation.
+Note the logarithmic y axis. Details of our experiments are available online5.The
+reformulation time is very short (0.2 ms to 55 ms). Unsurprisingly, the time to
+convert the reformulation into SQL is closely correlated with the reformulation
+size. The overhead of our approach is quite negligible, given that the answering
+time through reformulation is very close to the SQL evaluation time.
+As expected, saturation-based query answering is faster; however, saturating
+this graph took more than 1289 seconds, while the slowest query (Q9) took 46
+seconds. As in [12], we compute for each query Q a threshold nQ which is the
+smallest number of times we need to run Q, so that saturating G and running Q
+nQ times on GR is faster than nQ runs of Q through reformulation; intuitively,
+after nQ runs of Q, the saturation cost amortizes. For our queries, nQ ranged
+from 29 (Q9) to 9648 (Q5), which shows that saturation costs take a while to
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+15
+
+amortize. If the graph or the ontology change, requiring maintenance of the
+saturated graph, reformulation may be even more competitive.
+
+6 Conclusion
+
+We have presented a novel reformulation-based query answering technique for
+RDF graphs with RDFS ontologies. Its novelty lies in its capacity to handle
+query triples over both the assertions and the ontology; such queries are not
+always handled correctly by existing RDF engines. In the future, we plan to
+integrate our reformulation technique in the cost-based optimized reformulation
+framework we introduced in [9] to improve its performance, and to an OBDA
+setting along the lines of [14].
+Acknowledgements: This work is supported by the Inria Project Lab grant
+iCoda, a collaborative project between Inria and several major French media.
+
+7 Appendix
+
+This appendix provides the ﬁgure of the running example graph and proofs of
+the results claimed in the paper.
+
+Fig. 3. Illustration of Example 1, where black edges represent assertion triples and
+blue edges represent RDFS triples. Plain edges are those contain in Gex and dotted
+edges those added its saturation GR
+ex.
+
+Proof of Proposition 1
+
+Proof. We provide an upper bound the number of reformulations explored during
+the reformulation of a BGPQ by analyzing the producer-consumer dependencies
+among rules w.r.t. the form of the query. Given a query form Q and an ontology
+O, we denote by #explored(Q, O) the number of explored reformulations during
+the execution of Reformulatec(q, O) for a BGPQ q of form Q.
+
+16
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+First, we notice that for the most general query form Q(¯x) ← t1, t2, . . . , tn (where
+the ti are triples), it holds that:
+
+#explored(Q, O) ≤
+
+(cid:89)
+
+1≤i≤n
+
+#explored(Qi, O)
+
+where Qi has the form Qi(xi) ← ti, with xi the list of variables in ti. We now
+analyze the reformulations obtained for the diﬀerent forms of queries composed
+of a single triple.
+
+Let us consider the query form Q0(¯x) ← (s, v, o), where s and o are values or
+variables and v is a variable. The rules in (1) are the only rules that can consume
+Q0. They produce queries of the form Q1( ¯x1) ← (s, ←(cid:45)d, o) or Q2( ¯x2) ← (s, ≺sc
+, o) (and there are two similar cases with properties (cid:44)→r and ≺sp). Since no rule
+feeds rule (1), it holds that:
+
+#explored(Q0, O) ≤ 2(#explored(Q1, O) + #explored(Q2, O))
+
+Queries of the form Q2 only feed rules from (12) to (16). These rules always
+produce queries of the form Q2( ¯x2) ← (s, ≺sc, o), where s and o are either values
+from Val(O) or variables. Moreover, there are at most 2 variables in Var(Q2),
+which can only be instantiated by values from Val(O) or variables.
+In the end,
+
+#explored(Q2, O) ≤ (#Val(O) + 1)2(#Val(O) + 1)2 = (#Val(O) + 1)4.
+
+Concerning a query of the form Q1, either rule (3) can be applied, then produced
+queries have the form Q3( ¯x3) ← (v1, ≺sp, p), (c, ≺sc, v2), or a rule from (4) to
+(11) can be applied. In the later case, we observe that all further produced
+queries will have the form Q4( ¯x4) ← (s, p, o) with p ∈ {←(cid:45)d, ≺sc, ≺sp}, s and o
+belonging to Val(O) ∪ Var(Q4), and there is at most one variable among s and
+o.
+So, we obtain by counting the number of possible values by position that
+
+#explored(Q3, O) ≤ ((#Val(O) + 1)2#Val(O))2
+
+#explored(Q4, O) ≤ 3(#Val(O) + 1)4.
+
+and
+
+In the end,
+
+#explored(Q1, O) ≤ (#Val(O) + 1)4#Val(O)2 + 3(#Val(O) + 1)4
+
+≤ (#Val(O) + 1)6 + 3(#Val(O) + 1)4
+
+It follows that the maximal number of explored reformulations for an input query
+with a single triple is O(#Val(O)6), hence in O(#Val(O)6|q|) for a BGPQ q. Note
+that |q| is a rough upper bound, since one should only consider the number of
+triples in q with an RDFS property or a variable in property position.
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+17
+
+Proof of Lemma 1 The only entailment rule in Rc that allows one to infer a
+new triple with property ≺sc (respectively ≺sp) is the rule rdfs11 (resp. rdfs5).
+Since this rule states the transitivity of the property ≺sc (resp. ≺sp), it holds
+that (c, ≺sc, c(cid:48)) ∈ GRc iﬀ G contains a non-empty ≺sc-chain from c to c(cid:48) (resp.
+(p, ≺sp, p(cid:48)) ∈ GRc iﬀ G contains a non-empty empty ≺sp-chain from p to p(cid:48)).
+Assume now that (p(cid:48), ←(cid:45)d, c(cid:48)) ∈ GRc. The only entailment rules in Rc that entail
+a triple with property ←(cid:45)d are ext1 and ext3. The body of these rules contain
+a triple with property ←(cid:45)d, so there exists an entailment chain (of triples with
+←(cid:45)d property) of length l ≥ 0 starting from G and using only rules ext1 and
+ext3. We prove by induction on l that G contains a triple (p, ←(cid:45)d, c), a (possibly
+empty) ≺sp-chain from p(cid:48) to p and a (possibly empty) ≺sc-chain from c to c(cid:48).
+– If l = 0, then (p(cid:48), ←(cid:45)d, c(cid:48)) ∈ G and there are an empty ≺sp-chain from p(cid:48) to
+
+p(cid:48) and an empty ≺sc-chain from from c(cid:48) to c(cid:48).
+
+– Otherwise (l > 0), the last rule applied in the chain is:
+
+• either ext1, so GRc contains a triple (p(cid:48), ←(cid:45)d, c1), which results from an
+entailment chain of length l−1 starting from G and using only rules ext1
+and ext3, and a triple (c1, ≺sc, c(cid:48)). By induction hypothesis, we know
+that G contains a triple (p, ←(cid:45)d, c), a (possibly empty) ≺sp-chain from p(cid:48)
+to p and a (possibly empty) ≺sc-chain from c to c1. Moreover, by using
+the ﬁrst point of the lemma (proved above), (c1, ≺sc, c(cid:48)) ∈ GRc implies
+that G contains a non-empty ≺sc-chain from c1 to c(cid:48). So, concatenating
+the two ≺sc-chains, we obtain a ≺sc-chain from c to c(cid:48). Hence, G contains
+a triple (p, ←(cid:45)d, c), a (possibly empty) ≺sp-chain from p(cid:48) to p and a ≺sc-
+chain from c to c(cid:48).
+
+• or ext3, and the proof is similar to that for ext1, replacing ≺sc-chains
+
+by ≺sp-chains.
+
+We have proven that (p(cid:48), ←(cid:45)d, c(cid:48)) ∈ GRc implies that G contains a triple (p, ←(cid:45)d
+, c), a (possibly empty) ≺sp-chain from p(cid:48) to p and a (possibly empty) ≺sc-chain
+from c to c(cid:48). The converse implication is straightforward: from the two ﬁrst points
+of the lemma, we obtain (c, ≺sc, c(cid:48)) ∈ GRc and (p(cid:48), ≺sp, p) ∈ GRc, then by one
+application of each entailment rule ext1 and ext3, we obtain (p(cid:48), ←(cid:45)d, c(cid:48)) ∈ GRc.
+
+Proof of Theorem 1 For the sake of readability, we assume in the following
+that G does not contain blank nodes. So, we do not need non-standard query
+evaluation. This assumption can be done without loss of generality. Indeed, we
+may deﬁne a one-to-one mapping f from the blank nodes of G to fresh IRIs,
+apply f to G before any processing, and apply the inverse mapping f −1 to the
+answer tuples obtained considering f (G) to get answers considering G.
+
+With the above assumption, to prove statement 18, it remains to prove that
+q(G, Rc) = Qc(G) holds. We ﬁrst prove Qc(G) ⊆ q(G, Rc) (soundness) then
+q(G, Rc) ⊆ Qc(G) (completeness).
+
+(soundness) We want to prove that for all q(cid:48)
+σ(cid:48) reformulation of q in Qc, for all
+tuple t answer to q(cid:48)
+σ(cid:48) in G, there is G(cid:48) obtained from G by application of some
+entailment rules to G such that t is an answer to q in G(cid:48). In other words, we want
+
+18
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+to prove that q(cid:48)
+to prove that q(cid:48)
+
+σ(cid:48)(G, ∅) ⊆ q(G, Rc) . Since q(cid:48)
+σ(cid:48)(G, Rc) ⊆ q(G, Rc).
+
+σ(cid:48)(G, ∅) ⊆ q(cid:48)
+
+σ(cid:48)(G, Rc), it is suﬃcient
+
+The proof is done by induction on the length l of a sequence of reformulation
+rules leading to q(cid:48)
+σ(cid:48), starting from O and q.
+σ(cid:48) = q, so q(cid:48)
+Base step For l = 0, we have q(cid:48)
+Inductive step For l < α, suppose that q(cid:48)
+l = α, q(cid:48)
+σ(cid:48) has been produced from q(cid:48)(cid:48)
+(i) and q(cid:48)(cid:48)
+get q(cid:48)(cid:48)
+q(cid:48)(cid:48)
+σ(cid:48)(cid:48) (G, Rc).
+There are basically two cases:
+
+σ(cid:48)(G, Rc) ⊆ q(G, Rc).
+σ(cid:48)(G, Rc) ⊆ q(G, Rc) holds. Now at
+σ(cid:48)(cid:48) by the application of a reformulation rule
+σ(cid:48)(cid:48) is a reformulation of q. So that sequence being of length < α, we
+σ(cid:48)(G, Rc) ⊆
+
+σ(cid:48)(cid:48)(G) ⊆ q(G, Rc) by induction hypothesis. We will show that q(cid:48)
+
+σ(cid:48)(cid:48) to generate q(cid:48)
+σ(cid:48)
+σ(cid:48) is
+
+– the reformulation rule (i) instantiates a variable of q(cid:48)(cid:48)
+
+i.e., rule (i) is one of the following (1), (4)-(7), (12)-(14). In this case, q(cid:48)
+contained in q(cid:48)(cid:48)
+
+σ(cid:48)(G, Rc) ⊆ q(cid:48)(cid:48)
+
+σ(cid:48)(cid:48) (G, Rc).
+
+σ(cid:48)(cid:48) , so q(cid:48)
+
+– the reformulation rule (i) has the form t1∈qσ,t2∈O
+qσ[t1/t3]
+
+that replaces a triple in
+q(cid:48)(cid:48)
+σ(cid:48)(cid:48) by another one (or two for the rule (3)). Observe here that σ(cid:48) = σ(cid:48)(cid:48) holds.
+σ(cid:48)(G, Rc), then ϕ(t3σ(cid:48)) ∈ GRc. Furthermore, the reformulation
+If ϕ(¯xσ(cid:48)) ∈ q(cid:48)
+rules ensure that ϕ(t3σ(cid:48)), t2 |=Rc ϕ(t1σ(cid:48)(cid:48) ). As a result, ϕ(t1σ(cid:48)(cid:48) ) ∈ GRc, and
+ϕ is a total assignment of the variables of q(cid:48)(cid:48)
+σ(cid:48)(cid:48) such that ϕ(¯xσ(cid:48)) = ϕ(¯xσ(cid:48)(cid:48) ) ∈
+q(cid:48)(cid:48)
+σ(cid:48)(cid:48) (G, Rc).
+
+σ(cid:48)(G, ∅).
+
+σ(cid:48)(G, Rc) ⊆ q(cid:48)(cid:48)
+
+σ(cid:48)(cid:48) (G, Rc) which concludes the proof of
+
+σ(cid:48)(G, ∅), i.e., for each answer tuple a ∈ q(G, Rc),
+
+In each case, we get q(cid:48)
+q(cid:48)
+σ(cid:48)(G, ∅) ⊆ q(G, Rc), so Qc(G) ⊆ q(G, Rc).
+(completeness) We now show that q(G, Rc) ⊆ Qc(G) with
+Qc(G) = (cid:83)
+σ(cid:48) ∈Reformulatec(q,O) q(cid:48)
+q(cid:48)
+σ(cid:48) ∈ Qc a reformulation of q using O such that a ∈ q(cid:48)
+there exists q(cid:48)
+In the following, we will consider that Qc contains queries in which all the in-
+stantiated RDFS triples that belong to the ontology are kept; in other words, the
+triples removed by applications of rule (2) are restored in the resulting queries.
+This has no impact on the completeness of the algorithm, since the reformula-
+tions output in both versions have the same answers in G.
+Let the query q be deﬁned by q(¯x) ← t1, t2, . . . , tn with ti being the body triples
+of q. An answer from q(G, Rc) has the form ϕ(¯x), where ϕ is a homomorphism
+from body(q) to GRc . If for all triples ti from the body of q, ϕ(ti) is not an RDFS
+triple, then ϕ(body(q)) ∈ G (because data triples are not entailed by Rc), so
+a valid reformulation of q is q itself, since q(G, Rc) = q(G, ∅). Otherwise, there
+exists a triple ti from the body of q such that ϕ(ti) ∈ ORc and we will show that
+there exists q(cid:48)
+σ(cid:48) a reformulation of q where only ti has been replaced by a BGP
+P such that P ⊆ O and ϕ(¯x) = ϕ(¯xσ(cid:48)).
+First case, ϕ(ti) = (c, ≺sc, c(cid:48)) ∈ GRc; according to Lemma 1, there is C =
+((ci, ≺sc, ci+1))1≤i<c a ≺sc-chain in G such that c = c1 and c(cid:48) = cc. The triple
+ti can have one of the following forms:
+– (c, ≺sc, c(cid:48)), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (15) for
+each triple of C; ﬁnally (c, ≺sc, c(cid:48)) is replaced by (cc−1, ≺sc, c(cid:48)) ∈ O. Since
+σ(cid:48) = ∅, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+19
+
+– (c, ≺sc, v(cid:48)), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (15) for
+each triple of C then (14); ﬁnally (c, ≺sc, v(cid:48)) is replaced by (cc−1, ≺sc, c(cid:48)) ∈
+O. Since σ(cid:48) = {v(cid:48) (cid:55)→ c(cid:48)}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+– (c, vp, v), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (1) then
+(15) for each triple of C then (14); ﬁnally (c, vp, v) is replaced by (cc−1, ≺sc
+, c(cid:48)) ∈ O. Since σ(cid:48) = {vp (cid:55)→≺sc, v (cid:55)→ c(cid:48)}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+– (v, ≺sc, c(cid:48)), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (16) for
+each triple of C in inverse order then (13); ﬁnally (v, ≺sc, c(cid:48)) is replaced by
+(c, ≺sc, c2) ∈ O. Since σ(cid:48) = {v (cid:55)→ c}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+– (v, vp, c(cid:48)), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (1) then (16)
+for each triple of C in inverse order then (13); ﬁnally (v, vp, c(cid:48)) is replaced
+by (c, ≺sc, c2) ∈ O. Since σ(cid:48) = {vp (cid:55)→≺sc, v (cid:55)→ c}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+– (v, ≺sc, v(cid:48)), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (12) then
+(15) for each triple of C then (14); ﬁnally (v, ≺sc, v(cid:48)) is replaced by (cc−1, ≺sc
+, c(cid:48)) ∈ O. Since σ(cid:48) = {v(cid:48) (cid:55)→ c(cid:48), v (cid:55)→ c}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+– (v, vp, v(cid:48)), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (1) then
+(12) then (15) for each triple of C then (14) ; ﬁnally (v, vp, v(cid:48)) is replaced by
+(cc−1, ≺sc, c(cid:48)) ∈ O. Since σ(cid:48) = {vp (cid:55)→≺sc, v(cid:48) (cid:55)→ c(cid:48), v (cid:55)→ c}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+Second case, ϕ(ti) = (p, ←(cid:45)d, c) ∈ GRc ; according to Lemma 1, there are three
+cases, depending on whether a chain is empty or not. We describe the case where
+none of the chains is empty, hence assuming that there exists P = ((pi, ≺sp
+, pi+1))1≤i≤p a ≺sp-chain in G from p to p(cid:48) and (p(cid:48), ←(cid:45)d, c(cid:48)) ∈ G and there exists
+C = ((ci, ≺sc, ci+1))1≤i≤c a ≺sc-chain in G from c(cid:48) to c. The other cases are
+handled similarly using also rules (4) and (5). The triple ti can have the following
+forms:
+
+– (p, ←(cid:45)d, c), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (10) for
+each triple in C in inverse order then (11) for each triple in P ; ﬁnally
+(p, ←(cid:45)d, c) is replaced by (p(cid:48), ←(cid:45)d, c(cid:48)) ∈ O. Since σ(cid:48) = ∅, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+– (p, ←(cid:45)d, v(cid:48)), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (11) for
+each triple in P then (9) then (15) for each triple in C then (14) ; ﬁnally
+(p, ←(cid:45)d, c) is replaced by (cc−1, ≺sc, c) ∈ O. Since σ(cid:48) = {v(cid:48) (cid:55)→ c}, ϕ(¯x) =
+ϕ(¯xσ(cid:48)).
+
+– (p, vp, v(cid:48)), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (1) then (11)
+for each triple in P then (9) then (15) for each triple in C then (14) ; ﬁnally
+(p, vp, v(cid:48)) is replaced by (cc−1, ≺sc, c) ∈ O. Since σ(cid:48) = {vp (cid:55)→←(cid:45)d, v(cid:48) (cid:55)→ c},
+ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+– (v, ←(cid:45)d, c), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (10) for
+each triple in C in inverse order then (8) then (16) for each triple in P in
+inverse order then (13) ; ﬁnally (v, ←(cid:45)d, c) is replaced by (p, ≺sp, p2) ∈ O.
+Since σ(cid:48) = {v (cid:55)→ p}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+– (v, vp, c), then we consider q(cid:48)
+
+σ(cid:48) obtained from q by applying rule (1) then
+(10) for each triple in C in inverse order then (8) then (16) for each triple in
+P in inverse order then (13) ; ﬁnally (v, vp, c) is replaced by (p, ≺sp, p2) ∈ O.
+Since σ(cid:48) = {vp (cid:55)→←(cid:45)d, v (cid:55)→ p}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+– (v, ←(cid:45)d, v(cid:48)), then we consider q(cid:48)
+σ(cid:48)
+
+is obtained from q by applying rule (3)
+
+20
+
+M. Buron, F. Goasdou´e, I. Manolescu and M.-L. Mugnier
+
+– (v, vp, v(cid:48)), then we consider q(cid:48)
+
+then (16) for each triple in P inverse order then (13) then on the other
+triple, (15) for each triple in C then (14) ; ﬁnally (v, ←(cid:45)d, v(cid:48)) is replaced by
+(p, ≺sp, p2), (cc−1, ≺sp, c) ∈ O. Since σ(cid:48) = {v (cid:55)→ p, v(cid:48) (cid:55)→ c}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+σ(cid:48) obtained from q by applying rule (1) then (3)
+then (16) for each triple in P in inverse order then (13) then on the other
+triple, (15) for each triple in C then (14) ; ﬁnally (v, vp, v(cid:48)) is replaced by
+(p, ≺sp, p2), (cc−1, ≺sp, c) ∈ O. Since σ(cid:48) = {v (cid:55)→ p, v(cid:48) (cid:55)→ c}, ϕ(¯x) = ϕ(¯xσ(cid:48)).
+
+Hence, for each triple ti in q such that ϕ(ti) ∈ ORc, there is q(cid:48)
+σ(cid:48), a reformulation
+of q, where only ti has been replaced by a BGP P such that P ⊆ O and ϕ(¯x) =
+ϕ(¯xσ(cid:48)). It follows that there is q(cid:48)(cid:48)
+σ(cid:48)(cid:48) , a reformulation of q, in which all body triples
+of q mapped by ϕ to ORc have been replaced by triples that belong to O, such
+that ϕ(¯x) = ϕ(¯xσ(cid:48)(cid:48) ). Since the other triples of q are necessarily mapped by ϕ to
+G (actually, G \ O), we conclude that ϕ(¯x) = ϕ(¯xσ(cid:48)(cid:48)) is an answer to q(cid:48)(cid:48)
+σ(cid:48)(cid:48) in G.
+This concludes the proof of statement (18), which is the only part of Theorem
+1 needed in the proof of Theorem 2. Statement (19) actually follows from the
+next lemma (Lemma 2).
+
+Proof of Theorem 2
+
+Lemma 2. For all RDF graph G, it holds that:
+
+GRa∪Rc = (cid:0)GRa (cid:1)Rc
+
+Proof. For one direction: (cid:0)GRa (cid:1)Rc ⊆ GRa∪Rc . The proof is trivial.
+For the converse direction GRa∪Rc ⊆ (cid:0)GRa (cid:1)Rc. We take a triple t ∈ GRa∪Rc,
+and diﬀerentiate two cases:
+
+– either t is not an RDFS triple, then by applying Theorem 1 of [12], t ∈ GRa .
+
+In other words, assertion rules suﬃce to entail all RDF assertions.
+
+– or t is an RDFS triple. Since the RDFS ontology O of G does not contain
+an RDFS property as subject or object, the entailment rule rdfs7 does not
+entail RDFS triples. So, t ∈ O or t has been produced by a rule in Rc.
+Moreover, all rules in Rc have a body that contains only RDFS triples, so
+t ∈ O or t has been entailed from O using rules in Rc, i.e., t ∈ ORc. We also
+know that ORc ⊆ (cid:0)GRa (cid:1)Rc , so t ∈ (cid:0)GRa (cid:1)Rc.
+In both cases, we have proven that t ∈ (cid:0)GRa (cid:1)Rc.
+
+Proof (of the theorem).
+
+Reformulation-based query answering for RDF graphs with RDFS ontologies
+
+21
+
+q(G, Ra ∪ Rc) = q(GRa∪Rc )
+
+= q((cid:0)GRa(cid:1)Rc ) by Lemma 2
+= q(GRa , Rc) by deﬁnition of query answering
+
+(cid:122)
+(cid:123)
+(cid:125)(cid:124)
+Qc(GRa )
+(cid:122)
+(cid:123)
+(cid:125)(cid:124)
+Qc(G, Ra)
+(cid:122) (cid:125)(cid:124) (cid:123)
+Qc,a(G)
+
+=
+
+=
+
+=
+
+by Theorem 1, statement (18)
+
+by deﬁnition of query answering
+
+by Theorem 6 of [12] since Qc is without RDFS triples
+
+References
+
+1. RDF
+
+1.1 Concepts
+
+and Abstract
+
+Syntax,
+
+https://www.w3.org/TR/
+
+rdf11-concepts/
+
+2. RDF 1.1 Semantics, https://www.w3.org/TR/rdf11-mt/#rdfs-entailment
+3. SPARQL 1.1 Query Language, https://www.w3.org/TR/sparql11-query/
+4. Abiteboul, S., Hull, R., Vianu, V.: Foundations of Databases. Addison-Wesley
+
+(1995)
+
+5. Adjiman, P., Goasdou´e, F., Rousset, M.C.: SomeRDFS in the semantic web. JODS
+
+8 (2007)
+
+6. Arenas, M., Gutierrez, C., P´erez, J.: Foundations of RDF databases. In: Reasoning
+
+Web (2009)
+
+7. Bishop, B., Kiryakov, A., Ognyanoﬀ, D., Peikov, I., Tashev, Z., Velkov, R.:
+OWLIM: A family of scalable semantic repositories. Semantic Web 2(1) (2011)
+8. Broekstra, J., Kampman, A.: Inferencing and truth maintenance in RDF schema.
+In: PSSS1 Workshop (2003), http://ceur-ws.org/Vol-89/broekstra-et-al.pdf
+9. Bursztyn, D., Goasdou´e, F., Manolescu, I.: Optimizing reformulation-based query
+
+answering in RDF. In: EDBT (2015)
+
+10. Calvanese, D., Giacomo, G.D., Lembo, D., Lenzerini, M., Rosati, R.: Tractable
+reasoning and eﬃcient query answering in description logics: The DL-Lite family.
+Journal of Automated Reasoning (JAR) 39(3) (2007)
+
+11. Goasdou´e, F., Karanasos, K., Leblay, J., Manolescu, I.: View selection in semantic
+web databases. PVLDB 5(2) (2011), https://hal.inria.fr/inria-00625090v1
+12. Goasdou´e, F., Manolescu, I., Roatis, A.: Eﬃcient query answering against dynamic
+RDF databases. In: EDBT (2013), https://hal.inria.fr/hal-00804503v2
+13. Kaoudi, Z., Miliaraki, I., Koubarakis, M.: RDFS reasoning and query answering
+
+on DHTs. In: ISWC (2008)
+
+14. Lanti, D., Xiao, G., Calvanese, D.: Cost-driven ontology-based data access. In:
+
+ISWC (2017), https://doi.org/10.1007/978-3-319-68288-4_27
+
+15. Lutz, C., Seylan, I., Toman, D., Wolter, F.: The combined approach to OBDA:
+
+taming role hierarchies using ﬁlters. In: ISWC (2013)
+
+16. Neumann, T., Weikum, G.: The RDF-3X engine for scalable management of RDF
+
+data. VLDB J. (2010)
+
+17. Urbani, J., van Harmelen, F., Schlobach, S., Bal, H.: QueryPIE: Backward reason-
+
+ing for OWL Horst over very large knowledge bases. In: ISWC (2011)
+
+18. Urbani, J., Piro, R., van Harmelen, F., Bal, H.E.: Hybrid reasoning on OWL RL.
+
+Semantic Web 5(6) (2014)
+
+

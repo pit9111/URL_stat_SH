@@ -1,0 +1,3791 @@
+On the Optimization of Recursive Relational Queries:
+Application to Graph Queries
+Louis Jachiet, Pierre Genevès, Nils Gesbert, Nabil Layaïda
+
+To cite this version:
+
+Louis Jachiet, Pierre Genevès, Nils Gesbert, Nabil Layaïda. On the Optimization of Recursive Re-
+lational Queries: Application to Graph Queries. SIGMOD 2020 - ACM International Conference
+on Management of Data, Jun 2020, Portland, United States. pp.1-23, ￿10.1145/3318464.3380567￿.
+￿hal-01673025v6￿
+
+HAL Id: hal-01673025
+
+https://inria.hal.science/hal-01673025v6
+
+Submitted on 19 Jun 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+On the Optimization of Recursive Relational Queries:
+Application to Graph Queries
+
+Louis Jachiet
+LTCI, Télécom Paris, Institut Polytechnique de Paris
+
+ABSTRACT
+Graph databases have received a lot of attention as they are
+particularly useful in many applications such as social net-
+works, life sciences and the semantic web. Various languages
+have emerged to query graph databases, many of which em-
+bed forms of recursion which reveal essential for navigating
+in graphs. The relational model has benefited from a huge
+body of research in the last half century and that is why
+many graph databases rely on techniques of relational query
+engines. Since its introduction, the relational model has seen
+various attempts to extend it with recursion and it is now
+possible to use recursion in several SQL or Datalog based
+database systems. The optimization of recursive queries re-
+mains, however, a challenge. We propose µ-RA, a variation
+of the Relational Algebra equipped with a fixpoint operator
+for expressing recursive relational queries. µ-RA can notably
+express unions of conjunctive regular path queries. Leverag-
+ing the fact that this fixpoint operator makes recursive terms
+more amenable to algebraic transformations, we propose
+new rewrite rules. These rules makes it possible to generate
+new query execution plans, that cannot be obtained with
+previous approaches. We present the syntax and semantics
+of µ-RA, and the rewriting rules that we specifically devised
+to tackle the optimization of recursive queries. We report on
+practical experiments that show that the newly generated
+plans can provide significant performance improvements for
+evaluating recursive queries over graphs.
+
+This research has been partially supported by the ANR project CLEAR
+(ANR-16-CE25-0010).
+
+ACM acknowledges that this contribution was authored or co-authored
+by an employee, contractor or affiliate of a national government. As such,
+the Government retains a nonexclusive, royalty-free right to publish or
+reproduce this article, or to allow others to do so, for Government purposes
+only.
+SIGMOD’20, June 14–19, 2020, Portland, OR, USA
+© 2020 Association for Computing Machinery.
+ACM ISBN 978-1-4503-6735-6/20/06. . . $15.00
+https://doi.org/10.1145/3318464.3380567
+
+Pierre Genevès
+Nils Gesbert
+Nabil Layaïda
+Tyrex team, Univ. Grenoble Alpes, CNRS, Inria,
+Grenoble INP, LIG, 38000 Grenoble, France
+
+ACM Reference Format:
+Louis Jachiet, Pierre Genevès, Nils Gesbert, and Nabil Layaïda. 2020.
+On the Optimization of Recursive Relational Queries: Application
+to Graph Queries. In Proceedings of the 2020 ACM SIGMOD Inter-
+national Conference on Management of Data (SIGMOD’20), June
+14–19, 2020, Portland, OR, USA. ACM, New York, NY, USA, 23 pages.
+https://doi.org/10.1145/3318464.3380567
+
+1 INTRODUCTION
+The expressive power of query languages has been greatly
+improved with the introduction of recursion. Recursive
+queries are, for instance, very useful in data integration since
+expressive ontologies use recursion [29]. Graph databases
+are another example where recursion is particularly useful
+for expressing navigation along paths connecting nodes in
+the graph. For this purpose, graph query languages often
+include constructs such as Regular Path Queries (RPQs) [27],
+and various extensions such as Conjunctions of them (CR-
+PQs) and Union of CRPQs (UCRPQs) [19, 20, 26, 50]. For
+instance, the query language SPARQL 1.1 [43] introduced
+Property Paths, and language proposals such as OpenCypher
+[34, 55] and G-core [11] also include the possibility of ex-
+pressing recursive paths. SPARQL’s Property Paths revealed
+crucial for extracting information from RDF data structures
+such as those found in social networks, life sciences and
+transportation networks. However, recursive path queries
+are notoriously known to be much harder to optimize and
+evaluate than non-recursive ones [54, 71]. In practice, even
+with datasets of modest sizes, the benchmarking work found
+in [15] notices that “all tested systems either failed on the
+majority of these [recursive] queries or had to be manually
+terminated after unexpectedly long running times.” A major
+difficulty is to find an appropriate way to execute the query,
+a task frequently referred to in the literature as finding an
+appropriate Query Execution Plan (QEP). For example, let
+us consider the following query:
+
+?x isLocatedIn+ ?y
+Emmy_Noether worksAt ?x
+
+Qe x
+
+In a graph, this query retrieves all pairs of nodes ?x, ?y
+such that Emmy Noether worked for ?x and ?x is located
+
+in ?y, or is located in a place that is located in ?y, etc.. For-
+mally, isLocatedIn+ indicates that it is the transitive closure
+of isLocatedIn. Different QEPs exist for executing Qex . For
+instance:
+
+• A first QEP, named P1, corresponds to computing first
+the transitive closure of isLocatedIn and then joining
+it with the ?x solution of Emmy_Noether worksAt ?x.
+• Another QEP, noted P2, would rather start by com-
+puting the set of solutions for Emmy_Noether worksAt
+?x. Then, these results are joined with the set of pairs
+?x,?y solutions of ?x isLocatedIn ?y. The resulting
+pairs of nodes are all solutions of Qex . Finally, itera-
+tively, for each pair ?x,?y in the set of solutions one
+can find the ?y’ such that ?y isLocatedIn ?y’ and add
+?x,?y’ to the set of solutions.
+
+The QEP P2 is generally more efficient than P1. Each
+pair of nodes (?x,?y) processed in P2 is a solution of Qex .
+Therefore the total running time of P2 is linear in the num-
+ber of solutions multiplied by the maximal degree of nodes
+in the graph. In contrast, in P1, the transitive closure of
+isLocatedIn always needs to be fully computed. This closure
+can contain, in the worst case, a number of elements which
+is quadratic in the number of isLocatedIn-labeled edges;
+and even in the best case, the transitive closure contains at
+least all the isLocatedIn-labeled edges. In the yago dataset
+[33, 64], that contains millions of entities and facts extracted
+from Wikipedia, there are only 16 solutions for Qex whereas
+there are millions of isLocatedIn-labeled edges. P2 is thus
+by far more efficient than P1.
+
+Let us now consider a slightly more sophisticated example
+with the following query (taken from [5]), still intended to
+be executed against the yago dataset:
+
+Q2
+
+?x hasChild/livesIn/isLocatedIn+/dealsWith+ Japan
+The variable ?x denotes any graph node representing a
+person. Q2 retrieves all such nodes that are connected to a
+particular node labeled “Japan” through a path which must
+satisfy a regular path expression over edge labels in the graph.
+The regular path expression is recursive because it includes
+the subexpression R=isLocatedIn+/dealsWith+ in which the
+operator “+” stands for the transitive closure. Again, there
+are several ways to evaluate Q2 for retrieving all possible
+values for ?x. In particular, there exists different QEPs for R
+corresponding to radically different manners of executing
+Q2. We briefly describe below three QEPs: P3, P4, P5 that
+we will use as examples:
+
+• Plan P3 consists in first computing the two transitive
+closures isLocatedIn+ and dealsWith+ of the relations
+isLocatedIn and dealsWith, respectively, and then join-
+ing the results. One pitfall of this execution plan is that
+the sets to be joined might be very large (due to e.g.
+numerous locations in the database and the large size
+
+of the set of pairs connected by “isLocatedIn+”), even
+though the overall query finally retrieves only few
+results.
+
+• Early works on recursive query optimization [7, 8] al-
+ready proposed how to push filters (and projections)
+as close to the sources as possible, even through re-
+cursive terms. Plan P3 can be optimized using this
+technique: the constant “Japan” can be “pushed inside
+the computation of dealsWith+”. This corresponds to
+plan P4 where the evaluation starts from ?t dealsWith
+Japan, then iteratively adds dealsWith steps on the
+left. Once this computation is finished, the results are
+joined with isLocatedIn and then, once again, itera-
+tive isLocatedIn steps are performed on the left. One
+advantage of P4 compared to P3 is that P4 processes
+each node at most twice while the whole transitive
+closures of dealsWith and isLocatedIn can be consid-
+erably larger (quadratic in the worst case).
+
+• Another completely different way to evaluate R, noted
+plan P5, consists in not computing any transitive clo-
+sure but, instead, computing first the composed re-
+lation “isLocatedIn/dealsWith” and then recursively
+navigating in the graph either hopping on the left with
+isLocatedIn or hopping on the right by dealsWith to
+retrieve nodes. Notice that this slightly more general
+form of recursion is not a transitive closure of any
+relation.
+
+The plan P3 will generally be slower than P4 or P5, even
+when using smart algorithms for computing transitive clo-
+sures [9, 21, 61]. On some instances P4 will be much more
+efficient (if, for instance, ?x dealsWith+ Japan has few solu-
+tions) and on some other instances P5 will be faster (if, for
+instance, there are few solutions of dealsWith/isLocatedIn).
+This is the case when evaluating Q2 over the yago graph
+(that has more than 62 million of edges): P5 is faster by a
+factor of more than 200x compared to other plans.
+
+We investigate the problem of computing such query exe-
+
+cution plans automatically.
+
+Contribution. We introduce a theory, which is an exten-
+sion of Codd’s classical relational algebra, for the purpose of
+automatically obtaining efficient QEPs for recursive queries.
+Specifically, we introduce a fixpoint operator “µ” in the rela-
+tional algebra for denoting recursive terms in an algebraic
+manner. This fixpoint operator can express transitive clo-
+sures as well as slightly more general forms of recursion. It
+makes recursive terms more amenable to transformations.
+We take advantage of this for introducing five new rewrit-
+ing optimization rules. These rules allow generating new
+execution plans for recursive queries, that are beyond reach
+using previous approaches. We demonstrate empirically with
+
+a prototype implementation that these new plans can pro-
+vide significant performance gains in recursive graph query
+evaluation compared to previous approaches.
+
+Outline. We first review related works on the topic in § 2.
+Then in § 3, we introduce the syntax and semantics of µ-
+RA: a variation of the relational algebra (RA) equipped with
+a fixpoint operator. § 4 describes properties of µ-RA and
+demonstrates that our fixpoint can be rewritten (to push
+filters, projections and joins inside of the fixpoints) and that
+two (or more) fixpoints can sometimes be merged into a
+unique fixpoint. We also explain why our approach is able
+to generate efficient plans that were beyond reach. As an
+application, we present how recursive graph queries translate
+into µ-RA in § 5. We then report on practical experiments
+in § 6, in which we benchmark a prototype implementation
+with state-of-the-art systems for evaluating recursive graph
+queries. For reading purposes, we present only proof sketches
+of our main theorems; the full proofs being available in [12].
+
+2 RELATED WORK
+We first present the main approaches that have been pro-
+posed to evaluate recursive queries, and we explain why our
+approach can be more efficient, in particular for the specific
+kind of recursive queries expressed as UCRPQs.
+
+2.1 The relational model
+The relational model [25] introduced by Codd in 1970 has
+become the de facto paradigm for querying data banks. The
+design of the prevailing database query language SQL has
+been heavily influenced by the Relational Algebra (RA).
+
+One of the main interest of the RA (and of SQL) is that it
+allows programmers to express the data they are interested
+in without specifying the way to retrieve it [51], instead they
+rely on a relational query engine to find an efficient way to
+process queries. Most relational query engines thus rely on
+a optimization process where the query to be processed is
+translated into an algebraic term. Then, this term is rewritten
+into a set of semantically equivalent terms (by e.g. pushing
+selections, or projections as close as possible to the sources).
+These different terms can be used to generate different QEPs.
+For a given query, the set of QEPs is called a Plan Space. The
+plan space depends on the set of equivalent terms that we
+can generate from the initial query.
+
+2.2 Recursive queries & expressive power
+Soon after the introduction of RA, the work found in [8]
+noticed that the RA lacks the possibility of expressing re-
+cursive queries. Several formalisms have been introduced
+as attempts to fill this gap. We now briefly review the most
+closely related of these various formalisms (see e.g. [2, 18]
+for complete surveys).
+
+The α-extended RA [7] extends the RA with a recursive fa-
+cility noted α. The operator α is a transitive closure operator;
+given an α-extended RA term R defining a binary relation
+R, α (R) represents its transitive closure, R+. In terms of ex-
+pressive power over graphs, this corresponds to UCRPQs. It
+is for instance not capable of querying the path expression
+an/bn which queries paths whose labels are first as then bs
+with exactly the same number of a and b.
+
+A more powerful way of extending the RA is the LFP-RA.
+LFP-RA is the RA extended with a “least fixpoint” construct.
+Given a LFP-RA term R parametric in a relation X , the least
+fixpoint of R over X , noted µ (X = R), is obtained as the limit
+of a sequence (Xi )i ∈N where X0 = ∅ and Xi+1 is computed
+by adding to Xi the results of evaluating R when the relation
+X is filled with Xi .
+
+This LFP-RA formalism has the same expressive power
+and the same data complexity as Datalog with stratified
+negation, for which evaluation is known to lie in PTime.
+
+Because LFP-RA terms can be computationally hard to
+evaluate, several syntactic fragments of LFP-RA have been
+studied. A well-studied fragment of this LFP-RA corresponds
+to limiting fixpoints so that all recursions are “linear” (in a
+sense that we will define in Definition 6). This restriction
+makes the expressive power drop to linear Datalog [6], which
+is strictly between the expressive power of α-extended RA
+and the expressive power of Datalog. For instance, all UCR-
+PQs as well as the non-regular path expression an/bn are
+expressible in linear Datalog; however, the path expression
+asking for all paths containing exactly as many a labels as
+b labels in any order is not. The µ-RA that we use in this pa-
+per is a variant of this restricted LFP-RA and it has the same
+expressive power as linear Datalog.
+
+Another way of extending the RA is the WHILE language
+(see [2]). This language is known to be at least as expressive
+as LFP-RA and the inclusion is strict (unless PTime=PSpace).
+
+2.3 Optimization of recursive RA
+In 1979, a first line of work [8] proposed a restricted LFP-
+RA. The authors showed that some optimizations can be
+performed on fixpoints, such as pushing selections into these
+fixpoints (similar to our rule RW1). One drawback of their
+method is that it has more restrictions on fixpoints than µ-
+RA. Being too restricted makes [8] unable to express some
+of our rewritten terms, e.g. merged fixpoints (see § 4.1.3).
+Furthermore, even if the authors note that it is sometimes
+possible to push projections (similar to our rule RW5) they
+do not provide an effective criterion for this.
+
+Using the (unrestricted) LFP-RA, other authors [46] pro-
+vided in 1990 a general framework for optimization. Their
+method works on so-called system graphs and computes a
+fixpoint of filters that is safe to apply recursively. Their work
+
+also provides an effective criterion to push projections. We
+believe our approach is more straightforward. In addition,
+they do not deal with conjunctions (our rules RW3 and RW4)
+and thus cannot find plan P2 for Qex nor find plan P5 for Q2,
+for instance. Finally, compared to unrestricted LFP-RA, µ-RA
+comes with restrictions on fixpoints that are needed for the
+validity of the rewrite rules we propose in § 4.1: the optimi-
+sations we present would not be correct on the unrestricted
+LFP-RA (as explained in § 3.4).
+
+of the problems of Magic Sets. In particular, Demand Trans-
+formation is also sensitive to whether programs are left or
+right linear; and on examples containing the concatenation
+of two transitive closures (such as isLocatedIn+/dealsWith+
+in Q2), the query execution plan computing first the concate-
+nation isLocatedIn/dealsWith and then recursively adding
+isLocatedIn on the left or dealsWith on the right will not be
+found by the Datalog engine, even after Demand Transfor-
+mation and program reversals.
+
+2.4 Datalog
+The term Datalog has been coined at the end of the 70s
+to designate the fragment of logic programming restrained
+to data. Datalog is a language supporting recursive queries.
+Many Datalog-based query evaluators exist [13, 28, 49, 57, 68]
+including recent fully-fledged commercial systems [13].
+
+2.4.1 Magic Sets. A well-known Datalog optimization tech-
+nique is the “Magic Sets” algorithm (see [17, 58]). The syntax
+of Datalog vastly differs from the RA, but the effect of Magic
+Sets algorithm is very similar to pushing some type of selec-
+tions and projections. The idea of the magic set is to compute,
+for each datalog relation, the set of “contexts” where this
+term will be evaluated. For instance, in the translation of
+?a dealsWith+ Japan, the magic set method can sometimes
+detect that, on the recursive use of dealsWith, the right side
+is always Japan, and it will not compute the full transitive
+closure dealsWith+.
+
+2.4.2 Right and left linear programs. There are many differ-
+ent ways to translate transitive closures in Datalog. For the
+transitive closure R+, one translation would use that R+ is
+either a path composed of a single R or the concatenation
+of a path R and a path R+. Such a translation is called right
+linear because R+ is computed by adding R paths on the left.
+Another translation would be left-linear: R+ is then either a
+path R or the concatenation of R+ with R. As noticed before
+[53], given a Datalog term t computing a binary relation
+P (x, y), the Magic Set algorithm is able to push filters on the
+right side (the y) only if t is a right-linear program; and con-
+versely, it can only push filters on the left side (the x) when
+t is left-linear. The authors of [53] thus proposed an auto-
+mated way to “reverse” right-linear programs into left-linear
+(and vice-versa). This reversal can then be used by a query
+optimizer in combination with the Magic Set algorithm.
+
+2.4.4 Overall Comparison. Datalog engines do not explore
+Plan Spaces but use heuristics to find a good plan to evaluate
+queries. Depending on which combination of Magic Sets,
+Demand Transformation and Reversals it uses, a Datalog
+engine might be able to find a plan similar to P2 for Qex ,
+and to plan P4 for Q2. Since none of these optimizations
+can “merge” recursive terms, they do not allow to find a plan
+similar to P5 for Q2, which is –by an order of magnitude–
+the fastest plan for Q2 on yago.
+
+In a Datalog program corresponding to the optimized
+translation of A+/B+ at least one of the two transitive clo-
+sures will be fully materialized (even if there are 0 solutions
+to A+/B+).
+
+2.5 SQL
+Since its 1999 version, the SQL standard supports recursive
+queries. SQL is more expressive than our µ-RA as it allows,
+e.g., arithmetic and aggregation, but if we restrict SQL to
+its core our proposed µ-RA is not very different from SQL
+with recursion. However, a restriction in SQL (the recursion
+variable cannot appear more than once in the recursive part
+of the query) forbids what would be the literal translation
+of some µ-RA terms; in particular, we cannot translate the
+merged fixpoint of rule RW4 into standard SQL. Furthermore,
+recursive queries in SQL are not supported by all vendors
+and those who do support them tend to consider them as
+optimization barriers. There are exceptions (such as DB2)
+but these vendors use a technique inspired by the Magic Set
+technique invented for Datalog.
+
+2.6 Ad-hoc evaluation of UCRPQs
+Up to now, we have only compared systems operating on
+languages strictly more expressive than UCRPQs. If we are
+only interested in UCRPQs or RPQs there are others systems
+and we now present the main ones.
+
+2.4.3 Demand Transformation. The Demand-driven Trans-
+formation, or Demand Transformation, is a recent improve-
+ment [65] over the Magic Sets. The idea is similar to the
+Magic Set: it pushes filters to avoid computing some “use-
+less” facts. It has been proved that Demand Transformation
+always beats Magic Sets; however, it still suffers from some
+
+2.6.1 Automata. One way to evaluate UCRPQ is to translate
+individual RPQs to automata, run them, and then union-
+join the individual results. This automata-based method is
+clearly not optimal for UCRPQs as the various RPQs are
+considered individually and therefore the constraints on
+one RPQ cannot be used on the others but the automata
+
+is sometimes not optimal even on a single RPQ. Indeed, let
+us suppose that we are considering the regular expression
+(a/b/c)+, the automata approach starts by computing the
+solution to the path a, then to the path a/b, then a/b/c and
+recursively restarts (i.e. in a computational form we have
+Ri+1 = ((Ri /a)/b)/c). This method forces the associativity
+of the computation [70] and does not test some associations
+such as computing Ri+1 = (Ri /a)/(b/c) in which we precom-
+pute paths matching (b/c) and which can, in some cases, be
+much more efficient, when e.g. there are only a handful of
+solutions to the path b/c.
+
+2.6.2 α-extended RA. The translation of the RPQ (a/b/c/)+
+in the α-extended RA includes a term α (t ) where t contains
+(a/b/c). Therefore the relation (a/b/c) will first be fully com-
+puted, and then its transitive closure. This is not always op-
+timal, as it suffers from the same drawbacks as the previous
+approach.
+
+2.6.3 Waveguide. The Waveguide paper [70] introduced a
+new technique to evaluate RPQs that mixes ideas from au-
+tomata and from the α-extended RA. Their idea is that the
+“interesting” plans to evaluate one RPQ can either start on
+the left of the RPQ and try to match the right part, or do the
+opposite (start on the right part and match the left one) or
+start in the middle and go both ways. For instance on Q2
+they will try all the plans that we express. However, since
+they focus on a single RPQ, for a conjunction of RPQs such
+as Qex Waveguide will not take advantage of the constraint
+on ?x and will materialize the full relation owns+. Moreover,
+on a query ?a dealsWith+ ?b, ?b isLocatedIn+ ?c, our
+approach will have a single fixpoint in which the number of
+mappings treated is exactly the number of solutions, while
+their approach will compute and then join the full transitive
+closures dealsWith+ and isLocatedIn+.
+
+The authors of Waveguide extended their work in two
+short papers. The first one describes Tasweet, a system fo-
+cusing on disjunction of RPQs and the second one presents
+Wireframe, a tool focusing on conjunctions of RPQs. Wire-
+frame computes a “query spanning tree” to decide in which
+order the RPQs should be evaluated, and then ot relies on
+Waveguide for individual RPQs. Tasweet improves on Waveg-
+uide by noticing that given a set of disjunctive RPQs, some
+computations can be shared. Both of these works suffer from
+the limitations of Waveguide. For instance, in Wireframe the
+constraints on one node can be used for the evaluation of
+other RPQs but the evaluation of various RPQs cannot be
+interleaved. Furthermore, these tools are limited to conjunc-
+tions or unions of RPQs.
+
+3 THE µ-EXTENDED REL. ALGEBRA
+We now present the µ-extended relational algebra, or µ-RA,
+which is our variation of the domain-independent relational
+algebra, equipped with a fixpoint. We first recall some usual
+definitions, and then present its syntax, types and semantics.
+The formalism introduced in this section is classical (but
+included for self-completeness) except for the anti-projection
+and the fixpoint operator. Anti-projection replaces the more
+common projection operator. Anti-projections and the re-
+strictions on fixpoints will allow us to introduce powerful
+rewrite rules in the next section.
+
+3.1 Data model
+Our data model is the same as for the classical relational
+algebra: we consider relations which are sets of mappings
+(also called tuples, or lines) which associate column names
+to values. Formally, we assume the following constants:
+
+• V an infinite set of values;
+• C an infinite set of column names;
+• R an infinite set of relation names.
+
+Definition 1. A mapping or tuple is a partial function
+m : C → V whose domain is finite. If dom(m) = {c1, . . . , cn },
+m can also be seen as the set {c1 → m(c1), . . . , cn → m(cn )}.
+Definition 2. Two mappings m1 and m2 are compatible,
+noted m1 ∼ m2, when ∀c ∈ dom(m1) ∩ dom(m2), m1(c) =
+m2(c). If m1 and m2 are compatible, we define m1 + m2 :
+dom(m1) ∪ dom(m2) → V by:
+
+(m1 + m2)(c) =
+
+
+m1(c)
+
+m2(c)
+
+If we see mappings as sets, this corresponds to their union.
+
+if c ∈ dom(m1)
+if c ∈ dom(m2)
+
+Definition 3. A relation is a finite set of mappings which
+share the same domain. We call this common domain the type
+of the relation. We do not consider datatypes (all values are
+in the single domain V): for simplicity, a type is just a set of
+column names. The empty relation is considered compatible
+with all types.
+
+Relations represent data. A relational database is a finite set
+of named relations (also called tables). We represent such
+a database as a triple (R, Γ, D) where: R ⊂ R is the set of
+relation names; Γ, the database schema, associates relation
+names to relation types; and D, the database body, associates
+relation names to actual relations. The body must be consis-
+tent with the schema: for any R ∈ R, D (R) has type Γ(R).
+
+3.2 Syntax of µ-RA terms
+Our algebra µ-RA is mainly a variation of the relational
+algebra, with the addition of a fixpoint operator µ ; it operates
+on relations. The terms represent queries and are built from
+
+φ1 ▷◁ φ2
+(cid:74)
+
+φ1 ▷ φ2
+(cid:74)
+(cid:72)πa (φ)
+(cid:74)
+
+ρb
+a (φ)
+µ (X = φ)
+
+(cid:74)
+
+V
+(cid:75)
+V
+(cid:75)
+V
+(cid:75)
+
+V
+(cid:75)
+V
+(cid:75)
+
+(cid:74)
+
+V ∧ m1 ∼ m2}
+(cid:75)
+
+φ1
+(cid:74)
+
+= {m1 + m2 | m1 ∈
+= {m ∈
+(cid:26)
+=
+
+V ∧ m2 ∈
+φ1
+φ2
+(cid:75)
+(cid:74)
+(cid:74)
+V | ∀m′ ∈
+V ¬(m′ ∼ m)}
+φ2
+(cid:12)(cid:12)(cid:12)(cid:12) m ∈
+(cid:27)
+(cid:74)
+(cid:75)
+(cid:75)
+{c → v ∈ m | c (cid:44) a}
+{c → v ∈ m | c (cid:44) a} ∪ {b → v | a → v ∈ m}
+V [X /U∞] where U0 = ∅, Ui+1 = Ui ∪
+(cid:75)
+
+X
+(cid:74)
+
+=
+
+=
+
+φ
+(cid:74)
+
+φ
+(cid:74)
+
+V
+(cid:75)
+
+(cid:26)
+
+φ1 ∪ φ2
+(cid:74)
+|c → v |
+
+(cid:74)
+
+V
+(cid:75)
+V
+(cid:75)
+V
+(cid:75)
+
+(cid:27)
+
+X
+(cid:74)
+(cid:12)(cid:12)(cid:12)(cid:12) m ∈
+σf (φ)
+V
+(cid:75)
+(cid:74)
+V [X /Ui ], and U∞ = (cid:83)
+(cid:75)
+
+V
+(cid:75)
+n ∈N Ui
+
+φ
+(cid:74)
+
+=
+
+V ∪
+φ2
+φ1
+(cid:74)
+(cid:75)
+(cid:74)
+= {{c → v}}
+= V (X )
+
+V
+(cid:75)
+
+= {m | m ∈
+
+φ
+(cid:74)
+
+V ∧ f(m) = ⊤}
+(cid:75)
+
+Figure 1: Semantics of µ-RA
+
+φ ::=
+
+X
+|c → v |
+φ1 ∪ φ2
+φ1 ▷◁ φ2
+φ1 ▷ φ2
+σf (φ)
+ρb
+a (φ)
+(cid:72)πa (φ)
+µ (X = φ)
+
+|
+|
+|
+|
+|
+|
+|
+|
+
+term
+relation variable
+constant
+union
+join
+antijoin
+filtering
+renaming
+anti-projection
+fixpoint
+
+Figure 2: Grammar of µ-RA
+
+projections, as in (cid:72)πa (φ) ▷◁ ψ → (cid:72)πa (φ ▷◁ ψ ) when a is not in
+the type of ψ .
+
+Finally, we introduce the fixpoint term µ (X = φ) represent-
+ing a recursive query. In this term, there are some additional
+restrictions on φ, which will be detailed in § 3.4. The result
+R of this operation is a fixpoint in the sense that evaluating
+φ with X bound to R must yield R again. The restrictions
+we add ensure that this fixpoint exists and can be computed
+iteratively. We consider µ as a variable binder, yielding the
+standard notions of free and bound variable occurrences:
+
+Definition 4. In a term φ, all occurrences of a variable X
+which appear in a subterm of the form µ (X = ψ ) are bound.
+All other occurrences of X are free.
+
+relation variables and operations; given a mapping from
+variables to relations (representing a database body), a term
+can be evaluated and yields another relation (the solution of
+the query). Evaluation of terms is described in § 3.3.
+
+As will be clear from the semantics, bound variables can
+be renamed, as usual, without changing the meanings of the
+terms. We can thus assume for simplicity that all bound vari-
+ables are different from each other and from free variables.
+
+Filters. The standard selection operation σf, which op-
+3.2.1
+erates on a relation by keeping only a subset of its mappings,
+depends on a filter f indicating which mappings are to be
+kept. This filter can be seen as a function from mappings to
+booleans. To keep things focused, we do not detail here a
+syntax for filters, but we assume that for any filter f we can
+compute a set FC (f) of column names such that the result of
+f(m) depends only on {c → m(c) | c ∈ FC (f)}.
+
+3.2.2 Terms. The core syntax of terms is defined in Fig. 2.
+The base terms are relation variables X and constants |c → v |
+(representing a single mapping with a singleton domain).
+Two relations can be combined with the classical relational
+operators ∪, ▷◁ and ▷. One relation can be filtered using the
+classical selection operation σf where f is a filter. The rename
+a (·) renames the column a into b. Less classically,
+operator ρb
+the anti-projection (cid:72)πa (·) (or column dropping) removes col-
+umn a. The projection operator πp1, ...,pn (φ) can be expressed
+in terms of (cid:72)π (·) provided we know the type of φ: if φ has type
+t = {p1, . . . , pn, a1, . . . , ak } we have πp1, ...,pn (φ) equivalent
+to (cid:72)πa1 (. . . (cid:72)πak (φ)). Our choice of anti-projection will allow
+us to extend the domains of subterms without changing the
+
+3.3 Semantics
+In µ-RA, relation variables X are used to denote both refer-
+ences to a database relation and a recursive relation. In a full
+query, the two are distinguished by the fact that database
+references appear as free variables, whereas recursion vari-
+ables are bound by µ; but in a subterm, we do not need to
+distinguish the two. In all cases, the semantics of a term φ
+depends on an environment V which maps all free variables
+of φ to relations.
+
+V
+(cid:75)
+
+φ
+(cid:74)
+
+The semantics is defined in Fig. 1, where
+
+designates
+the result of evaluating φ in the environment V . This result
+is defined recursively from the results of evaluating the sub-
+terms. The initial environment for evaluating the whole term
+is a database body D, but in evaluating µ (X = φ), the recur-
+sive calls use different environments where the recursion
+variable X is given a value: the notation V [X /S] represents
+the environment V altered by mapping X to S.
+
+3.4 Restrictions on fixpoints
+Our syntax for the µ-RA is very general and comprises some
+counter-intuitive fixpoints and some types of fixpoints that
+
+are hard to optimize (e.g. non linear & mutually recursive).
+We present restrictions on fixpoints that are needed for the
+validity of our rewrite rules and of most of our propositions
+and theorems.
+
+In the sequel, we suppose that all fixpoints abide the re-
+strictions that we present here. This does not mean, however,
+that our method can not be applied on general terms: given
+a general term φ that contains a subterm ψ , if ψ abides the
+restrictions then we can apply our rewrite rules on ψ .
+
+3.4.1 Properties of fixpoints.
+
+Definition 5. Given a term φ, we say that φ is constant
+
+in X when X is not a free variable of φ.
+
+Definition 6. A fixpoint term µ (X = φ) is said:
+• positive when for all subterms φ1 ▷φ2 of φ, φ2 is constant
+
+in X ;
+
+• linear when for all subterms of φ of the form φ1 ▷◁ φ2 or
+
+φ1 ▷ φ2, either φ1 or φ2 is constant in X ;
+
+• mutually recursive when there exists a subterm
+
+µ (Y = ψ ) of φ with X free in ψ .
+
+Proposition 1. If µ (X = φ) is linear, positive and non mu-
+V [X /S ] is such
+(cid:75)
+
+tually recursive then the function f (S ) =
+that:
+
+φ
+(cid:74)
+
+f (S ) = f (∅) ∪
+
+f ({x })
+
+(cid:91)
+
+x ∈S
+µ (X = φ)
+
+= f ∞(∅).
+
+V
+(cid:75)
+
+and thus f has a fixpoint with
+
+(cid:74)
+Proof sketch. We prove by induction on the subterms
+ξ of φ where X is free in ξ that
+V [X /∅] ∪
+ξ
+(cid:83)
+(cid:75)
+(cid:74)
+V [X / {x }]. By linearity, such a ξ can only be combined
+(cid:75)
+with a constant term and by positivity, it cannot be negated.
+□
+
+V [X /S ] =
+(cid:75)
+
+ξ
+(cid:74)
+
+ξ
+(cid:74)
+
+x ∈S
+
+3.5 Decomposed fixpoints
+Once our terms are restricted, we see that fixpoints can ac-
+tually be decomposed into a strictly recursive part and a
+constant part. This decomposition will be later useful for
+expressing some of our rewrite rules.
+
+Definition 7. Given a term φ linear and positive in X ,
+we say that φ is recursive in X when rec (φ, X ) = ⊤ with rec
+defined as:
+
+rec (φ1 ∪ φ2, X ) = rec (φ1, X ) ∧ rec (φ2, X )
+rec (φ1 ▷◁ φ2, X ) = rec (φ1, X ) ∨ rec (φ2, X )
+rec (φ1 ▷ φ2, X ) = rec (φ1, X )
+rec (σf (φ), X ) = rec (φ, X )
+rec ((cid:72)πa (φ), X ) = rec (φ, X )
+a (φ), X ) = rec (φ, X )
+rec (ρb
+
+rec (µ (Y = φ), X ) = ⊥
+
+rec (X , Y ) = X = Y
+
+rec (|c → v |, X ) = ⊥
+
+Being recursive or constant (def. 5) are syntactical proper-
+ties. However the two following propositions give a semantic
+interpretation of those syntactical properties.
+
+Lemma 1. Let φ be a term.
+• If φ is recursive in X then for all V ,
+• If φ is constant in X , then φ does not depend on X , i.e.
+
+V [X /∅] = ∅.
+φ
+(cid:75)
+(cid:74)
+V [X /∅].
+(cid:75)
+
+for all S and V ,
+
+φ
+(cid:74)
+
+V [X /S ] =
+(cid:75)
+
+φ
+(cid:74)
+
+Definition 8. A fixpoint term µ (X = κ ∪ ψ ) is said de-
+
+composed when κ is constant in X and ψ is recursive in X .
+
+Example 1. Let us suppose that we want to compute the
+transitive closure of a binary relation R. We assume R is repre-
+sented as a two-column table of type {src, trg}. The closure is
+captured by the term µ (X = R ∪ (cid:72)πm (ρm
+
+trg(R) ▷◁ ρm
+
+src(X ))).
+
+This term is a decomposed fixpoint: R is constant and
+
+(cid:72)πm (ρm
+
+trg(R) ▷◁ ρm
+
+src(X )) is recursive in X .
+
+3.4.2 Expressivity of restricted fixpoints. These restrictions
+do have an effect on the expressivity of our language. We
+can show that µ-RA has, at least, the expressive power of
+inflationary-Datalog¬ (Datalog with inflationary semantics
+and negation). When we restrict fixpoints to be positive and
+non mutually recursive then our language has exactly the
+expressive power of stratified-Datalog¬. Finally with all our
+restrictions, our language has exactly the expressive power of
+linear datalog (see § 2.2). This fragment is expressive enough
+to capture a lot of interesting queries. For instance, the next
+section presents how to translate UCRPQs into µ-RA (with
+the restrictions).
+
+As mentioned previously, our method can be applied on
+general terms but, for the sake of simplicity, in the sequel we
+will only consider the fragment rest-µ-RA of µ-RA containing
+only terms where all the fixpoints are linear, positive and
+non mutually recursive.
+
+Proposition 2. A fixpoint term µ (X = φ), linear, positive
+and non mutually recursive can be rewritten to either: an empty
+term, a term φ with one less fixpoint or a decomposed fixpoint.
+
+In the following, we assume that fixpoints are always
+
+decomposed.
+
+3.6 Type System
+Given a schema Γ for a set of relation variables R, we can
+infer types for terms whose free variables are in R. The
+typing judgement Γ ⊢ φ : t means that when evaluated in
+an environment conforming to the schema Γ, φ will yield a
+relation of type t. Our type system is defined by the rules on
+Fig. 3; it is quite straightforward. The rule for typing fixpoints
+uses the fact that fixpoints are decomposed to infer first the
+type of the constant part and then use that information to
+typecheck the recursive part. Given a database schema Γ,
+
+we write F [Γ] for the set of well-typed terms in Γ (i. e. the
+terms φ such that Γ ⊢ φ : t holds for some t).
+
+Proposition 3. Given a database (R, Γ, D) and φ ∈ F [Γ],
+
+φ
+(cid:74)
+
+if Γ ⊢ φ : t then the relation
+
+has type t.
+
+D
+(cid:75)
+Example 2. Consider again the term of Example 1:
+µ (X = R ∪ (cid:72)πm (ρm
+src(X ))). Assuming R is of type
+{src, trg}, we can conclude the whole term is also of type
+{src, trg}.
+
+trg(R) ▷◁ ρm
+
+Indeed, the fixpoint should have the type of its constant part,
+which is R. Then we can check the type of the recursive part:
+src(X ) of type
+trg(R) has type {src, m} and is joined with ρm
+ρm
+{trg, m}. The result has type {src, trg, m} but the m column is
+discarded by the (cid:72)πm (. . . ); thus the whole term is well typed.
+
+4 GENERATING NEW QUERY PLANS
+The traditional RA has rewrite rules and the optimization of
+relational queries is usually done by rewriting to a (estimated)
+more efficient term using rewrite rules. For instance the rule:
+
+σf (φ ▷◁ ψ ) → σf (φ) ▷◁ ψ
+describes that a filter can be pushed inside a join. This rule
+applies whenever FC (f) ⊆ t where t is the type of φ.
+
+In this section, we discuss properties of rest-µ-RA which
+allow us to introduce new rewrite rules for recursive terms.
+These rules extend the set of RA classical rewrite rules, which
+remain valid on rest-µ-RA. We first describe the new rules
+informally and briefly explain how they can lead to terms that
+are more efficiently evaluated. Then in § 4.2 we introduce the
+“set of derivations” for a term which allows us to describe
+when the two first rules are correct. Finally, in § 4.3 we
+introduce “addable columns” which allow us to introduce
+the conditions for three other rewrite rules to apply.
+
+4.1 The new rewrite rules
+4.1.1 Pushing filters and anti-join into fixpoints:
+
+(RW1)
+
+σf (µ (X = φ)) → µ (X = σf (φ))
+µ (X = φ) ▷ ψ → µ (X = φ ▷ ψ )
+(RW2)
+This always reduces the amount of mappings manipulated
+by the fixpoint. For example, on the RPQ ?x isLocatedIn+
+Japan, the first rule permits to only compute the ?x where
+?x isLocatedIn+ Japan, instead of computing the whole
+transitive closure isLocatedIn+ and then filtering out the
+pairs not in Japan.
+
+4.1.2 Pushing joins into fixpoints:
+
+µ (X = φ) ▷◁ ψ → µ (X = φ ▷◁ ψ )
+
+(RW3)
+
+This can also decrease the number of mappings solu-
+tions of the fixpoint. This rewrite rule can typically be
+used on RPQs such as Qex . In this query, there is no need
+
+to compute the whole set of pairs (?x,?y) such that ?x
+isLocatedIn+ ?y, as only the ?x such that Emmy_Noether
+worksAt ?x are of interest to us. Rule RW3 can be used here
+to push Emmy_Noether worksAt ?x into the fixpoint of ?x
+isLocatedIn+ ?y.
+
+4.1.3 Merging fixpoints:
+
+µ (X = κ ∪ ψ ) ▷◁ µ (X = κ ′ ∪ ψ ′) → µ (X = κ ▷◁ κ ′ ∪ ψ ∪ ψ ′)
+(RW4)
+This reduces the number of fixpoints and the num-
+ber of mappings. For instance, on Q2: instead of com-
+puting isLocatedIn+ and dealsWith+ separately and
+then joining them, rule RW4 permits to first com-
+pute isLocatedIn/dealsWith and then to add steps
+isLocatedIn on the left or steps dealsWith on the right.
+
+4.1.4 Pushing antiprojections into fixpoints:
+
+(cid:72)πp (µ (X = φ)) → µ (X = (cid:72)πp (φ))
+
+(RW5)
+
+This can also reduce the number of mappings: the value of
+the removed column being ignored, several mappings might
+get merged (due to set semantics). This is typically useful for
+RPQs in which a fixpoint is joined or filtered and the value
+of the join or filter variable is discarded.
+
+We now discuss formally the conditions which allow these
+
+rewritings. All the proofs are in [12].
+
+4.2 Set of derivations of a term
+In general, we do not have σf (µ (X = φ)) ≡ µ (X = σf (φ)). In-
+deed, it is possible that some mappings solution of µ (X = φ)
+do not pass the filter but are still useful to create mappings
+(with the fixpoint iteration) which do pass the filter.
+
+To rule out this possibility, we can use the following cri-
+terion: if the filter depends only on columns which are un-
+touched by the fixpoint iteration, then applying the filter
+before or after the iteration is equivalent. To check this cri-
+terion syntactically, we introduce the notion of derivation,
+which describes which columns in the result tuples depend
+on which columns in the initial ones. This then allows us to
+define the stabilizer of a fixpoint, the set of columns which
+are untouched during the iteration.
+
+4.2.1 Logical framework.
+
+Definition 9. The set of derivations d (φ, X ) is:
+
+Γ(X ) = t
+Γ ⊢ X : t
+
+Γ ⊢ |c → v | : c
+
+Γ ⊢ φ : t
+
+FC (f) ⊆ t
+
+Γ ⊢ σf (φ) : t
+
+Γ ⊢ φ1 : t
+
+Γ ⊢ φ2 : t
+
+Γ ⊢ φ1 : t1
+
+Γ ⊢ φ2 : t2
+
+Γ ⊢ φ1 : t1
+
+Γ ⊢ φ2 : _
+
+Γ ⊢ φ1 ∪ φ2 : t
+b (cid:60) t
+a ∈ t
+a (φ) : (t \ {a}) ∪ {b}
+
+Γ ⊢ φ : t
+Γ ⊢ ρb
+
+Γ ⊢ φ1 ▷◁ φ2 : t1 ∪ t2
+Γ ⊢ φ : t
+a ∈ t
+Γ ⊢ (cid:72)πa (φ) : t \ {a}
+
+Γ ⊢ κ : t
+
+Γ ⊢ φ1 ▷ φ2 : t1
+Γ ∪ {X → t } ⊢ ψ : t
+
+Γ ⊢ µ (X = κ ∪ ψ ) : t
+
+Figure 3: Typing rules for µ-RA
+
+= d (φ1, X ) ∪ d (φ2, X )
+= d (φ1, X )
+= d (φ1, X ) ∪ d (φ2, X )
+= {p ◦ (b → a, a → ⊥)| p ∈ d (φ, X )}
+= {p ◦ (a → ⊥) | p ∈ d (φ, X )}
+= d (φ, X )
+
+d (φ1 ∪ φ2, X )
+d (φ1 ▷ φ2, X )
+d (φ1 ▷◁ φ2, X )
+d (ρb
+a (φ), X )
+d ((cid:72)πa (φ), X )
+d (σf (φ), X )
+d (µ (Y = φ), X ) = ∅
+= {()} (a singleton identity)
+d (X , X )
+= ∅
+d (R, X )
+= ∅
+d (|c → v |, X )
+Where ◦ represents
+
+the composition and (a1 →
+b1, . . . , an → bn ) represents the function that maps each ai
+to its bi and every other column name to itself. Note that this
+definition manipulates functions with an infinite domain but
+the domain where they do not coincide with the identity is
+finite and they are thus computable.
+
+Example 1 followup. In our previous example, X appears
+only once and thus there is only one derivation that maps
+src → ⊥, m → ⊥ and everything else to itself. In particular
+trд is mapped to itself.
+
+Lemma 2. Let w be a mapping and φ a term linear, positive
+and non mutually recursive in X . For all m ∈
+V [X / {w }]
+(cid:75)
+V [X /∅] or there exists p ∈ d (φ, X ) such that for
+either m ∈
+(cid:75)
+all c ∈ dom(w ):
+(cid:19)
+
+φ
+(cid:74)
+
+φ
+(cid:74)
+
+(cid:19)
+
+(cid:18)
+p(c) = ⊥
+
+(cid:18)
+p(c) (cid:60) dom(w )
+
+∨
+
+(cid:18)
+m(c) = w
+
+(cid:16)
+p(c)
+
+(cid:17) (cid:19)
+
+∨
+
+Proof sketch. This is a consequence of lemma 3: we can
+filter the lineage on w or on w0 but they have equal values on
+□
+FC (f) and by definition of FC, eval (f, w0) = eval (f, w ).
+
+Example 1 followup.
+
+In our previous example,
+trд was in the stabilizer and src was not. Indeed the
+term µ (X = R ∪ (cid:72)πm (ρm
+src(X ))) computes the pairs
+(src, trд) in the transitive closure of R by taking a pair
+(src, trд) already in the closure then finding a link (src ′, src)
+in R and finally adding (src ′, trд) to the set of solutions.
+
+trg(R) ▷◁ ρm
+
+On this term, pushing a filter on trд is possible but not
+on src: a solution (src, trд) might not pass the filter but be
+useful to discover a solution (src ′, trд) passing the filter.
+
+Theorem 2 (Pushing anti-joins). Let µ (X = κ ∪ ψ ) be
+a decomposed fixpoint term, V an environment and ξ a
+term of type t ⊆ stab (ψ , X ) (we suppose that X is not a
+=
+free variable of ξ ). Then we have
+µ (X = (κ ▷ ξ ) ∪ ψ )
+
+µ (X = κ ∪ ψ ) ▷ ξ
+
+V
+(cid:75)
+
+(cid:74)
+
+.
+
+(cid:74)
+
+V
+(cid:75)
+
+Proof sketch. The anti join will act in a very similar
+way to a filter since ξ is constant in X . Lineages w0 . . . wn
+will preserve the property to be compatible with one of the
+□
+elements of
+
+.
+
+ξ
+(cid:74)
+
+V
+(cid:75)
+
+Definition 10. Given a term φ linear and positive in a
+variable X , we define the stabilizer of X in φ as the following
+set of column names: stab (φ, X ) = {c ∈ C | ∀p ∈ d (φ, X ) p(c) = c}
+Lemma 3. Given a fixpoint term µ (X = φ) ∈ F [Γ] of type
+if and only if
+t and a mapping w of type t, w ∈
+there exists a lineage for w, that is, a finite sequence w0, . . . , wn
+V [X / {wi }], and wn = w.
+such that: w0 ∈
+(cid:75)
+Furthermore, for all lineages w0, . . . , wn and all c ∈ t ∩
+
+V [X /∅], wi+1 ∈
+(cid:75)
+
+µ (X = φ)
+
+φ
+(cid:74)
+
+φ
+(cid:74)
+
+V
+(cid:75)
+
+(cid:74)
+
+stab (φ, X ), we have for all i, w0(c) = wi (c).
+4.2.2 Application to rewrite rules RW1 and RW2.
+
+Theorem 1 (Pushing filters). Let µ (X = κ ∪ ψ ) be a
+decomposed fixpoint term, V an environment and f a fil-
+ter condition with FC (f) ⊆ stab (ψ , X ). Then we have
+σf (µ (X = κ ∪ ψ ))
+(cid:74)
+
+µ (X = σf (κ) ∪ ψ )
+
+V
+(cid:75)
+
+V
+(cid:75)
+
+=
+
+(cid:74)
+
+.
+
+4.3 Addable columns to a fixpoint
+Let us assume a fixpoint φ = µ (X = κ ∪ ψ ) such that Γ ⊢ φ : t.
+t is thus the type of κ. Suppose we change the constant
+part κ in such a way that it has now type t ′ (cid:44) t. We want
+to ensure that the columns that t ′ adds or removes with
+respect to t play no role in the recursive computation ψ . For
+this, we introduce the predicate add (ψ , X , c) which checks
+syntactically that ψ does not depend on X having a column
+named c.
+
+4.3.1 Logical framework.
+
+Definition 11. We say that a column c ∈ C can be added
+to or removed from a term ψ ∈ F [Γ] recursive in X when
+add (ψ , X , c) = ⊤ holds, with add defined as:
+
+= add (φ1, X , c) ∧ add (φ2, X , c)
+= add (φ1, X , c) ∧ add (φ2, X , c)
+= add (φ1, X , c) ∧ add (φ2, X , c)
+= add (φ, X , c) ∧ c (cid:60) {a, b}
+= add (φ, X , c) when c (cid:44) a
+= X (cid:60) free(φ)
+= add (φ, X , c) ∧ c (cid:60) FC (f)
+
+add (φ1 ∪ φ2, X , c)
+add (φ1 ▷◁ φ2, X , c)
+add (φ1 ▷ φ2, X , c)
+add (ρb
+a (φ), X , c)
+add ((cid:72)πa (φ), X , c)
+add ((cid:72)πc (φ), X , c)
+add (σf (φ), X , c)
+add (µ (Y = φ), X , c) = add (φ, X , c)
+= c (cid:60) Γ(R) when X (cid:44) R
+add (R, X , c)
+= ⊤
+add (X , X , c)
+= c (cid:44) c ′
+add (|c ′ → v |, X , c)
+Lemma 4. Let µ (X = κ ∪ ψ ) ∈ F [Γ] be a decomposed fix-
+point of type t, let c ∈ (C \ t ) that can be added to ψ , and w a
+mapping of type t. We note w (v) = w ∪ {c → v}.
+
+If ∀R ∈ R, c (cid:60) Γ(R), then we have:
+• c ∈ stab (ψ , X )
+• Γ ∪ {X → t ∪ {c}} ⊢ ψ : t ∪ {c}
+•
+
+V [X / {w }] =
+(cid:75)
+
+ψ ▷◁ |c → v |
+(cid:74)
+
+ψ
+(cid:74)
+Proof sketch. The first point can be proved inductively
+by definition of stab and add. The second point is a conse-
+quence of the first. The third point can be proved by induction
+□
+on the size of ψ .
+
+V [X / {w (v ) }]
+(cid:75)
+
+4.3.2 Application to rewrite rules RW3, RW4 and RW5.
+
+Theorem 3 (Pushing joins). Let µ (X = κ ∪ ψ ) ∈ F [Γ]
+be a decomposed fixpoint of type tκ and φ ∈ F [Γ] (with
+X (cid:60) f ree (φ)) a term of type tφ such that:
+
+(1) tφ ⊆ stab (ψ , X )
+(2) ∀c ∈ tφ \ tκ add (ψ , X , c)
+
+Then we have Γ ⊢ µ (X = κ ▷◁ φ ∪ ψ ) : tφ ∪ tκ with for all V
+compatible with Γ:
+
+φ ▷◁ µ (X = κ ∪ ψ )
+(cid:74)
+
+V
+(cid:75)
+
+=
+
+µ (X = κ ▷◁ φ ∪ ψ )
+
+V
+(cid:75)
+
+(cid:74)
+Proof sketch. First we prove that ψ ∈ F [Γ ∪ {X →
+tκ ∪ tφ }] by iterating Lemma 4.1. Then for each lineage
+and each v compatible with
+w0, . . . , wn of
+V
+(cid:75)
+w0 we can build a lineage (w0 +v), . . . , (wn +v) (by iteration
+on Lemma 4), which proves w + v ∈
+.
+V
+(cid:75)
+□
+
+The reverse direction is proved similarly.
+
+µ (X = φ ▷◁ κ ∪ ψ )
+
+µ (X = κ ∪ ψ )
+
+(cid:74)
+
+(cid:74)
+
+Theorem 4 (Merging fixpoints). Given two decomposed
+fixpoints µ (X = κ1 ∪ ψ1) and µ (X = κ2 ∪ ψ2) of types t1 and
+t2 such that:
+
+(1) t1 ∩ t2 ⊆ stab (ψ2, X , C2) ∩ stab (ψ1, X , C1)
+(2) ∀c ∈ t1 \ t2 add (ψ2, X , c)
+(3) ∀c ∈ t2 \ t1 add (ψ1, X , c)
+
+µ (X = κ1 ∪ ψ1) ▷◁ µ (X = κ2 ∪ ψ2)
+
+=
+
+V
+(cid:75)
+
+then we have:
+µ (X = κ1 ▷◁ κ2 ∪ ψ1 ∪ ψ2)
+Proof sketch. The
+given two lineages w 1
+
+(cid:74)
+
+(cid:74)
+
+V .
+(cid:75)
+forward
+0, . . . , w 1
+n
+
+direction
+and w 2
+
+is
+0, . . . , w 1
+m
+
+easy:
+(for
+
+(cid:74)
+
+a
+
+V
+(cid:75)
+
++ w 2
+
+lineage
+
+both
+(w 1
+
+) we
+V
+m ) . . . (w 1
+(cid:75)
+
+can build
+m ).
+
+µ (X = κi ∪ ψi )
+0 + w 2
+0 + w 2
+0 ) . . . (w 1
+(cid:74)
+n
+The converse direction is more difficult but we can de-
+interlace the lineages and create two lineages, one for each
+µ (X = κi ∪ ψi )
+□
+Example 3. If we want to compute R+
+2 (y, z), the
+naive translation would compute both R+
+2 . But our
+approach also considers the plan where we start from x, y, z
+such that R2(y, z)∧R1(x, y) and then will discover new x or new
+z by a fixpoint: µ (X = R1 ▷◁ R2 ∪ ψ ) with ψ = (cid:72)πc (ρc
+x (X ) ▷◁
+y (R1)) ∪ (cid:72)πc (ρc
+y (R2)).
+ρc
+(Pushing
+Theorem
+µ (X = κ ∪ ψ )
+type tκ . Let b ∈ C be such that add (ψ , X , b). Then:
+µ (X = (cid:72)πb (κ) ∪ ψ )
+
+z (X ) ▷◁ ρc
+antiprojections). Let
+5
+∈ F [Γ] be a decomposed fixpoint of
+
+1 (x, y) ∧ R+
+1 and R+
+
+(cid:74)
+Proof sketch. This property can be proved via lineages
+□
+
+similarly to the proofs of the other theorems.
+
+(cid:72)πb (µ (X = κ ∪ ψ ))
+(cid:74)
+
+V
+(cid:75)
+
+V
+(cid:75)
+
+=
+
+Example 1 followup. In our running example, trд is a
+an addable column. This means that, if we are interested
+in (cid:72)πt r д (µ (X = R ∪ (cid:72)πm (ρm
+src(X )))) we can push the
+trg(R) ▷◁ ρm
+(cid:72)πt r д (.) and obtain µ (X = (cid:72)πt r д (R ∪ (cid:72)πm (ρm
+src(X )))).
+trg(R) ▷◁ ρm
+Pushing (cid:72)πt r д (.) will reduce drastically the number of so-
+lutions. We cannot push (cid:72)πsr c (.) as the column src is used.
+
+5 GRAPH QUERY TRANSLATIONS
+µ-RA can be used to model queries over directed graphs with
+labeled edges. We assume that the set of values V gathers
+both vertices and edge labels. The graph can then be rep-
+resented as a pair (V, E) with V ⊂ V denoting the set of
+vertices and E ⊂ V × V × V denoting the set of edges.
+This can be modeled as a relational database with two rela-
+tions V and E representing these two sets, with the schema
+Γ = {V → {src}, E → {src, l, trg}} where src, l, trg stand
+respectively for source, label, target.
+
+Regular path queries (RPQs) [3, 23, 27, 32, 52] provide
+a basic construct used in graph query languages. An RPQ
+makes it possible to express a path connecting graph nodes
+by the means of regular expressions over edge labels. We
+consider a set W of query variables, and a set K ⊆ V of
+vertex labels (constants). The general syntax of an RPQ is
+r (x, y) where x ∈ W ∪ K is connected to y ∈ W ∪ K by the
+regular path expression r defined as follows:
+
+r
+
+::=
+
+|
+|
+|
+|
+
+v a single edge label
+concatenation
+alternative
+reverse
+transitive closure
+
+r1/r2
+r1|r2
+r −1
+r +
+
+For example, the sample query Q2 given in the introduction
+is an RPQ. The basic component for translating graph queries
+into µ-RA is the translation of the regular path expressions r .
+We translate any r into a set of µ-RA terms ϕ, representing
+one or more alternative translations, in such a way that the
+result of evaluating any of those ϕ on the graph database
+is the set of all mappings {src → v1, trg → v2} such that
+the sequence of labels in the path from v1 to v2 matches r .
+that
+For this purpose, we define a translation function
+compiles any r into µ-RA, as follows:
+
+(cid:76)
+
+(cid:77)
+
+·
+
+∧ ϕ2 ∈
+
+r1
+(cid:76)
+
+(cid:77)
+
+(cid:41)
+
+r2
+(cid:76)
+
+(cid:77)
+
+v
+(cid:76)
+r1/r2
+(cid:76)
+
+r1|r2
+(cid:76)
+r −1
+(cid:76)
++
+
+r
+(cid:76)
+
+(cid:77)
+
+(cid:77)
+
+(cid:77)
+
+(cid:77)
+
+(cid:77)
+
+(cid:40)
+
+trg (ϕ1) ▷◁ ρm
+r1
+(cid:76)
+
+= (cid:8)(cid:72)πl (σl=v (E))(cid:9)
+(cid:72)πm (ρm
+=
+= (cid:8)ϕ1 ∪ ϕ2 | ϕ1 ∈
+m (ρtrg
+=
+src (ρm
+ρsrc
+µ (X = ϕ ∪ (cid:72)πm (ρm
+µ (X = ϕ ∪ (cid:72)πm (ρm
+
+=
+
+(cid:40)
+
+(cid:40)
+
+(cid:40)
+
+src (ϕ2)) | ϕ1 ∈
+(cid:9)
+
+∧ ϕ2 ∈
+
+r2
+(cid:41)
+(cid:76)
+
+(cid:77)
+
+(cid:77)
+trg (ϕ))) | ϕ ∈
+
+r
+(cid:76)
+
+(cid:77)
+trg (ϕ) ▷◁ ρm
+src (X ))) | ϕ ∈
+src (ϕ) ▷◁ ρm
+trg (X ))) | ϕ ∈
+
+∪
+
+(cid:41)
+
+(cid:41)
+
+(cid:77)
+
+(cid:77)
+
+r
+(cid:76)
+r
+(cid:76)
+
+Notice that for r + we have two equivalent translated terms.
+This is because we can choose to rename src to m either in r
+or in X (and correspondingly trg to m in the other), depend-
+ing on the direction we want to follow when recursively
+navigating the graph. We want to keep track of both trans-
+lations, as this has impact on the plan space generation1.
+This is the reason why
+returns a set of terms and not
+a single term. This translation of regular path expressions
+constitutes the main component used for translating graph
+query languages such as UCRPQs.
+
+r
+(cid:76)
+
+(cid:77)
+
+A CRPQ is of the form H ← C, where the query head H
+is a non-empty set of vertex variables to be extracted by the
+query, and C is a conjunction of RPQs that describes how
+those vertex variables are connected to other vertex variables
+or to constants. More formally:
+
+• H is of the form (z1, ..., zm ) with arity m > 0 (we do
+
+not consider boolean queries)
+
+• C is a conjunction of the form r1(x1, y1), ..., rn (xn, yn )
+
+where:
+– x1, y1, ...xn, yn ∈ W ∪ K
+– each ri is an RPQ (as defined previously)
+– for each 0 < k ≤ m we have zk ∈ {x1, y1, ...xn, yn } \
+
+K.
+
+UCRPQs extend CRPQs with union at
+top level.
+They have the syntax H ← C1 ∪ ... ∪ Cn in which
+is a conjunction as defined previ-
+each disjunct Ci
+ously. We translate a UCRPQ into µ-RA as follows:
+H ← C1 ∪ C2... ∪ Cn
+(cid:77)
+(cid:76)
+1This is because rewrite rules presented in § 4 apply differently over each
+initial translation, generating two different plan spaces, and we want to
+explore the union of the two.
+
+H with:
+
+H ... ∪
+
+Cn
+(cid:76)
+
+C2
+(cid:76)
+
+C1
+(cid:76)
+
+H ∪
+
+=
+
+(cid:77)
+
+(cid:77)
+
+(cid:77)
+
+C
+(cid:76)
+
+H = (cid:8)ϕ1 ▷◁ ϕ2 ▷◁ ... ▷◁ ϕn | (φ1, φ2, ..., φn ) ∈ combine (C)H
+(cid:77)
+combine (r1(x1, y1), ..., rn (xn, yn ))H
+
+(cid:9)
+
+r (x, y)
+(cid:76)
+
+H =
+(cid:77)
+c (φ) =
+θ x
+
+(cid:40)
+
+Π
+(cid:40)
+
+=
+
+H × ... ×
+(cid:77)
+(cid:17)(cid:17)
+(cid:16)
+θ y
+trg (φ)
+
+| φ ∈
+
+r1(x1, y1)
+(cid:76)
+(cid:16)
+θ x
+src
+ρx
+c (φ)
+σc=x (φ)
+
+H
+for x ∈ W
+for x ∈ K
+
+rn (xn, yn )
+(cid:76)
+
+(cid:41)
+
+(cid:77)
+
+H
+
+r
+(cid:76)
+
+(cid:77)
+
+in which
+
+= (cid:72)πx1 ((cid:72)πx2 ... ((cid:72)πxn (φ))) where x1, x2, ..., xn occur in
+Π (φ)H
+φ but not in H (we keep only columns corresponding to
+selected variables).
+
+6 EXPERIMENTS
+6.1 Prototype
+For shedding light on the practical interest of computing
+richer plan spaces, we experimentally compared the perfor-
+mance of graph query evaluation with and without our novel
+rewriting rules. To test these rules, we implemented a pro-
+totype executor for UCRPQs as follows. First, queries are
+translated into µ-RA terms. Then, we enumerate equivalent
+terms using a Volcano-style strategy [37]. We then pick one
+of the equivalent terms, translate it into SQL, and send it to
+PostgreSQL. Physical plan selection and evaluation are left
+to the PostgreSQL engine; however, depending on the µ-RA
+term we pick, this engine will not be able to access the same
+plan space.
+
+The key point is the set of fixpoint subterms in the query.
+Each of those will always be computed in full into a tem-
+porary table by the engine, since it has no internal rules to
+move other operations in or out of the recursion block. Based
+on this observation, we estimate a cost for each µ-RA term
+and pick one of the terms with the minimal estimated cost
+(see below).
+
+We have two possible translations for fixpoint terms.
+When a fixpoint µ (X = κ ∪ ψ ) is such that X appears ex-
+actly once in ψ , which is always the case for terms generated
+by translating a UCRPQ, this fixpoint can be translated into
+a CREATE RECURSIVE VIEW statement, which is purely
+declarative so that the engine can freely decide how to com-
+pute it. This allows us to test PostgreSQL on the initial trans-
+lated query without restricting its plan space (this test is what
+we call ‘System P’ below). However, the rewriting rule for
+merging fixpoints generates terms where X appears twice;
+these terms cannot be translated into pure SQL. In that case,
+we resort to procedural language (PL/pgSQL) and a WHILE
+loop which computes a temporary table containing the result
+of the fixpoint term.
+
+Cost estimation. We use a simple cost estimation based
+on [60], extended to deal with fixpoint terms. It uses a few
+parameters: number of tuples in each relation in the database,
+number of distinct values for each column, and histogram
+
+values for selectivity [42]. These parameters are available
+from the PostgreSQL server where the data is stored. For
+a fixpoint term µ (X = κ ∪ ψ ), we assume that the number
+of new tuples generated is reduced, at each iteration, by
+a factor s which we compute from selectivity values and
+the operations in ψ . As the iteration stops when no new
+tuples are generated, we estimate the number of steps as
+log
+s (K ) where K is the estimated number of tuples in κ. This
+estimated number of steps allows us to estimate, in turn, the
+number of tuples in µ (X = κ ∪ ψ ) and the CPU time required.
+
+6.2 Methodology
+6.2.1 Queries. Our methodology is twofold: first, we tested
+a set of realistic queries evaluated over a real-world dataset;
+and we also used the gMark benchmark [15] to randomly
+generate UCRPQs with corresponding synthetic datasets.
+
+Queries over the yago dataset. We use a cleaned version of
+the real world dataset yago2s [33], that we have preprocessed
+in order to remove duplicate triples and keep only triples with
+existing and valid identifiers. After preprocessing, we obtain
+a table of yago facts with 83 predicates and 62,643,951 rows
+(graph edges). We collected third-party queries previously
+considered against this popular dataset: we collected 7 RPQs
+from [5], 2 from [70] and 2 from [41]. Since all of them are
+RPQs, we supplemented them with additional CRPQs to
+illustrate more complex forms of recursion. Fig. 4 presents
+the 20 queries tested with the yago dataset.
+
+?x
+?x
+?x
+?x
+?x
+?x
+?x
+
+?x
+?x
+
+← ?x isMarriedTo/livesIn/IsL+/dw+ Argentina
+← ?x hasChild/livesIn/IsL+/dw+ Japan
+← ?x influences/livesIn/IsL+/dw+ Sweden
+← ?x livesIn/IsL+/dw+ United_States
+← ?x hasSuccessor/livesIn/IsL+/dw+ India
+← ?x hasPredecessor/livesIn/IsL+/dw+ Germany
+← ?x haa/livesIn/IsL+/dw+ Netherlands
+
+← ?x IsL+/dw+ USA
+← ?x (actedIn/-actedIn)+ Kevin_Bacon
+
+?area
+?p
+
+← wce -typ/(IsL+/dw|dw) ?area
+← ?p isMarriedTo+/owns/IsL+|owns/IsL+ USA
+
+← ?a IsL+/dw ?b
+← ?a IsL+/dw+ ?b
+
+?a,?b
+?a,?b
+?a,?b,?c ← ?a wasBornIn/IsL+ ?b, ?b isConnectedTo+ ?c
+?a,?b,?c ← ?a (IsL|isConnectedTo)+ ?b, ?c wasBornIn ?a
+?a,?c
+?a
+?a,?c
+?a
+?a
+
+← ?a wasBornIn/IsL+ Japan, ?a typ/sc ?c
+← ?a IsL+/(isConnectedTo|dw)+ Japan
+← ?a IsL+ Japan, ?a isConnectedTo+ ?c
+← ?a IsL+/IsL Japan
+← ?a IsL+/isConnectedTo+/dw+ Japan
+
+Q1
+Q2
+Q3
+Q4
+Q5
+Q6
+Q7
+
+Q8
+Q9
+
+Q10
+Q11
+
+Q12
+Q13
+Q14
+Q15
+Q16
+Q17
+Q18
+Q19
+Q20
+
+Figure 4: Queries for the yago dataseta.
+
+a Q1 ... Q7 are taken from [5], Q8, Q9 from [70], and Q10, Q11 from [41].
+“isL” stands for “IsLocatedIn”, “dw” for “dealsWith”, “haa” for
+“hasAcademicAdvisor”, “USA” for “United_States”, “wce” for
+“wikicategory_Capitals_in_Europe”, “typ” for “rdf:type” and “sc” for
+“rdfs:subClassOf”.
+
+Generated queries over synthetic datasets, using gMark. We
+gathered queries generated by gMark [15], which are avail-
+able on the gMark open source repository [16]. We filtered
+them to retain only queries in which at least one recursion
+was present. For queries generated with an empty head, we
+replaced the empty head by a head containing all the vari-
+ables occurring in the body (so as to test a more complex
+polyadic variant of the query instead of its simple boolean
+counterpart). This provided us with 12 recursive queries
+for the “UniProt” gMark scenario, that we evaluated on a
+gMark-generated graph instance having 76,707 edges. We
+also carried out similar tests with the “Shop” gMark scenario
+for which we report on the evaluation of 14 queries over
+a synthesized graph instance with 209,789 edges. Table 1
+presents the sizes of the considered datasets.
+
+Dataset Origin
+yago 2.5 (cleaned) [33]
+gMark-Shop [15]
+gMark-Uniprot [15]
+
+Predicates
+83
+81
+7
+
+Edges
+62,643,951
+209,789
+76,707
+
+Nodes
+42,832,856
+135,737
+21,130
+
+Table 1: Dataset Statistics.
+
+6.2.2 Tested Systems. We compared the query evalua-
+tion performance of the newly obtained recursive query
+plans with state-of-the-art systems implementing previously
+known approaches for recursive queries, namely:
+
+• system P: the popular PostgreSQL open-source rela-
+tional database [56, 63] implementing SQL with recur-
+sive views.
+
+• system P’: our prototype extending the PostgreSQL
+
+system with our optimizations;
+
+• system V: the Virtuoso graph column store [30] which
+is backed by a relational database, and that implements
+the SPARQL 1.1 language [43] (with property paths);
+• system L: a modern engine implementing Datalog [66];
+• system N: the Neo4j native graph database implement-
+ing the openCypher graph query language [40, 55].
+
+6.3 Experimental setup
+
+Set semantics. Most systems implement both bag and
+set semantics, and use bag semantics by default. However,
+their implementation of recursion differs significantly, which
+causes some systems to retrieve more or less duplicates when
+compared to others. Therefore, we use set semantics.
+
+Timeout. For each tested system, we set a maximum time
+of 30 min of computation for each query (after 30 min, we
+stop the computations and consider that this particular query
+evaluation is not feasible with the given system)2.
+
+2Experiments have been conducted on a server with 128 GB of RAM, 2 Intel
+Xeon E5-2630 v4 CPUs (2.20 GHz, 20 cores each) and 66 TB of 7200 RPM
+
+Specific limitations. Some systems have inherent limita-
+tions or require specific configuration. System N supports
+recursion only around atomic patterns (e.g. isLocatedIn+ is
+supported but (actedIn/-actedIn)+ is not) so it can evaluate
+only a limited number of the considered queries.
+
+Initial comparison baseline for system P. A given graph
+query translates into several possible µ-RA forms, even be-
+fore applying our rewrite rules (see § 5). For a fair comparison
+with system P, we use the internal cost estimation of P to dis-
+criminate them3. Thus, for a given query, the time reported
+for system P is the elapsed time for evaluating the query
+translation that P has itself chosen among other equivalent
+initial translations.
+
+Reported metrics. We report on query evaluation perfor-
+mance, excluding (i) time spent for data preparation (e.g. for
+loading or computing indexes) and (ii) for query optimization
+(e.g. for generating the plan space – a task which can benefit
+from extensive research and various techniques found in the
+literature [38, 39, 47, 62], and which is beyond the scope of
+this paper). We thus mainly concentrate on query evalua-
+tion times. We also report on the number of query answers
+returned by each system using set semantics.
+
+6.4 Results
+6.4.1 Queries over the yago dataset. Fig. 5 shows the time
+spent with each system for evaluating each query of Fig. 4.
+The time scale is logarithmic. Whenever no time is reported
+for a given query and system, this means that either the
+system crashed (or answered wrongly) within the first 30
+minutes of computation for that query, or the computations
+were stopped after 30 minutes. In both cases, the evaluation
+of the query is considered unfeasible with that system.
+
+Coverage. First, we observe significant discrepancies be-
+tween the number of queries that each system has been able
+to answer. Systems N and V answered only 4 queries out of
+20. In comparison, system P answered many more queries:
+all but one; and System P’ answered all of them. Table 2
+summarizes the number of feasible queries for each system.
+Fig. 6 presents the number of retrieved results (in logarithmic
+scale) for each query and each system. All the systems agree
+on the number of query results (using set semantics), except
+V which did not retrieve the correct results in some cases
+(typically terminating within the allowed timeframe but in-
+correctly returning no result). In those cases, we consider
+that it could not answer the query, and no time is reported.
+
+hard disk drives (SAS, RAID 5), running Ubuntu 16.04 LTS, Docker 18.09.7,
+and the latest public Docker images for each tested system.
+3Specifically, for each initial translation, we get the ‘total cost’ value returned
+by a call to the “EXPLAIN” statement of system P. We then retain the
+translation of minimum estimated cost.
+
+N V
+
+Feasible queries
+
+4
+
+4
+
+L
+
+17
+
+P P’
+
+19
+
+20
+
+Unfeasible queries
+
+16
+Table 2: yago queries treated by each system.
+
+16
+
+0
+
+1
+
+3
+
+Performance for feasible queries. We observe that P’ al-
+ways performed more efficiently than P, in several cases by
+an order of magnitude. This suggests that the new plans
+computed by our approach sometimes represent much more
+efficient alternatives. In the case of query 9, the new plan
+selected even makes query answering possible whereas it is
+unfeasible with other systems. Table 3 summarizes the gains
+brought by P’, in terms of feasibility and performance, in
+comparison to other systems.
+
+P
+131
+211
+198
+2.1
+198
+171
+346
+1.0
+∞
+2.2
+
+N V
+
+L
+34.6 ∞ 88.6
+∞ ∞ 143
+44.8 ∞ 132
+1.4
+∞ ∞
+∞ ∞ 136
+∞ ∞ 115
+∞ ∞ 367
+0.7
+∞ ∞
+∞
+∞ ∞
+∞
+∞ ∞
+
+Q1
+Q2
+Q3
+Q4
+Q5
+Q6
+Q7
+Q8
+Q9
+Q10
+
+P
+4.5
+2.3
+1.4
+2.4
+2.2
+63.1
+5.8
+38.4
+573
+10.8
+
+L
+V
+N
+∞ 0.04
+∞
+2.5
+0.3
+∞
+1.0
+∞
+∞
+2.2
+∞ 0.02
+2.5
+∞
+∞
+∞ 312
+10.6
+7.1
+∞
+∞
+∞ 39.9
+∞
+664
+0.4
+146
+∞ 14.3
+∞
+
+Q11
+Q12
+Q13
+Q14
+Q15
+Q16
+Q17
+Q18
+Q19
+Q20
+
+Table 3: Speedup with P’ for yago queriesa.
+
+aA speedup x > 1 means query evaluation is x times faster, x < 1 means
+slower, x = 1 means no speedup, and ∞ denotes cases where a formerly
+unfeasible query becomes feasible.
+
+6.4.2 Generated queries over synthetic datasets. Fig. 7 and 8
+show the times spent in evaluating recursive queries of the
+“UniProt” and the “Shop” gMark scenarios [15], respectively.
+No results are reported for system N because it supports
+none of the randomly generated queries (each one contains
+at least one form of recursion such as (a/b)+ which is not
+supported by N). Results show that in the majority of cases, P’
+outperforms the other systems, either in terms of feasibility
+or in terms of performance. A few cases clearly illustrate the
+interest of the rich plan space explored by system P’. For
+instance with UniProt queries 3, 5, 6, 8, 12, and with Shop
+queries 2, 5, 6, 8, 9, 10, 13, system P’ performs much more
+efficiently thanks to the selected plan which was not present
+in the plan space of system P. Some cases also illustrate
+that there is still room for improvement of the approach,
+in particular for the cost estimation function in charge of
+picking the best estimated plan in the search space. This is
+the case for UniProt query 1 and Shop query 4 for instance,
+where the plan picked by system P’ reveals less efficient than
+
+Figure 5: Elapsed time for evaluating queries of Fig. 4 over the yago real-world dataset.
+
+Figure 6: Number of results retrieved (with set semantics) by each query of Fig. 4 on the yago dataset.
+
+Figure 7: Time spent for evaluating recursive queries of the synthetic “UniProt” gMark scenario.
+
+Figure 8: Time spent for evaluating recursive queries of the synthetic “Shop” gMark scenario.
+
+the plan of system P. The term-picking function should thus
+ideally favor the initial plan, also present in the search space.
+Overall, experiments suggest that the new plans computed
+by our approach can offer significant gains in computation
+time when evaluating recursive queries over graphs. They
+also suggest that some of the newly computed plans can
+allow to realize certain query evaluations which used to be
+unfeasible. This illustrates the benefits of the exploration of
+richer plan spaces made possible by µ-RA.
+
+7 CONCLUSION
+We propose a variation of the classical relational algebra
+extended with a fixpoint operator, which is useful for captur-
+ing recursive terms and for facilitating their transformations.
+We propose new rewriting rules for recursive terms. These
+new rules are compatible and compositional with existing
+
+rules for optimizing the core of the relational algebra. The ex-
+tended set of optimization rules makes it possible to compute
+new query execution plans beyond reach with previous ap-
+proaches. Our approach can be used within any mainstream
+database management system that implements SQL with re-
+cursion, either by adding the new rules inside the query opti-
+mizer, or as a preprocessing stage not requiring to modify the
+system’s internals. Experiments with a prototype implement-
+ing such a preprocessing phase for the PostgreSQL system
+suggest that the new query plans can be useful for evaluating
+much more efficiently recursive queries over graphs. These
+works open many interesting perspectives for future work,
+including more precise cardinality estimations for term se-
+lection, and the study of further algebraic extensions with
+aggregation and user-defined functions in particular.
+
+REFERENCES
+[1] Andrejs Abele, John P. McCrae, Paul Buitelaar, Anja Jentzsch, and
+Richard Cyganiak. 2017. Linking Open Data cloud diagram. http:
+//lod-cloud.net/
+
+[2] Serge Abiteboul, Richard Hull, and Victor Vianu (Eds.). 1995. Founda-
+tions of Databases: The Logical Level (1st ed.). Addison-Wesley Longman
+Publishing Co., Inc., Boston, MA, USA.
+
+[3] S. Abiteboul, D. Quass, J. McHugh, J. Widom, and J. Wiener. 1996. The
+Lorel Query Language for Semistructured Data. Journal on Digital
+Libraries 1, 1 (1996). http://ilpubs.stanford.edu:8090/162/
+
+[4] Serge Abiteboul and Victor Vianu. 1991. Datalog Extensions for Data-
+base Queries and Updates. J. Comput. Syst. Sci. 43, 1 (Aug. 1991), 62–124.
+https://doi.org/10.1016/0022-0000(91)90032-Z
+
+[5] Zahid Abul-Basher, Nikolay Yakovets, Parke Godfrey, Shadi Ghajar-
+Khosravi, and Mark H. Chignell. 2017. TASWEET: Optimizing Dis-
+junctive Path Queries in Graph Databases. In Proceedings of the 20th
+International Conference on Extending Database Technology, EDBT
+2017, Venice, Italy, March 21-24, 2017. OpenProceedings.org, 470–473.
+https://doi.org/10.5441/002/edbt.2017.47
+
+[6] Foto Afrati, Manolis Gergatsoulis, and Francesca Toni. 2003. Linearis-
+ability on datalog programs. Theoretical Computer Science 308, 1 (2003),
+199 – 226. https://doi.org/10.1016/S0304-3975(02)00730-2
+
+[7] R. Agrawal. 1988. Alpha: an extension of relational algebra to express
+a class of recursive queries. IEEE Transactions on Software Engineering
+14, 7 (July 1988), 879–885. https://doi.org/10.1109/32.42731
+
+[8] Alfred V. Aho and Jeffrey D. Ullman. 1979. Universality of Data Re-
+trieval Languages. In Proceedings of the 6th ACM SIGACT-SIGPLAN
+Symposium on Principles of Programming Languages (San Antonio,
+Texas) (POPL ’79). ACM, New York, NY, USA, 110–119.
+https:
+//doi.org/10.1145/567752.567763
+
+[9] Alexander Alexandrov, Georgi Krastev, and Volker Markl. 2019. Rep-
+resentations and Optimizations for Embedded Parallel Dataflow Lan-
+guages. ACM Trans. Database Syst. 44, 1, Article 4 (Jan. 2019), 44 pages.
+https://doi.org/10.1145/3281629
+
+[10] Faisal Alkhateeb and Jérôme Euzenat. 2014. Constrained regular ex-
+pressions for answering RDF-path queries modulo RDFS. IJWIS 10, 1
+(2014), 24–50. https://doi.org/10.1108/IJWIS-05-2013-0013
+
+[11] Renzo Angles, Marcelo Arenas, Pablo Barcelo, Peter Boncz, George
+Fletcher, Claudio Gutierrez, Tobias Lindaaker, Marcus Paradies, Stefan
+Plantikow, Juan Sequeda, Oskar van Rest, and Hannes Voigt. 2018.
+G-CORE: A Core for Future Graph Query Languages. In Proceedings
+of the 2018 International Conference on Management of Data (Houston,
+TX, USA) (SIGMOD ’18). 1421–1432. https://doi.org/10.1145/3183713.
+3190654
+
+[12] Anonymous. 2019. Full proofs for SIGMOD2020 submission 48. https:
+
+//github.com/asigmod/SIGMOD2020submission48
+
+[13] Molham Aref, Balder ten Cate, Todd J. Green, Benny Kimelfeld, Dan
+Olteanu, Emir Pasalic, Todd L. Veldhuizen, and Geoffrey Washburn.
+2015. Design and Implementation of the LogicBlox System. In Proceed-
+ings of the 2015 ACM SIGMOD International Conference on Management
+of Data (Melbourne, Victoria, Australia) (SIGMOD ’15). ACM, New
+York, NY, USA, 1371–1382. https://doi.org/10.1145/2723372.2742796
+[14] Marcelo Arenas, Sebastián Conca, and Jorge Pérez. 2012. Counting
+Beyond a Yottabyte, or How SPARQL 1.1 Property Paths Will Prevent
+Adoption of the Standard. In Proceedings of the 21st International Con-
+ference on World Wide Web (WWW ’12). ACM, New York, NY, USA,
+629–638. https://doi.org/10.1145/2187836.2187922
+
+[15] Guillaume Bagan, Angela Bonifati, Radu Ciucanu, George H. L.
+Fletcher, Aurélien Lemay, and Nicky Advokaat. 2017. gMark: Schema-
+Driven Generation of Graphs and Queries. IEEE Trans. Knowl. Data
+Eng. 29, 4 (2017), 856–869. https://doi.org/10.1109/TKDE.2016.2633993
+
+[16] Guillaume Bagan, Angela Bonifati, Radu Ciucanu, George H. L.
+Fletcher, Aurélien Lemay, and Nicky Advokaat. 2019. gMark: a domain
+and query language independent framework.
+https://github.com/
+graphMark/gmark
+
+[17] Francois Bancilhon, David Maier, Yehoshua Sagiv, and Jeffrey D Ull-
+man. 1986. Magic Sets and Other Strange Ways to Implement Logic
+Programs (Extended Abstract). In Proceedings of the Fifth ACM SIGACT-
+SIGMOD Symposium on Principles of Database Systems (Cambridge,
+Massachusetts, USA) (PODS ’86). ACM, New York, NY, USA, 1–15.
+https://doi.org/10.1145/6012.15399
+
+[18] Francois Bancilhon and Raghu Ramakrishnan. 1988. An amateur’s
+introduction to recursive query processing strategies. In Readings in
+Artificial Intelligence and Databases. Elsevier, 376–430.
+
+[19] Pablo Barcelo, Diego Figueira, and Leonid Libkin. 2012. Graph Logics
+with Rational Relations and the Generalized Intersection Problem. In
+Proceedings of the 2012 27th Annual IEEE/ACM Symposium on Logic in
+Computer Science (New Orleans, Louisiana) (LICS ’12). IEEE Computer
+Society, Washington, DC, USA, 115–124. https://doi.org/10.1109/LICS.
+2012.23
+
+[20] Pablo Barceló, Leonid Libkin, Anthony W. Lin, and Peter T. Wood.
+2012. Expressive Languages for Path Queries over Graph-Structured
+Data. ACM Trans. Database Syst. 37, 4, Article 31 (Dec. 2012), 46 pages.
+https://doi.org/10.1145/2389241.2389250
+
+[21] Angela Bonifati, George Fletcher, Hannes Voigt, and Nikolay Yakovets.
+
+2018. Querying Graphs. Morgan and Claypool publishers.
+
+[22] Angela Bonifati, Wim Martens, and Thomas Timm. 2017. An Analytical
+Study of Large SPARQL Query Logs. PVLDB 11, 2 (2017), 149–161.
+https://doi.org/10.14778/3149193.3149196
+
+[23] Peter Buneman, Susan Davidson, Gerd Hillebrand, and Dan Suciu. 1996.
+A Query Language and Optimization Techniques for Unstructured
+Data. SIGMOD Rec. 25, 2 (June 1996), 505–516. https://doi.org/10.1145/
+235968.233368
+
+[24] Ashok K. Chandra. 1981. Programming Primitives for Database Lan-
+guages. In Proceedings of the 8th ACM SIGPLAN-SIGACT Symposium on
+Principles of Programming Languages (Williamsburg, Virginia) (POPL
+’81). ACM, New York, NY, USA, 50–62. https://doi.org/10.1145/567532.
+567537
+
+[25] Edgar F Codd. 1970. A relational model of data for large shared data
+
+banks. Commun. ACM 13, 6 (1970), 377–387.
+
+[26] Mariano P. Consens and Alberto O. Mendelzon. 1990. GraphLog: A
+Visual Formalism for Real Life Recursion. In Proceedings of the Ninth
+ACM SIGACT-SIGMOD-SIGART Symposium on Principles of Database
+Systems (Nashville, Tennessee, USA) (PODS ’90). ACM, New York, NY,
+USA, 404–416. https://doi.org/10.1145/298514.298591
+
+[27] Isabel F. Cruz, Alberto O. Mendelzon, and Peter T. Wood. 1987. A
+Graphical Query Language Supporting Recursion. In Proceedings of the
+1987 ACM SIGMOD International Conference on Management of Data
+(San Francisco, California, USA) (SIGMOD ’87). ACM, New York, NY,
+USA, 323–330. https://doi.org/10.1145/38713.38749
+
+[28] DLV Systems. 2012. The DLV deductive database system.
+//www.dlvsystem.com/dlv/ (retrieved in october 2019).
+
+http:
+
+[29] Oliver M Duschka, Michael R Genesereth, and Alon Y Levy. 2000.
+Recursive query plans for data integration. The Journal of Logic Pro-
+gramming 43, 1 (2000), 49–73.
+
+[30] Orri Erling. 2012. Virtuoso, a Hybrid RDBMS/Graph Column Store.
+IEEE Data Eng. Bull. 35, 1 (2012), 3–8. http://sites.computer.org/debull/
+A12mar/vicol.pdf
+
+[31] M. Fernandez and D. Suciu. 1998. Optimizing regular path expressions
+using graph schemas. In Proceedings 14th International Conference on
+Data Engineering. 14–23. https://doi.org/10.1109/ICDE.1998.655753
+
+[32] Daniela Florescu, Alon Levy, and Alberto Mendelzon. 1998. Database
+Techniques for the World-Wide Web: A Survey. SIGMOD Rec. 27, 3
+(Sept. 1998), 59–74. https://doi.org/10.1145/290593.290605
+
+[33] Max Planck Institute for Informatics and Telecom ParisTech University.
+https://www.mpi-
+
+2019. YAGO: A high-quality knowledge base.
+inf.mpg.de/yago-naga/yago/
+
+[34] Nadime Francis, Alastair Green, Paolo Guagliardo, Leonid Libkin, To-
+bias Lindaaker, Victor Marsault, Stefan Plantikow, Mats Rydberg, Petra
+Selmer, and Andrés Taylor. 2018. Cypher: An Evolving Query Lan-
+guage for Property Graphs. In Proceedings of the 2018 International
+Conference on Management of Data (Houston, TX, USA) (SIGMOD ’18).
+1433–1445. https://doi.org/10.1145/3183713.3190657
+
+[35] Nadime Francis, Alastair Green, Paolo Guagliardo, Leonid Libkin, To-
+bias Lindaaker, Victor Marsault, Stefan Plantikow, Mats Rydberg, Petra
+Selmer, and Andrés Taylor. 2018. Cypher: An Evolving Query Lan-
+guage for Property Graphs. In Proceedings of the 2018 International
+Conference on Management of Data (Houston, TX, USA) (SIGMOD
+’18). ACM, New York, NY, USA, 1433–1445. https://doi.org/10.1145/
+3183713.3190657
+
+[36] Georges Gardarin and Christophe de Maindreville. 1986. Evaluation
+of Database Recursive Logic Programs As Recurrent Function Series.
+In Proceedings of the 1986 ACM SIGMOD International Conference on
+Management of Data (SIGMOD ’86). ACM, New York, NY, USA, 177–186.
+https://doi.org/10.1145/16894.16872
+
+[37] Goetz Graefe. 1994. Volcano - An Extensible and Parallel Query Eval-
+IEEE Trans. Knowl. Data Eng. 6, 1 (1994), 120–135.
+
+uation System.
+https://doi.org/10.1109/69.273032
+
+[38] Goetz Graefe. 1995. The Cascades Framework for Query Optimization.
+
+Data Engineering Bulletin 18 (1995).
+
+[39] Goetz Graefe and William J. McKenna. 1993. The Volcano Optimizer
+Generator: Extensibility and Efficient Search. In Proceedings of the
+Ninth International Conference on Data Engineering. IEEE Computer
+Society, Washington, DC, USA, 209–218. http://dl.acm.org/citation.
+cfm?id=645478.757691
+
+[40] Alastair Green, Martin Junghanns, Max Kießling, Tobias Lindaaker, Ste-
+fan Plantikow, and Petra Selmer. 2018. openCypher: New Directions in
+Property Graph Querying. In Proceedings of the 21th International Con-
+ference on Extending Database Technology, EDBT 2018, Vienna, Austria,
+March 26-29, 2018. 520–523. https://doi.org/10.5441/002/edbt.2018.62
+[41] Andrey Gubichev, Srikanta J. Bedathur, and Stephan Seufert. 2013.
+Sparqling Kleene: Fast Property Paths in RDF-3X. In First International
+Workshop on Graph Data Management Experiences and Systems (New
+York, New York) (GRADES ’13). ACM, New York, NY, USA, Article 14,
+7 pages. https://doi.org/10.1145/2484425.2484443
+
+[42] Peter J. Haas, Jeffrey F. Naughton, S. Seshadri, and Arun N. Swami.
+1996. Selectivity and Cost Estimation for Joins Based on Random
+Sampling. J. Comput. Syst. Sci. 52, 3 (June 1996), 550–569. https:
+//doi.org/10.1006/jcss.1996.0041
+
+[43] Steve Harris and Andy Seaborne. 2013. SPARQL 1.1 Query Language,
+W3C Recommendation. https://www.w3.org/TR/sparql11-query/
+[44] Olaf Hartig and Giuseppe Pirrò. 2017. SPARQL with property paths
+on the Web. Semantic Web 8, 6 (2017), 773–795. https://doi.org/10.
+3233/SW-160237
+
+[45] Maurice AW Houtsma and Peter MG Apers. 1992. Algebraic optimiza-
+tion of recursive queries. Data & Knowledge Engineering 7, 4 (1992),
+299–325.
+
+[46] Michael Kifer and Eliezer L. Lozinskii. 1990. On Compile-time Query
+Optimization in Deductive Databases by Means of Static Filtering.
+ACM Trans. Database Syst. 15, 3 (Sept. 1990), 385–426. https://doi.org/
+10.1145/88636.87121
+
+[47] Donald Kossmann and Konrad Stocker. 2000. Iterative Dynamic Pro-
+gramming: A New Class of Query Optimization Algorithms. ACM
+Trans. Database Syst. 25, 1 (March 2000), 43–82. https://doi.org/10.
+1145/352958.352982
+
+[48] Dexter Kozen. 1983. Results on the Propositional mu-Calculus. Theor.
+Comput. Sci. 27 (1983), 333–354. https://doi.org/10.1016/0304-3975(82)
+
+90125-6
+
+[49] Nicola Leone, Gerald Pfeifer, Wolfgang Faber, Thomas Eiter, Georg Got-
+tlob, Simona Perri, and Francesco Scarcello. 2006. The DLV System for
+Knowledge Representation and Reasoning. ACM Trans. Comput. Logic
+7, 3 (July 2006), 499–562. https://doi.org/10.1145/1149114.1149117
+
+[50] Leonid Libkin, Wim Martens, and Domagoj Vrgoč. 2016. Querying
+Graphs with Data. J. ACM 63, 2, Article 14 (March 2016), 53 pages.
+https://doi.org/10.1145/2850413
+
+[51] Erik Meijer and Gavin M. Bierman. 2011. A co-relational model of
+data for large shared data banks. Commun. ACM 54, 4 (2011), 49–58.
+https://doi.org/10.1145/1924421.1924436
+
+[52] Alberto O. Mendelzon and Peter T. Wood. 1995. Finding Regular
+Simple Paths in Graph Databases. SIAM J. Comput. 24, 6 (Dec. 1995),
+1235–1258. https://doi.org/10.1137/S009753979122370X
+
+[53] J. F. Naughton, R. Ramakrishnan, Y. Sagiv, and J. D. Ullman. 1989. Effi-
+cient Evaluation of Right-, Left-, and Multi-linear Rules. In Proceedings
+of the 1989 ACM SIGMOD International Conference on Management
+of Data (Portland, Oregon, USA) (SIGMOD ’89). ACM, New York, NY,
+USA, 235–242. https://doi.org/10.1145/67544.66948
+
+[54] Van-Quyet Nguyen and Kyungbaek Kim. 2017. Estimating the Evalua-
+tion Cost of Regular Path Queries on Large Graphs. In Proceedings of
+the Eighth International Symposium on Information and Communication
+Technology (Nha Trang City, Viet Nam) (SoICT 2017). ACM, New York,
+NY, USA, 92–99. https://doi.org/10.1145/3155133.3155160
+
+[55] Online. 2019. http://www.opencypher.org.
+[56] Online. 2019. The PostgreSQL system: http://www.postgresql.org.
+[57] John D. Ramsdell. 2004. Datalog version 2.2, a lightweight deduc-
+tive database system. http://www.ccs.neu.edu/home/ramsdell/tools/
+datalog/datalog.html (retrieved in october 2019).
+
+[58] Domenico Saccà and Carlo Zaniolo. 1986. On the Implementation of a
+Simple Class of Logic Queries for Databases. In Proceedings of the Fifth
+ACM SIGACT-SIGMOD Symposium on Principles of Database Systems
+(Cambridge, Massachusetts, USA) (PODS ’86). ACM, New York, NY,
+USA, 16–23. https://doi.org/10.1145/6012.6013
+
+[59] Michael Schmidt, Michael Meier, and Georg Lausen. 2010. Foundations
+of SPARQL Query Optimization. In Proceedings of the 13th International
+Conference on Database Theory (ICDT ’10). ACM, New York, NY, USA,
+4–33. https://doi.org/10.1145/1804669.1804675
+
+[60] Patricia G. Selinger, Morton M. Astrahan, Donald D. Chamberlin,
+Raymond A. Lorie, and Thomas G. Price. 1979. Access Path Se-
+lection in a Relational Database Management System. In Proceed-
+ings of the 1979 ACM SIGMOD International Conference on Manage-
+ment of Data, Boston, Massachusetts, USA, May 30 - June 1. 23–34.
+https://doi.org/10.1145/582095.582099
+
+[61] Alexander Shkapsky, Mohan Yang, Matteo Interlandi, Hsuan Chiu,
+Tyson Condie, and Carlo Zaniolo. 2016. Big Data Analytics with
+Datalog Queries on Spark. In Proceedings of the 2016 International
+Conference on Management of Data (SIGMOD ’16). 1135–1149. https:
+//doi.org/10.1145/2882903.2915229
+
+[62] Michael Stillger and Myra Spiliopoulou. 1996. Genetic Programming
+in Database Query Optimization. In Proceedings of the 1st Annual
+Conference on Genetic Programming (Stanford, California). MIT Press,
+Cambridge, MA, USA, 388–393. http://dl.acm.org/citation.cfm?id=
+1595536.1595591
+
+[63] Michael Stonebraker, Lawrence A. Rowe, and Michael Hirohama. 2019.
+The implementation of POSTGRES. In Making Databases Work: the
+Pragmatic Wisdom of Michael Stonebraker. 519–559. https://doi.org/
+10.1145/3226595.3226639
+
+[64] Fabian M. Suchanek, Gjergji Kasneci, and Gerhard Weikum. 2007. Yago:
+a core of semantic knowledge. In Proceedings of the 16th International
+Conference on World Wide Web, WWW 2007, Banff, Alberta, Canada,
+
+May 8-12, 2007. 697–706. https://doi.org/10.1145/1242572.1242667
+[65] K Tuncay Tekle and Yanhong A Liu. 2011. More efficient datalog
+queries: subsumptive tabling beats magic sets. In Proceedings of the
+2011 ACM SIGMOD International Conference on Management of data.
+ACM, 661–672.
+
+[66] Jeffrey D. Ullman. 1988. Principles of Database and Knowledge-base
+Systems, Vol. I. Computer Science Press, Inc., New York, NY, USA.
+[67] Jacopo Urbani, Ceriel JH Jacobs, and Markus Krötzsch. 2016. Column-
+Oriented Datalog Materialization for Large Knowledge Graphs.. In
+AAAI. 258–264.
+
+[68] Jacopo Urbani, Ceriel J. H. Jacobs, and Markus Krötzsch. 2016. VLog:
+A Column-Oriented Datalog System for Large Knowledge Graphs. In
+
+Proceedings of the ISWC 2016 Posters & Demonstrations Track co-located
+with 15th International Semantic Web Conference (ISWC 2016), Kobe,
+Japan, October 19, 2016. http://ceur-ws.org/Vol-1690/paper113.pdf
+
+[69] Nikolay Yakovets, P Godfrey, and J Gryz. 2013. Evaluation of SPARQL
+
+property paths via recursive SQL. 1087 (01 2013).
+
+[70] Nikolay Yakovets, Parke Godfrey, and Jarek Gryz. 2015. WAVEGUIDE:
+Evaluating SPARQL Property Path Queries.. In EDBT. 525–g528.
+[71] Nikolay Yakovets, Parke Godfrey, and Jarek Gryz. 2016. Query Plan-
+ning for Evaluating SPARQL Property Paths. In Proceedings of the 2016
+International Conference on Management of Data (San Francisco, Cal-
+ifornia, USA) (SIGMOD ’16). ACM, New York, NY, USA, 1875–1889.
+https://doi.org/10.1145/2882903.2882944
+
+A PROOFS FOR SECTION 3 (THE µ-EXTENDED REL. ALGEBRA)
+
+Proposition (1). If µ (X = φ) is linear, positive and non mutually recursive then the function f (S ) =
+
+φ
+(cid:74)
+
+V [X /S ] is such that:
+(cid:75)
+
+f (S ) = f (∅) ∪
+
+(cid:91)
+
+x ∈S
+
+f ({x })
+
+= f ∞(∅).
+
+and thus f has a fixpoint with
+
+µ (X = φ)
+
+(cid:74)
+
+V
+(cid:75)
+
+have ∀m ∈
+
+φ
+(cid:74)
+
+V [X /S ] ∃wm ∈ S m ∈
+(cid:75)
+
+φ
+(cid:74)
+
+V [X / {wm }].
+(cid:75)
+
+Proof. We will first prove by induction on the size of terms the following property: given a valid term φ, for all S (cid:44) ∅ we
+
+• Using lemma 1 the property is clearly true for terms φ such that X is not free in φ. And the only relation variable where
+
+X appears free is X . For X the property trivially holds (with wm = m).
+
+φ
+(cid:74)
+
+φ
+(cid:74)
+
+V [X / {wm′ }]
+(cid:75)
+
+• For unary operators φ ∈ {ρb
+
+V [X /S ] such that m is
+(cid:75)
+V [X / {wm′ }] and
+the image of m′ through this operator. By the induction hypothesis, for m′ there is w such that m′ ∈
+(cid:75)
+thus m ∈
+
+V [X /S ] implies the existence of m′ ∈
+(cid:75)
+
+a (φ1), (cid:72)πa (φ1) we have m ∈
+
+• For a join operator φ = φ1 ▷◁ φ2 we have by linearity that φ is constant in X for some i (let us note ¯i = 3 − i). If φ ¯i
+
+constant in X then φ is constant in X so we can refer to the first item.
+Otherwise, m ∈
+induction, there exists wm ¯i
+means that in any case m1 ∈
+
+φ ¯i
+(cid:74)
+V [X / {wmi }], m2 ∈
+(cid:75)
+• For the term φ = φ1 ▷ φ2 with any mapping m ∈
+
+V [X /S ] implies the existence of m1 ∈
+(cid:75)
+
+such that m ¯i ∈
+
+V [X /S ] and m2 ∈
+(cid:75)
+}]. For i we have
+V [X / {wm ¯i
+(cid:75)
+V [X / {wmi }] and thus m ∈
+φ2
+(cid:74)
+(cid:75)
+V [X /S ]. By
+V [X /S ] is built using at least one mapping m1 from
+φ1
+φ
+(cid:75)
+(cid:74)
+(cid:74)
+(cid:75)
+V [X / {w }] and
+φ2
+(cid:75)
+(cid:74)
+
+V [X /S ] such that m = m1 + m2. By
+φ2
+(cid:75)
+(cid:74)
+V [X /S ] =
+V [X /∅] =
+}] which
+φi
+(cid:74)
+(cid:75)
+(cid:75)
+V [X / {wmi }].
+φ
+(cid:74)
+(cid:75)
+
+V [X / {w }]. But X does not appear free in φ2, thus
+(cid:75)
+
+V [X /S ] =
+(cid:75)
+
+V [X / {wm ¯i
+(cid:75)
+
+φ1
+(cid:74)
+
+φ2
+(cid:74)
+
+φ1
+(cid:74)
+
+φ1
+(cid:74)
+
+φ1
+(cid:74)
+
+φ ¯i
+(cid:74)
+
+is also
+
+φi
+(cid:74)
+
+φi
+(cid:74)
+
+φ
+(cid:74)
+
+• Given the term µ (Y = φ) we have µ (Y = φ)) constant in X and thus the result by lemma 1.
+
+V [X /S ] implies m ∈
+φ
+(cid:75)
+(cid:74)
+V [X / {w }] and thus m ∈
+(cid:75)
+
+V [X /S ] or m ∈
+φ1
+(cid:74)
+(cid:75)
+V [X / {w }].
+φ
+(cid:75)
+(cid:74)
+
+φ2
+(cid:74)
+
+V [X /S ]. By induction we have w such that
+(cid:75)
+
+φ
+(cid:74)
+
+V [X /S ] =
+V [X / {w }].
+(cid:75)
+(cid:75)
+• For the term φ = φ1 ∪ φ2, m ∈
+
+induction, we have w such that m1 ∈
+thus
+φ
+(cid:74)
+V [X / {w }] or m ∈
+(cid:75)
+
+φ2
+(cid:74)
+
+φ1
+(cid:74)
+
+m ∈
+
+□
+
+Lemma (1). Let φ be a term.
+• If φ is recursive in X then for all V ,
+• If φ is constant in X , then φ does not depend on X , i.e. for all S and V ,
+
+V [X /∅] = ∅.
+(cid:75)
+
+φ
+(cid:74)
+
+φ
+(cid:74)
+
+V [X /S ] =
+(cid:75)
+
+φ
+(cid:74)
+
+V [X /∅].
+(cid:75)
+
+Proof. For the constant part the result is trivial by induction.
+For the recursive part, we also work by induction. It is true for base relations (constants cannot be recursive) but we need to
+be careful because the subterms of a recursive term can be non-recursive. By the definition of rec this can only happen for
+φ1 ▷◁ φ2, but one of the φi has to be recursive and since the join with an empty set leads to an empty set the result holds by
+□
+induction.
+
+Proposition (2). A fixpoint term µ (X = φ), linear, positive and non mutually recursive can be rewritten to either: an empty
+
+term, a term φ with one less fixpoint or a decomposed fixpoint.
+
+Proof. Given a fixpoint µ (X = φ) we can always decompose φ into a Constant part C and a Recursive part R (possibly
+
+empty).
+
+The idea is to prove by induction on φ that it is true for φ where X is linear, positive and non-mutually recursive:
+• For a term φ constant in X the result is clear (R = ∅, C = φ).
+• For X , R = X , C = ∅.
+• For a unary operator f (φ) ∈ {ρb
+
+a (φ), (cid:72)πa (φ), σf (φ)}, we have φ that can be decomposed into Rφ , Cφ the solution is
+
+f (Rφ ), f (Cφ ) (where f (s) represents f (s) if s is a term and ∅ otherwise).
+
+• For a join φ1 ▷◁ φ2, let us suppose by symmetry that φ2 is constant in X ; then φ1 can be decomposed into R, C and the
+
+result is R ▷◁ φ, C ▷◁ φ.
+
+• For an antijoin, the same argument as the one for joins works.
+• For unions the results for subterms can be merged.
+• Fixpoints are constant in X by the non mutual recursion hypothesis.
+
+Proposition (3). Given a database (R, Γ, D) and φ ∈ F [Γ], if Γ ⊢ φ : t then the relation
+Proof. Let Γ be compatible with V . The property is thus true for relation variables; it is also true for constants and by
+
+has type t.
+
+φ
+(cid:74)
+
+(cid:75)
+
+D
+
+induction unions, joins, antijoins, filters, duplication or removal of columns. This leaves us with fixpoints.
+
+□
+
+Suppose Γ ⊢ µ (X = φ) : t. The empty set of mappings is compatible with t, thus
+
+and thus by further induction we have
+
+µ (X = φ)
+
+compatible with t.
+
+φ
+(cid:74)
+
+V [X /∅] is compatible with t by induction,
+(cid:75)
+□
+
+(cid:74)
+
+V
+(cid:75)
+
+B DATALOG & µ-RA EXPRESSIVE POWERS
+In this section we present how to translate various Datalog into µ-RA. The results presented here are not at the heart of our
+work and most of them are already known in the literature (with very similar statements and with similar proofs, see e.g. [4]
+or [2] regarding Datalog and the while+ language).
+
+The only novelty of this proof relies in the proof that the linearity of rest-µ-RA actually reduces the expressive power.
+However to understand why we need to present a translation from Datalog to µ-RA and back. We will therefore not rely on
+formal proofs but we will build some intuition and provide examples.
+
+B.1 Datalog with only one IBD
+We recall in this section that datalog programs can always be transformed to programs that have only one recursive rule and
+one output rule (this is exercise 14.17 of the alice book [2]).
+
+Step 1: the n-aryfication. Given a Datalog program P, we can always modify P so that all rules in P are n-ary for some n.
+B.1.1
+To do that we simply take n to be the maximal arity over all the rules and extend all the rules with a constant c to match this
+arity.
+
+For instance:
+
+Path(1,2).
+Access(1).
+Access(X) :- Access(Y), Path(X,Y)
+
+can be made 3-ary in the following way:
+
+Path(1,2,c).
+Access(1,c,c).
+Access(X,c,c) :- Access(Y,c,c), Path(X,Y,c)
+
+Step 2: one rule datalog. Given a Datalog program P, we can always modify P so that there is only one recursive rule
+B.1.2
+and one “output” rule in P. The idea is to first convert P into a n-ary program P ′ (for some n) then creates a unique n + 1 rules
+that takes as its first argument the name of the rule. For instance, our running example becomes:
+
+Rec(path,1,2,c).
+Rec(access,1,c,c).
+Rec(access,X,c,c) :- Rec(access,Y,c,c), Rec(path,X,Y,c).
+Output(X) :- Rec(access,X,c,c).
+
+B.2 From a derivation rule to µ-RA
+It is a well-known fact that non-recursive datalog and the relational algebra coincide (see e.g. chapter 14 of the alice book [2]).
+Given a production head ( ¯Y ) : −body1( ¯X1), . . . , bodyk ( ¯Xk ) we can translate body1( ¯X1), . . . , bodyk ( ¯Xk ) using k −1 joins between
+each bodyi , renames to rename arguments of bodyi , antiprojections to remove existential variables, and filters for constants.
+Finally we use joins with constants for the constants of the head and renames for the variables.
+
+For instance, if we translate the Datalog IBD Rec into a term Rec that has 4 columns (a1, a2, a3 and a4) the translation of the
+
+body
+
+Rec(access,X,c,c) :- Rec(access,Y,c,c), Rec(path,X,Y,c).
+a2((cid:72)πa1 ((cid:72)πa3 ((cid:72)πa4 (σa1=access∧a3=c∧a4=c (Rec))))) ▷◁ (cid:72)πa1 ((cid:72)πa4 (ρY
+is ρY
+a3(ρX
+The whole translation is (using body to denote the above term):
+ρa2
+X ((cid:72)πY (body)) ▷◁ |a3 → c | ▷◁ |a4 → c | ▷◁ |a1 → access |
+
+a2(σa1=pat h∧a4=c (Rec)))))
+
+B.3 From inflationary Datalog¬ to µ-RA
+Given an inflationary-Datalog¬ program P that, w.l.o.g., has recursive rule Rec and one output rule Output we can translate
+Rec to a fixpoint of the form µ (Rec = φ1 ∪ . . . φk ) where each φi corresponds to one derivation of the rule Rec. Finally we
+translate each production of Output into a term ψ (where Rec is replaced by the fixpoint above) and we generate a term that is
+the union of all these ψ .
+
+Given our initial example we have the term O (here we cut the translation to ease the reading):
+
+B1 =
+B2 =
+B3 = ρa3
+B4 =
+=
+O
+
+X ((cid:72)πY (ρY
+
+a2((cid:72)πa1 ((cid:72)πa3 ((cid:72)πa4 (σa1=access∧a3=c∧a4=c (Rec))))) ▷◁ ρY
+
+|a1 → path| ▷◁ |a2 → 1| ▷◁ |a3 → 2| ▷◁ |a4 → c |
+|a1 → access | ▷◁ |a2 → 1| ▷◁ |a3 → c | ▷◁ |a4 → c |
+a2((cid:72)πa1 ((cid:72)πa4 (σa1=pat h∧a4=c (Rec)))))))
+µ (Rec = B1 ∪ B2 ∪ B3)
+(cid:72)πa1 ((cid:72)πa3 ((cid:72)πa4 (σa1=access (B)4)))
+
+a3(ρX
+
+The semantics does coincide with inflationary-Datalog¬ because the formula B1∪B2∪B3 captures the “immediate consequence”
+
+of the Datalog program.
+
+B.4 From stratified Datalog to µ-RA
+In a stratified Datalog program, each rule can be indexed with an integer n such that a negation of a rule indexed by k can only
+appear in the production rule of a term indexed with k ′ > k.
+
+In the case of a stratified Datalog program, merging all the rules into one will break the stratification. The trick here is to
+operate stratum by stratum and translate the stratum i into a rule Reci . The resulting program will have one rule per stratum.
+Just like in the inflationary case, each stratum i can be translated into a unique fixpoint µ (Xi = φi ). The production rules of
+the stratum i can only reference to a Recj where j ≤ i. We translate Reci into Xi and the Recj into µ (X j = φj ). Note that each
+φi can contain several occurrences of Recj with j < i and that makes the translation exponential but all the fixpoints do are
+non mutually recursive and positive.
+
+Let us consider the following example (already stratified):
+
+Path(...) an EDB
+
+Access_1(0).
+Access_1(X) :- Access_1(Y),Path(Y,X)
+
+Access_2(1).
+Access_2(X) :- Access_2(Y),Path(Y,X), not Access_1(Y)
+
+We translate Path into a term µ (X0 = φ0) (despite the fixpoint φ0 is actually not recursive as Path is an EDB). Then we
+
+translate Access1:
+
+Then we translate Access2 (using Access1 to denote the term above) :
+
+µ (X1 = |a1 → 0| ∪ ρa1
+
+a2 ((cid:72)πa1 (X1 ▷◁ Path)))
+
+µ (X2 = |a1 → 1| ∪ ρa1
+
+a2 ((cid:72)πa1 (X2 ▷◁ Path ▷ Access1)))
+
+B.5 From linear Datalog to rest-µ-RA
+Given a linear Datalog program, we can use the stratified translation. In the resulting term each φi is composed of ψ1 ∪ . . . ψk
+where each of the ψj corresponds to a linear production rule and thus contains at most one occurrence of Xi therefore our
+µ-RA term is also linear (in addition to be recursive and positive as proved by the stratified translation). All in all, our term
+does belong to rest-µ-RA.
+
+B.6 From rest-µ-RA to linear Datalog
+This direction is actually very simple once we know how to translate a term to a Datalog program, we just need to check
+that the resulting term is actually linear. To translate terms into Datalog, we work bottom-up associating each subterm φ to
+a Datalog rule. Datalog rules have columns that are indexed (there is a first column, a second, a third, etc.) while µ-RA has
+
+column names. To handle this discrepancy, we suppose that we have calculated the type of each term (i.e. we compute a set of
+column names), then we order column names (any total order on the column names can be used).
+
+The only difficulty here is the language of filters, in rest-µ-RA we actually impose no restriction on the filter conditions; for
+
+the translation we suppose that only the equality is used.
+
+We thus recursively create production rules for each Datalog predicate sφ ( ¯T ) corresponding the each term φ sφ ( ¯T ) (where ¯T
+
+is the ordered set of columns of the type of φ).
+
+• For φ = φ1 ▷◁ φ2 we create a rule for the join: sφ ( ¯T ) ← s1( ¯T1), s2( ¯T2).
+• For φ = φ1 ∪ φ2 we have two production rules, one for each φi : sφ ( ¯T ) ← sφi ( ¯Ti ).
+• For φ = φ1 ▷ φ2 we create the rule sφ ← sφ1 ( ¯T1), ¬sφ2 ( ¯T2).
+• For φ = σa=b (φ ′) we create the rule sφ ( ¯T1, b, ¯T2) ← sφ ′ ( ¯T1, b, ¯T2) if we suppose that the ordered type of φ ′ is ¯T1, a, ¯T2
+• For φ = (cid:72)πp (φ ′) we create the rule sφ ( ¯Tφ ) ← sφ ′ ( ¯Tφ ′ )
+• For φ = ρb
+stored.
+
+a (φ ′) we create the rule sφ ( ¯T ′) ← sφ ′ ( ¯Tφ ′ ) where ¯T ′ is ¯Tφ ′ where we inserted a a in the place of where b will be
+
+• For φ = µ (X = φ ′) we create the rule sX ( ¯T ) ← sφ ′ ( ¯Tφ ′ ).
+• For φ = X we create the rule sX ( ¯T ) ← sφ ′ ( ¯Tφ ′ ).
+Since the rest-µ-RA term is linear we can see that each production rule contain at most one subgoal that is recursive with
+
+the head.
+
+C PROOFS FOR SECTION 4 (GENERATING NEW QUERY PLANS)
+
+Lemma (2). Let w be a mapping and φ a term linear, positive and non mutually recursive in X . For all m ∈
+
+m ∈
+
+φ
+(cid:74)
+
+V [X /∅] or there exists p ∈ d (φ, X ) such that for all c ∈ dom(w ):
+(cid:75)
+(cid:19)
+(cid:18)
+p(c) = ⊥
+
+(cid:18)
+p(c) (cid:60) dom(w )
+
+∨
+
+(cid:19)
+
+∨
+
+(cid:18)
+m(c) = w
+
+(cid:16)
+p(c)
+
+(cid:17) (cid:19)
+
+φ
+(cid:74)
+
+V [X / {w }] either
+(cid:75)
+
+φ
+(cid:74)
+
+V [X / {w }] \
+(cid:75)
+
+Proof. Let w and m ∈
+V [X /∅]. By induction:
+(cid:75)
+• Since m exists, X can only be free in φ (no |c → v |, no Y (cid:44) X , no fixpoints).
+• For a relation X , the result is clear.
+• For a union we have i such that m ∈
+• For a join φ1 ▷◁ φ2 let us suppose by symmetry that φ1 is not constant in X and that φ2 is. We have m1 ∈
+
+V [X / {w }] and thus the result.
+(cid:75)
+
+φi
+(cid:74)
+
+φ
+(cid:74)
+
+d1 ∈ d (φ1, X ) ⊆ d (φ1 ▷◁ φ2, X ) (with inductive hypothesis) and m2 ∈
+For each c ∈ dom(w ) we either have d1(c) = ⊥ or d1(c) (cid:60) dom(w ) or m1(c) = w (d1(c)) and thus m(c) = w (d1(c)).
+Note that m2(c) might or might not be defined but if (d1(c) (cid:44) ⊥) ∧ (p(c) ∈ dom(w )) then m1(c) is also defined and
+m(c) = m1(c).
+
+V [X /∅].
+(cid:75)
+
+φ
+(cid:74)
+
+• For an antijoin or a filter the result is clear.
+• For a column rename or removal, the definition of d makes it work. Let us note λ(φ) the term, we have m ∈
+
+that implies m′ ∈
+
+φ
+(cid:74)
+
+V [X / {w }] and d ′ ∈ d (φ, X ) with the property. And d ′ ◦ λ works.
+(cid:75)
+
+λ(φ)
+(cid:74)
+
+V [X / {w }]
+(cid:75)
+
+□
+
+φ
+(cid:74)
+
+V [X / {w }],
+(cid:75)
+
+Lemma (3). Given a fixpoint term µ (X = φ) ∈ F [Γ] of type t and a mapping w of type t, w ∈
+φ
+(cid:74)
+
+exists a lineage for w, that is, a finite sequence w0, . . . , wn such that: w0 ∈
+
+Furthermore, for all lineages w0, . . . , wn and all c ∈ t ∩ stab (φ, X ), we have for all i, w0(c) = wi (c).
+
+V [X /∅], wi+1 ∈
+(cid:75)
+
+µ (X = φ)
+V
+(cid:74)
+(cid:75)
+V [X / {wi }], and wn = w.
+(cid:75)
+
+φ
+(cid:74)
+
+if and only if there
+
+Proof. Let w ∈
+
+µ (X = φ)
+
+find w0, . . . , wn = w as expected.
+
+(cid:74)
+
+V
+(cid:75)
+
+and let n minimal such that w ∈ Un (as defined by the semantic). By iterating proposition 1 we
+
+Conversely if we have such w0, . . . , wn = w then clearly w ∈
+(cid:74)
+Now, by Lemma 2, for each 0 ≤ i ≤ n − 1, the mappings wi and wi+1 there is p ∈ d (φ, X ) such that for all c ∈ stab (φ, X ) ∩ t,
+□
+
+wi+1 = wi (p(c) = wi (c). By iteration so does w0 and w.
+
+µ (X = φ)
+
+V
+(cid:75)
+
+.
+
+Theorem (1 Pushing filters). Let µ (X = κ ∪ ψ ) be a decomposed fixpoint term, V an environment and f a filter condition
+
+with FC (f) ⊆ stab (ψ , X ). Then we have
+
+σf (µ (X = κ ∪ ψ ))
+(cid:74)
+
+V
+(cid:75)
+
+(cid:74)
+
+=
+
+µ (X = σf (κ) ∪ ψ )
+
+.
+
+V
+(cid:75)
+
+Proof. Let w ∈
+
+σf (µ (X = κ ∪ ψ ))
+(cid:74)
+
+V
+(cid:75)
+values as all the wi on FC (f); therefore w0 also passes the filter: we have w0 ∈
+µ (X = σf (κ) ∪ ψ )
+.
+V
+(cid:75)
+Conversely, if w ∈
+
+(cid:74)
+and by the same argument as above, so must w.
+
+µ (X = σf (κ) ∪ ψ )
+
+V
+(cid:75)
+
+(cid:74)
+
+, let w0, . . . , wn be a lineage of w; we have w0 ∈
+
+. Let w0, . . . , wn be a lineage of w: w passes the filter and by Lemma 3, w has the same
+. Thus w0, . . . , wn is also a lineage of
+σf (κ)
+(cid:74)
+
+V
+(cid:75)
+
+σf (κ)
+(cid:74)
+
+V
+(cid:75)
+
+, thus w0 passes the filter
+□
+
+Theorem (2 Pushing anti-joins). Let µ (X = κ ∪ ψ ) be a decomposed fixpoint term, V an environment and ξ a term of type
+
+t ⊆ stab (ψ , X ) (we suppose that X is not a free variable of ξ ). Then we have
+
+µ (X = κ ∪ ψ ) ▷ ξ
+
+=
+
+µ (X = (κ ▷ ξ ) ∪ ψ )
+
+(cid:74)
+
+V
+(cid:75)
+
+(cid:74)
+
+.
+
+V
+(cid:75)
+
+Lemma (4). Let µ (X = κ ∪ ψ ) ∈ F [Γ] be a decomposed fixpoint of type t, let c ∈ (C \ t ) that can be added to ψ , and w a
+
+mapping of type t. We note w (v) = w ∪ {c → v}.
+
+If ∀R ∈ R, c (cid:60) Γ(R), then we have:
+• c ∈ stab (ψ , X )
+• Γ ∪ {X → t ∪ {c}} ⊢ ψ : t ∪ {c}
+•
+
+ψ
+(cid:74)
+
+ψ ▷◁ |c → v |
+(cid:74)
+
+V [X / {w }] =
+V [X / {w (v ) }]
+(cid:75)
+(cid:75)
+=
+Proof. We will prove the result
+ψ
+(cid:74)
+Note that when a subformula ξ of ψ is constant in X we have that
+
+ψ ▷◁ |c → v |
+(cid:74)
+
+V [X / {w (v ) }] by lemma 1 and we also
+(cid:75)
+have that c is not in the type of this ξ (since ∀R, c (cid:60) ΓR and the definition of add forbids to rename a column into c). Note also
+that subformula that are fixpoints or constants are necessarily constant in X .
+
+inductively on the size of ψ a term recursive in X .
+ξ
+(cid:74)
+
+V [X / {w }] =
+(cid:75)
+
+w (v )
+(cid:75)
+
+ξ
+(cid:74)
+
+w
+(cid:75)
+
+Let us explore the various cases. For the simplicity of proofs, we use ▷◁ and ▷ directly with sets of mappings (e.g. A ▷◁ B =
+
+{mA + mB | mA ∈ A mB ∈ B ∧ mA ∼ mB }).
+
+X ).
+
+• For the formula X , the result is trivial and it is the only base case (constants and other variables cannot be recursive in
+
+• For φ1 ▷◁ φ2, one of φ1, φ2 has to be constant, the other recursive. By symmetry, we suppose that φ1 is recursive and φ2 con-
+V [X / {w }] =
+(cid:75)
+
+V [X / {w (v ) }] =
+(cid:75)
+
+φ1 ▷◁ |c → v |
+(cid:74)
+
+φ1 ▷◁ φ2
+(cid:74)
+
+φ1
+(cid:74)
+
+φ2
+(cid:74)
+
+(cid:74)
+
+stant. We have
+(φ1 ▷◁ |c → v |) ▷◁ φ2
+
+V [X / {w }] =
+(cid:75)
+• For φ1 ▷ φ2 we similarly have
+
+V [X / {w (v ) }] =
+V [X / {w (v ) }] ▷◁
+φ2
+(cid:75)
+(cid:74)
+(cid:75)
+(φ1 ▷◁ φ2) ▷◁ |c → v |
+V [X / {w }]
+(cid:74)
+(cid:75)
+V [X / {w (v ) }] =
+V [X / {w (v ) }] ▷
+φ1 ▷ φ2
+φ1
+(cid:74)
+(cid:75)
+(cid:74)
+(cid:75)
+V [X / {w }] =
+(φ1 ▷ φ2) ▷◁ |c → v |
+φ2
+(cid:74)
+(cid:75)
+tivity of ▷ over ▷◁ is only true because c cannot be in the type of φ2.
+
+V [X / {w }] =
+(cid:75)
+
+(cid:74)
+a (φ) the result comes easily as c (cid:60) {a, b} ∪ FC ( f ).
+
+• For σf (φ ′), (cid:72)πa (φ ′) and ρb
+
+(φ1 ▷◁ |c → v |) ▷ φ2
+
+(cid:74)
+
+V [X / {w }] ▷◁
+(cid:75)
+V [X / {w (v ) }] =
+(cid:75)
+
+φ2
+(cid:74)
+
+φ1 ▷◁ |c → v |
+V [X / {w }] ▷
+(cid:75)
+(cid:74)
+V [X / {w }] and the last line that uses the commuta-
+(cid:75)
+
+□
+
+Theorem (3 Pushing joins). Let µ (X = κ ∪ ψ ) ∈ F [Γ] be a decomposed fixpoint of type tκ and φ ∈ F [Γ] (with X (cid:60) f ree (φ))
+
+a term of type tφ such that:
+(1) tφ ⊆ stab (ψ , X )
+(2) ∀c ∈ tφ \ tκ add (ψ , X , c)
+
+Then we have Γ ⊢ µ (X = κ ▷◁ φ ∪ ψ ) : tφ ∪ tκ with for all V compatible with Γ:
+
+φ ▷◁ µ (X = κ ∪ ψ )
+(cid:74)
+
+V
+(cid:75)
+
+(cid:74)
+
+=
+
+µ (X = κ ▷◁ φ ∪ ψ )
+
+V
+(cid:75)
+
+Proof. Lemma 4 ensures us that Γ ∪ {X → tφ ∪ tκ } ⊢ ψ : tφ ∪ tκ , and thus Γ ⊢ µ (X = φ ▷◁ κ ∪ ψ ) : tφ ∪ tκ .
+Then if we take a lineage w0 . . . wn of
+V
+(cid:75)
+(cid:74)
+ensures us that u is compatible with all wi .
+
+and there exists u ∈
+
+µ (X = κ ∪ ψ )
+
+φ
+(cid:74)
+
+V
+(cid:75)
+
+compatible with wn then tφ ⊆ stab (ψ , X )
+
+Then by iterating Lemma 4, for each i and for each c ∈ tφ \ tκ , we have that w0(u), . . . , wn (u) is a valid lineage of
+µ (X = κ ▷◁ φ ∪ ψ )
+□
+Theorem (4 Merging fixpoints). Given two decomposed fixpoints µ (X = κ1 ∪ ψ1) and µ (X = κ2 ∪ ψ2) of types t1 and t2 such
+
+and reciprocally.
+
+V
+(cid:75)
+
+(cid:74)
+
+that:
+
+(1) t1 ∩ t2 ⊆ stab (ψ2, X , C2) ∩ stab (ψ1, X , C1)
+(2) ∀c ∈ t1 \ t2 add (ψ2, X , c)
+(3) ∀c ∈ t2 \ t1 add (ψ1, X , c)
+
+then we have:
+µ (X = κ1 ▷◁ κ2 ∪ ψ1 ∪ ψ2)
+
+(cid:74)
+
+V .
+(cid:75)
+
+µ (X = κ1 ∪ ψ1) ▷◁ µ (X = κ2 ∪ ψ2)
+
+=
+
+V
+(cid:75)
+
+(cid:74)
+
+Proof. For i ∈ {1, 2}, let w0, . . . , wni
+a lineage of size n1 + n2 of the form (w 1
+holds.
+
+be a lineage of
+0 ) . . . (w 1
+0 + w 2
+(cid:74)
+n1
+
+µ (X = κi ∪ ψ i )
+V
++ w 2
+0 ) . . . (w 1
++ w 2
+(cid:75)
+n1
+
+with wn1 compatible with wn2; we can easily construct
+n2 ) and for the same reason as the last theorem, it
+
+Now let us take a lineage w0, . . . , wn of
+restriction of wi to the type of κj . Those w j
+i
+0 and for each i > 0 wi
+wi
+ψi
+j
+(cid:74)
+¯j
+i
+
+when w j
+
+= w
+
+i ∈
+
+w
+
+µ (X = κ1 ▷◁ κ2 ∪ ψ1 ∪ ψ2)
+
+is the
+(cid:74)
+are not necessarily forming a lineage but we consider the subsequence containing
+i −1 }] we have
+
+i −1 }]. Then by the theorem condition when w j
+
+. We decompose wi into w 1
+i
+
+where w j
+i
+
++ w 2
+i
+
+i ∈
+
+V
+(cid:75)
+
+ψi
+(cid:74)
+
+V [X / {w j
+(cid:75)
+
+V [X / {w j
+(cid:75)
+
+¯j
+i−1. The two resulting sequences are thus lineages and we have the expected theorem.
+
+□
+
+Theorem (5 Pushing antiprojections). Let µ (X = κ ∪ ψ ) ∈ F [Γ] be a decomposed fixpoint of type tκ . Let b ∈ C be such
+
+that add (ψ , X , b). Then:
+
+(cid:72)πb (µ (X = κ ∪ ψ ))
+(cid:74)
+Proof. This is a conclusion of lemma 4. Let w0, . . . , wn be a lineage of
+
+µ (X = (cid:72)πb (κ) ∪ ψ )
+
+V
+(cid:75)
+
+=
+
+(cid:74)
+
+V [X /∅] and if we have wi (v) we can find wi+1(v) ∈
+(cid:75)
+
+there exists v such that
+V
+(cid:75)
+V [X / {wi (v ) }] by lemma 4. In the end we have a lineage for
+ψ
+(cid:75)
+(cid:74)
+and which means w ∈ (cid:72)πc (µ (X = κ ∪ ψ )).
+
+µ (X = (cid:72)πc (κ) ∪ ψ )
+
+(cid:74)
+
+Notice that lemma 4 gives an equality therefore this is a bijection between lineage and also proves the converse way.
+
+κ
+(cid:74)
+µ (X = κ ∪ ψ )
+(cid:74)
+
+V
+(cid:75)
+
+V
+(cid:75)
+
+w0(v) ∈
+w (v) ∈
+
+REFERENCES FOR THE APPENDIX
+
+[2] Serge Abiteboul, Richard Hull, and Victor Vianu, editors. Foundations of Databases: The Logical Level. Addison-Wesley Longman Publishing Co.,
+
+Inc., Boston, MA, USA, 1st edition, 1995.
+
+[4] Serge Abiteboul and Victor Vianu. Datalog extensions for database queries and updates. J. Comput. Syst. Sci., 43(1):62–124, August 1991.
+
+□
+
+

@@ -1,0 +1,2025 @@
+Eﬀicient Incremental Computation of Aggregations over
+Sliding Windows
+Chao Zhang, Reza Akbarinia, Farouk Toumani
+
+To cite this version:
+
+Chao Zhang, Reza Akbarinia, Farouk Toumani. Eﬀicient Incremental Computation of Aggregations
+over Sliding Windows. BDA 2021 - 37e Conférence sur la Gestion de Données - Principes, Technologies
+et Applications, Oct 2021, Virtual, France. ￿lirmm-03468587￿
+
+HAL Id: lirmm-03468587
+
+https://hal-lirmm.ccsd.cnrs.fr/lirmm-03468587
+
+Submitted on 7 Dec 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Efficient Incremental Computation of Aggregations
+over Sliding Windows
+
+Chao Zhang
+LIMOS, CNRS, University of
+Clermont Auvergne
+France
+chao.zhang@uca.fr
+
+Reza Akbarinia
+LIRMM, INRIA, University of
+Montpellier
+France
+reza.akbarinia@inria.fr
+
+Farouk Toumani
+LIMOS, CNRS, University of
+Clermont Auvergne
+France
+farouk.toumani@uca.fr
+
+ABSTRACT
+Computing aggregation over sliding windows, i.e., finite subsets of
+an unbounded stream, is a core operation in streaming analytics.
+We propose PBA (Parallel Boundary Aggregator), a novel parallel
+algorithm that groups continuous slices of streaming values into
+chunks and exploits two buffers, cumulative slice aggregations
+and left cumulative slice aggregations, to compute sliding window
+aggregations efficiently. PBA runs in 𝑂
+time, performing at most
+3 merging operations per slide while consuming 𝑂
+𝑛
+space for
+windows with 𝑛 partial aggregations. Our empirical experiments
+demonstrate that PBA can improve throughput up to 4
+while
+×
+reducing latency, compared to state-of-the-art algorithms.
+
+1
+
+)
+
+(
+
+)
+
+(
+
+CCS CONCEPTS
+• Information systems
+
+Data streaming.
+
+→
+
+KEYWORDS
+Data Stream; Streaming Algorithm; Sliding Window Aggregation
+
+ACM Reference Format:
+Chao Zhang, Reza Akbarinia, and Farouk Toumani. 2021. Efficient Incremen-
+tal Computation of Aggregations over Sliding Windows. In Proceedings of
+the 27th ACM SIGKDD Conference on Knowledge Discovery and Data Mining
+(KDD ’21), August 14–18, 2021, Virtual Event, Singapore. ACM, New York,
+NY, USA, 9 pages. https://doi.org/10.1145/3447548.3467360
+
+1 INTRODUCTION
+Nowadays, we are witnessing the production of large volumes of
+continuous or real-time data in many application domains like traf-
+fic monitoring, medical monitoring, social networks, weather fore-
+casting, network monitoring, etc. For example, every day around
+one trillion messages are processed through Uber data analytics
+infrastructure1 while more than 500 million tweets are posted on
+Twitter [11]. Efficient streaming algorithms are needed for analyz-
+ing data streams in such applications. In particular, aggregations
+[23], having the inherent property of summarizing information
+
+1AthenaX: SQL-based streaming analytics platform, https://eng.uber.com/athenax
+
+from data, constitute a fundamental operator to compute real-time
+statistics in this context. In the streaming setting, aggregations are
+typically computed over finite subsets of a stream, called windows.
+In particular, Sliding-Window Aggregation (SWAG) [20, 21, 26, 28]
+continuously computes a summary of the most recent data items in
+a given range 𝑟 (aka window size) and using a given slide 𝑠. If the
+range and slide parameters are given in time units (e.g., seconds),
+then the sliding window is time-based, otherwise, i.e., if these pa-
+rameters are given as the number of values, it is count-based. Fig. 1
+presents an example of computing sum over the count-based sliding
+window with a range of 10 values and a slide of 2 values.
+
+Stream processing systems (SPSs) [2, 6, 19, 30, 32] are ubiquitous
+for analyzing continuously unbounded data. However, one of the
+challenges faced by SPSs is to efficiently compute aggregations
+over sliding windows. This requires the ability of such systems to
+incrementally aggregate moving data, i.e., inserting new data items
+and evicting old data items when a window is sliding without re-
+computing the aggregation from scratch. High throughput and low
+latency are essential requirements as SPSs are typically designed
+for real-time applications [13].
+
+Two orthogonal techniques have been proposed to meet such
+requirements: slicing (aka partial aggregation) [7, 18, 20, 31], and
+merging (aka incremental final aggregation) [25–28]. Slicing tech-
+niques focus on slicing the windows into smaller subsets, called
+slices, and then computing partial aggregation over slices, called
+slice aggregations. The benefit of the slicing technique is that slice
+aggregations (i.e., partial aggregations over slices) can be shared
+by different window instances. For example, in Fig. 1, a slice ag-
+gregation over a slice of 2 values can be shared by 5 windows. On
+the basis of a slicing technique, final aggregations over sliding win-
+dows are computed by merging slice aggregations, e.g., in Fig. 1,
+SWAGs are computed by merging 5 slice aggregations. During the
+merging phase, each insertion or eviction is processed over a slice
+aggregation rather than a value. In modern SPSs, practical sliding
+windows can be very large [28], thereby making the merging phase
+non-trivial. To efficiently merge slice aggregation, incremental com-
+putation is necessary because an approach that recalculate slice
+aggregations from scratch (hereafter called Recal) is very inefficient
+[20, 21, 26, 28].
+
+The difficulty of incremental merging depends on the considered
+class of aggregations: invertible or non-invertible. An aggregation is
+invertible if the merging function for its partial aggregations has an
+inverse function. For example, 𝑠𝑢𝑚 is clearly invertible, because it
+has the arithmetical subtraction as the inverse function. Similarly,
+𝑎𝑣𝑔 and 𝑠𝑡𝑑 are invertible because they use addition as merging
+function. Partial aggregations of invertible aggregations can be
+
+Figure 1: Example of computing sum over a count-based slid-
+ing window with a range of 10 values and a slide of 2 values.
+
+efficiently merged using the subtract-on-evict algorithm [13, 27], i.e.,
+maintaining a running sum over a sliding window by subtracting
+evicted values and adding inserted values. However, this is not
+the case for non-invertible aggregations, e.g., max, min, and bloom
+filter, where the subtract-on-evict algorithm cannot be applied at
+the merging phase. Incremental merging of continuous data in the
+context of non-invertible aggregations is challenging and requires
+more sophisticated algorithms (e.g., see [5, 25–28]).
+
+This paper focuses on merging slice aggregations for computing
+non-invertible aggregations over FIFO sliding windows with an
+arbitrary range and an arbitrary slide. We propose PBA (Parallel
+Boundary Aggregator), a novel algorithm that computes incremen-
+tal aggregations in parallel. PBA groups continuous slices into
+chunks, and maintains two buffers for each chunk containing, re-
+spectively, the cumulative slice aggregations (denoted as 𝑐𝑠𝑎) and
+the left cumulative slice aggregations (denoted as 𝑙𝑐𝑠) of the chunk’s
+slices. Using such a model, SWAGs can be computed in constant
+time bounded by 3 for both amortized and worst-case time. Inter-
+estingly, the required 𝑐𝑠𝑎 and 𝑙𝑐𝑠 for each window aggregation are
+completely independent from each other, so the incremental com-
+putation of 𝑐𝑠𝑎 and 𝑙𝑐𝑠 can be achieved in parallel. These salient
+features put PBA ahead of state-of-the-art algorithms in terms of
+throughput and latency.
+
+In this paper, we make the following main contributions:
+
+•
+
+•
+
+•
+
+•
+
+We propose a novel algorithm, PBA, to efficiently compute
+SWAGs. PBA uses chunks to divide final aggregations of
+window instances into sub-aggregations that are elements
+of 𝑐𝑠𝑎 and 𝑙𝑐𝑠 buffers. These two buffers can be computed
+incrementally and in parallel.
+We analyze the latency caused by SWAG computations with
+different chunk sizes in PBA, and propose an approach to
+optimize the chunk size leading to the minimum latency.
+We conduct extensive empirical experiments, using both
+synthetic and real-world datasets. Our experiments show
+that PBA behaves very well for average and large sliding
+windows (e.g., with sizes higher than 1024 values), improv-
+ing throughput up to 4
+against state-of-the-art algorithms
+while reducing latency. For small-size windows, the results
+show the superiority of the non-parallel version of PBA (de-
+noted as SBA) that outperforms other algorithms in terms
+of throughput.
+To show the benefit of our approach in modern stream-
+processing frameworks, we implemented PBA on top of
+Apache Flink [3, 6], called FPBA. Our empirical evaluation
+shows that FPBA scales well as increasing the parallelism of
+Flink in both local and cluster modes.
+
+×
+
+The rest of this paper is organized as follows. In Section 2, we
+present the background related to SWAG. We discuss state-of-the-
+art algorithms for merging slice aggregations, and parallelization in
+SPSs in Section 3. PBA is presented in Section 4. Our experimental
+evaluation is reported in Section 5. We conclude in Section 6. All
+related proofs and pseudo-codes are included in our technical report,
+which is available online [1].
+
+]
+
+2 BACKGROUND
+2.1 Sliding Window Aggregations
+, 𝑟 > 𝑠, with a range 𝑟 and a slide 𝑠 is
+A sliding window 𝑊
+𝑟, 𝑠
+[
+an infinite sequence of window instances
+. Sliding
+window aggregation means computing an aggregate function 𝛼 over
+each window instance of a sliding window𝑊
+=
+, ...
+𝛼
+
+𝑤0)
+(
+We assume that the sliding window respects the FIFO semantic,
+where values that are first inserted into the window will be first
+evicted from it. In this case, SWAG is computed by aggregating
+streaming values according to their arrival order.
+
+𝑤0, 𝑤1, 𝑤2, ...
+(
+
+𝑤2)
+(
+
+𝑤1)
+(
+
+, i.e., 𝛼
+
+𝑟, 𝑠
+[
+
+𝑟, 𝑠
+[
+
+𝑊
+(
+
+, 𝛼
+
+, 𝛼
+
+])
+
+)
+
+)
+
+(
+
+]
+
+.
+
+Two stream-processing models are widely used by SPSs. One is
+the micro-batch processing model, where a micro batch containing
+a finite subset of values is processed at a time, e.g., Apache Spark
+[4]. The other is the continuous processing model, where streaming
+values are processed one by one, e.g., Apache Flink [3]. We con-
+sider the continuous processing model in this paper. In this case, the
+computation of SWAGs is triggered immediately at the boundary
+of window instances.
+
+2.2 Stream Slicing
+To share partial aggregations, a stream is sliced to generate disjoint
+subsets of streaming values, called slices. SWAGs can be computed
+by merging partial aggregations of slices. The state-of-the-art slic-
+ing technique is Cutty [7], in which a partial aggregate is incremen-
+tally computed for each slice. Given a sliding window 𝑊
+, the
+size of each slice determined by Cutty is 𝑠 which equals to the slide
+size. For example, for the sliding window 𝑊
+, each slice has
+3 streaming values, and an instance of 𝑊
+will cover 3 slices
+and 1 streaming value. We consider Cutty as the underlying slicing
+technique in this paper.
+
+[
+10, 3
+]
+
+10, 3
+]
+
+𝑟, 𝑠
+[
+
+[
+
+]
+
+2.3 Aggregation Functions
+Modern frameworks provide a uniform interface to capture general
+aggregations. In the streaming context, aggregation functions can
+be decomposed into three functions: lift, combine, and lower [13, 28],
+called hereafter the LCL framework. We use the geometric mean,
+i.e., 𝑔𝑚
+- lift maps a streaming value to a tuple of one or several values,
+
+𝑛, as an example to illustrate them:
+/
+
+𝑛
+𝑖=1 𝑥𝑖
+
+𝑋
+
+=
+
+)
+
+)
+
+(
+
+(
+
+1
+
+e.g., 𝑔𝑚.𝑙𝑖 𝑓 𝑡
+
+𝑣, 1
+
+;
+
+𝑔𝑚.𝑐𝑜𝑚𝑏𝑖𝑛𝑒
+
+)
+- combine continuously merges two outputs of
+𝑛2))
+𝑣2, 𝑛2))
+(
+𝑛.
+/
+
+=
+- lower maps a tuple to a final aggregation result, e.g.,
+
+lift, e.g.,
+
+𝑔𝑚.𝑙𝑜𝑤𝑒𝑟
+
+𝑛1 +
+(
+
+𝑣1 ×
+
+𝑣2)
+
+𝑣, 𝑛
+
+((
+
+;
+
+,
+
+,
+
+=
+
+Î
+𝑣
+)
+(
+(
+𝑣1, 𝑛1)
+= 𝑣 1
+
+((
+
+(
+
+)
+
+The combine function is also known as merging function and its out-
+puts are called partial aggregations. We use
+to denote a combine
+function through this paper.
+
+⊕
+
+⊖
+
+⊕
+
+⊖
+
+. Then
+𝑦
+
+An aggregation is invertible if its combine function is invertible.
+Let 𝑥, 𝑦 be any values from the domain of a combine function
+, such that
+is invertible if there exists an operation
+⊕
+⊕
+𝑥
+𝑦 = 𝑥, e.g., the combine function of geometric mean is
+invertible as its inverse function is a pair of division and subtraction.
+Aggregations can also be classified in distributive, algebraic and
+holistic [10]. Distributive aggregations, e.g., sum and max, have an
+identical constant size for both partial and final aggregation. Alge-
+braic aggregations have a bounded size for partial aggregation, e.g.,
+average and geometric mean. The other aggregations are holistic,
+which have an unbounded size for partial aggregations, e.g., median
+and percentile. In this paper, we consider non-invertible aggrega-
+tions that are distributive or algebraic. Note that, such consideration
+is consistent with state-of-the-art works [25–27].
+
+3 STATE OF THE ART
+This section reviews state-of-the-art algorithms devoted to merging
+slice aggregations, and discusses slicing techniques and paralleliza-
+tion in SPSs. A more broad vision on SWAG can be found in [13]
+while existing surveys review various facets of SPSs [8, 12, 14].
+
+3.1 Incremental Merging of Slice Aggregations
+To merge slice aggregations for non-invertible aggregations, effi-
+cient algorithms are needed. The performance of such algorithms
+can impact the overall aggregation time, because latency caused by
+computing SWAG has the nature of propagation towards compu-
+tations over the following ones. To our best knowledge, TwoStack
+[27], DABA [27], FlatFIT [25], SlickDeque (Non-Inv) [26] and
+SlideSide (Non-Inv) [29] are the most efficient state-of-the-art al-
+gorithms for computing non-invertible aggregations over FIFO
+windows. Consider each instance of a sliding window that requires
+merging 𝑛 slice (partial) aggregations. In Table 1, we present the al-
+gorithmic complexities of the state-of-the-art algorithms computed
+originally in [26, 29], and also our algorithm PBA (see Section 4.4
+for explanation). TwoStack pushes pairs of a partial aggregation
+and a streaming value into a back stack and pops such pairs from
+a front stack. Computing an aggregation over a sliding window
+instance only needs to peek and merge partial aggregations from
+the front and back stack. However, when the front stack is empty,
+TwoStack flips all items in the back stack onto the front stack re-
+quiring 𝑂
+time. DABA [27] leverages TwoStack to gradually
+perform the flipping operation of TwoStack which amortizes its
+time to 𝑂
+worst-case time.
+FlatFIT [25] only recalculates window aggregation one time per
+𝑛
+1 slides. Intermediate aggregation results are maintained in an
+appropriate index structure and reused to avoid redundant compu-
+tations. Hence, on average, each of 𝑛
+1 slides can be computed
+by 3 merging steps. SlickDeque (Non-Inv) uses a deque to store
+streaming values, and not every streaming value will be added
+into the deque. For example, when computing max over sliding
+windows, SlickDeque continuously replaces the end of a deque 𝑣 ′
+using a new value 𝑣 if 𝑣 > 𝑣 ′. Adding a value 𝑣 will depend on
+the rank of 𝑣 w.r.t the number of values in the deque which could
+be 𝑛. The worst time complexity of SlickDeque is 𝑂
+while its
+amortized time is less than 2 because a new value will never be
+compared more than twice. SlideSide (Non-Inv) uses two stacks to
+
+. As a consequence, DABA is in 𝑂
+
+𝑛
+(
+
+1
+)
+
+1
+)
+
++
+
++
+
+𝑛
+
+(
+
+)
+
+(
+
+)
+
+(
+
+Table 1: Algorithmic Complexities (Non-Invertible SWAG).
+
+Algorithm Time (amortized) Time (worst)
+3
+TwoStack
+5
+DABA
+3
+FlatFIT
+< 2
+SlickDeque
+3
+SlideSide
+< 3
+PBA
+
+𝑛
+8
+𝑛
+𝑛
+𝑛
+3
+
+Space
+2𝑛
+2𝑛
+2𝑛
+2𝑛
+2𝑛
+
+3𝑛
+
+13
+
++
+2
+
+𝑛
+(
+
+)
+
+store partial aggregations, like TwoStack, but shares values between
+them. While, an operation similar to the flipping in TwoStack is
+still required, resulting in 𝑂
+
+worst-case time.
+
+As shown in Table 1, which contains complexity analysis of PBA
+described in Section 4.4, PBA is the best for time and space com-
+plexity, except the comparison with SlickDeque in amortized time.
+However, unlike SlickDeque, PBA runs in constant time, which is
+also experimentally demonstrated in Section 5.1.1. Such a feature
+of PBA guarantees its performance in the worst case. Note that
+amortized and worst-case time determine throughput and latency,
+respectively.
+
+In addition to its low time and space complexities, one of the main
+advantages of PBA compared to the state-of-the-art algorithms, e.g.,
+TwoStack [27], DABA [27], FlatFIT [25], SlickDeque (Non-Inv) [26],
+and SlideSide (Non-Inv) [29], is that the latter algorithms cannot
+use additional threads to get performance gains, i.e., computing
+intermediate results in parallel. For instance, in TwoStack, the two
+stacks are interdependent. In SlickDeque, the deque needs to be
+traversed in the worst case. However, the 𝑙𝑐𝑠 and 𝑐𝑠𝑎 buffers used
+for computing SWAGs in PBA are completely independent of each
+other, allowing their incremental computation to be done in parallel.
+
+3.2 Combining Slicing and Merging
+Various slicing techniques have been proposed in the literature,
+among which we could mention Panes [20], Pairs [18], Cutty [7],
+and Scotty [31]. The main goal is to determine sizes of intervals
+over the stream called slices which are then used to split each
+window into several slices in order to allow sharing the aggregations
+computed over slices. Slicing techniques can improve throughput by
+amortizing the total time of merging evenly over each stream value
+in each slice. However, having only a slicing technique cannot
+reduce latency caused by merging slice aggregations, which is
+especially important for a continuous stream-processing model.
+
+A merging technique on top of a slicing one can deal with the
+latency issues, and additionally improves the throughput. First of
+all, latency can be reduced, as demonstrated in Cutty and Scotty
+through combining their slicing techniques with the FlatFAT [28]
+merging algorithm. Eager slicing of Scotty (using FlatFAT for merg-
+ing) shows up to two orders of magnitudes reduction of latency,
+compared to lazy slicing (with Recal as the merging algorithm). In
+addition, an advanced merging algorithm can also improve through-
+put. Specifically, [27] shows that TwoStack outperforms Recal, ex-
+cept in the case of very small window sizes, and TwoStack is always
+faster, up to 6
+, than FlatFAT. In this paper, we adopt the Cutty
+slicing technique and design a constant-time merging algorithm to
+
+×
+
+reduce latency and improve throughput. It is worth noting that our
+merging approach remains independent from slicing techniques.
+
+3.3 Parallelization in SPSs
+Parallelization in SPSs is an active research area. A large piece of
+work in this field focuses on inter-operator parallelism with a clear
+dominance of key-based splitting techniques [24] in shared noth-
+ing cluster architecture. Regarding intra-operator parallelism, [22]
+presents parallel patterns to handle generic stateful operators (e.g.,
+sorting, join, grouping, . . . ). PBA fits into the category of exploiting
+intra-operator parallelism to incrementally compute SWAGs.
+
+Novel SPSs are designed to exploit multi-core processors to pro-
+cess streams in parallel [17, 34]. In this line of work, SABER [17]
+processes fixed-size batches in parallel using a hybrid architecture
+of CPUs and GPGPUs (i.e., modern GPUs), and merges local results
+of batches to produce the final result. The parallelism of SABER
+is suitable for the micro-batch model, giving the opportunity to
+process each micro batch by separate tasks (one task for each batch
+[17]). PBA is designed for the continuous processing model. In ad-
+dition, PBA merges at most 3 sub-aggregations to produce the final
+aggregation for arbitrary cases, i.e., requiring only constant time
+for merging, which is achieved by using the optimal chunk size
+computed based on the range and slide parameters in a continuous
+aggregate query.
+
+Modern distributed SPSs [2–4, 19, 30, 32] compute SWAGs over
+a stream of key-value pairs in parallel. For example, in Apache
+Flink [3, 6], one can transform a DataStream into a KeyedStream
+with disjoint partitions, where a key will be assigned to a specific
+partition. SWAGs over different partitions can be computed in
+parallel using multiple cores of nodes in a cluster. The parallel
+computation in PBA is orthogonal to such distributed SPSs, since
+PBA computes SWAGs over values with the same key in parallel,
+which makes PBA suitable to extend partition-oriented parallelism
+in distributed SPSs.
+
+4 PARALLEL BOUNDARY AGGREGATOR
+In PBA, a stream is considered as a sequence of chunks having an
+identical number of slices. Non-invertible aggregations over win-
+dow instances are computed by merging two buffers of cumulative
+aggregations over slice aggregations in chunks. To efficiently com-
+pute SWAG, buffers are computed in parallel using two threads. As
+SPSs are usually running on modern CPUs [33], in PBA we assume
+that the system is equipped with at least two cores allowing to run
+two tasks in parallel.
+
+4.1 Main Ideas
+Let us consider a query with the non-invertible aggregation 𝑚𝑎𝑥
+over a range of 10 values and a slide of 2 values, i.e., 𝑊
+. Slices
+of 2 values can be created, and thus each window instance needs to
+merge 5 slice aggregations. In general, the final aggregation needs
+to merge
+
+slice aggregations for each instance of 𝑊
+1
+
+time solution for 𝑊
+
+, which is achieved by
+maintaining two buffers: 𝑐𝑠𝑎 (cumulative slice aggregations) and 𝑙𝑐𝑠
+(left cumulative slice aggregations). Generally, a 𝑐𝑠𝑎 buffer is com-
+puted through accumulating slice aggregations from left to right
+inside a chunk (an array of slices), and a 𝑙𝑐𝑠 buffer from right to
+
+𝑠
+⌋
+/
+PBA is an 𝑂
+
+𝑟, 𝑠
+[
+
+𝑟, 𝑠
+[
+
+10, 2
+
+𝑟
+⌊
+
+]
+
+]
+
+(
+
+)
+
+[
+
+]
+
+.
+
+Figure 2: Example of computing the count-based 𝑊
+10, 2
+]
+with the aggregation max over a stream using PBA with a
+chunk size of 5 slices.
+
+[
+
+[
+
+]
+]
+
+10, 2
+
+,
+]
+.
+]
+
+to 𝑠𝑎𝑎1 [
+4
+to 𝑠𝑎𝑎0 [
+0
+
+left. Then SWAG can be computed by merging 2 elements respec-
+tively from 𝑙𝑐𝑠 and 𝑐𝑠𝑎 for this example. The two buffers of PBA
+for computing 𝑚𝑎𝑥 over 𝑊
+are shown in Fig. 2, e.g., 𝑐𝑠𝑎0 and
+]
+𝑙𝑐𝑠0 for chunk 𝑐0. Let us explain in detail how the two buffers are
+computed. Streaming values are partitioned into chunks having
+an identical number of slices, e.g., 𝑐0 and 𝑐1 in Fig. 2 have 5 slices,
+and chunks are separated by boundaries, e.g., 𝑏1 between 𝑐0 and
+𝑐1. Slice aggregations inside a chunk are sequentially stored in a
+𝑠𝑎𝑎 (slice aggregation array), e.g., 𝑠𝑎𝑎0 and 𝑠𝑎𝑎1 in Fig. 2. Then, 𝑐𝑠𝑎
+and 𝑙𝑐𝑠 are computed over 𝑠𝑎𝑎, which are two arrays having the
+same length as a 𝑠𝑎𝑎 array. For example, 𝑐𝑠𝑎1 and 𝑙𝑐𝑠0 are computed
+by memorization of each intermediate result during accumulating
+elements of 𝑠𝑎𝑎1 and 𝑠𝑎𝑎0, illustrated as follows.
+- 𝑐𝑠𝑎1 is obtained by accumulating from 𝑠𝑎𝑎1 [
+0
+- 𝑙𝑐𝑠0 is obtained by accumulating from 𝑠𝑎𝑎0 [
+4
+The last element in a 𝑐𝑠𝑎 array is denoted as a 𝑐𝑎 (chunk aggrega-
+tion), e.g., 𝑐𝑎1 = 𝑐𝑠𝑎1 [
+= 9. Aggregation over a window instance
+is computed using elements in 𝑙𝑐𝑠 and 𝑐𝑠𝑎 arrays, e.g., in Fig. 2,
+. Consequently, 𝑚𝑎𝑥 over each
+𝑚𝑎𝑥
+, 𝑐𝑠𝑎1 [
+𝑙𝑐𝑠0 [
+𝑤3)
+2
+])
+(
+(
+𝑤0, ..., 𝑤4)
+window instance, e.g., each of
+, only requires at most 1
+(
+𝑚𝑎𝑥 operation.
+Challenges in PBA: In order to obtain the constant-time solu-
+tion described above, the two buffers, 𝑐𝑠𝑎 and 𝑙𝑐𝑠, must be efficiently
+computed as streaming values keep arriving. 𝑐𝑠𝑎 can be computed
+by accumulating streaming values and slice aggregations. The main
+difficulty is how to compute 𝑙𝑐𝑠 efficiently, since computing a 𝑙𝑐𝑠
+array requires traversing a 𝑠𝑎𝑎 array inversely, which means having
+to stop computing 𝑐𝑠𝑎, resulting in an eventual high delay. We use
+a parallel strategy to deal with this issue. Our key observation is
+that SWAG never uses 𝑐𝑠𝑎 and 𝑙𝑐𝑠 from the same chunk, so the
+inputs required to compute 𝑐𝑠𝑎 and 𝑙𝑐𝑠 are completely indepen-
+dent. For example, in Fig. 2, computing 𝑚𝑎𝑥
+requires 𝑙𝑐𝑠0 and
+𝑐𝑠𝑎1. 𝑙𝑐𝑠0 is computed with 𝑠𝑎𝑎0 as input, which is complete at the
+boundary 𝑏1. While 𝑐𝑠𝑎1 is computed with 𝑠𝑎𝑎1 as input, which
+is independent of 𝑠𝑎𝑎0. The independence between the inputs of
+
+𝑤0)
+(
+
+= 𝑚𝑎𝑥
+
+3
+
+4
+
+]
+
+]
+
+5601327498999982779956666𝒘𝟎𝒃𝟎𝒃𝟏66333𝒘𝟏𝒘𝟐𝒘𝟑𝒘𝟒𝒘𝟓𝑚𝑎𝑥𝑤2=𝑚𝑎𝑥(𝑙𝑐𝑠02,𝑐𝑠𝑎1[1])𝑚𝑎𝑥𝑤3=𝑚𝑎𝑥(𝑙𝑐𝑠03,𝑐𝑠𝑎1[2])𝒍𝒄𝒔𝟎𝒄𝒔𝒂𝟎𝒄𝟎𝑚𝑎𝑥𝑤0=𝑐𝑎0𝑚𝑎𝑥𝑤1=𝑚𝑎𝑥(𝑙𝑐𝑠01,𝑐𝑠𝑎1[0])54630010231275349548𝒔𝒂𝒂𝟎𝑚𝑎𝑥𝑤4=𝑚𝑎𝑥(𝑙𝑐𝑠04,𝑐𝑠𝑎1[3])𝑚𝑎𝑥𝑤5=𝑐𝑎1𝒍𝒄𝒔𝟏𝒄𝒔𝒂𝟏𝒄𝟏𝒔𝒂𝒂𝟏𝑙𝑐𝑠0 and 𝑐𝑠𝑎1 allows the task of computing 𝑙𝑐𝑠0 to be carried out
+when streaming values reach the boundary 𝑏1. This task runs in
+parallel and simultaneously with the task of computing 𝑐𝑠𝑎1. Thus,
+PBA can keep receiving new streaming values after 𝑏1 and compute
+𝑐𝑠𝑎1. Another issue is whether the task of computing 𝑙𝑐𝑠0 can be
+finished before the end of 𝑤1, i.e., whether PBA needs to wait for the
+𝑤1)
+result of 𝑙𝑐𝑠0 [
+. Such an issue is dealt with
+(
+in Section 4.3, where we identify the optimal chunk size minimize
+the waiting time.
+
+to compute 𝑚𝑎𝑥
+
+1
+]
+
+4.2 PBA Model
+In PBA, a stream is considered as a sequence of non-overlapping
+chunks of slices. Each chunk has an identical number of slices and
+starts at a specific time denoted as boundary.
+
+- 𝑏𝑖 (boundary): the start of the chunks, e.g., 𝑏1 in Fig. 2;
+- 𝑐𝑖 (chunk): a sequence of slices from 𝑏𝑖 to 𝑏𝑖
+1, e.g., 𝑐0 in Fig. 2;
+- 𝑏 (chunk size): the number of slices in a chunk, e.g., 5 in Fig. 2.
+
++
+
+We incrementally compute partial aggregations for every chunk
+to compute SWAGs. PBA applies two kinds of incremental aggre-
+gations: (i) computing 𝑐𝑠𝑎 and (ii) computing 𝑙𝑐𝑠. To compute 𝑐𝑠𝑎,
+PBA adopts a two-level incremental computation inside each chunk:
+(i.1) accumulating streaming values inside each slice to have a slice
+aggregation, and (i.2) accumulating slice aggregations inside each
+chunk to have a chunk aggregation. To compute 𝑙𝑐𝑠, PBA maintains
+intermediate results during accumulating slice aggregations from
+right to left in a slice aggregation array 𝑠𝑎𝑎𝑖 .
+
+⌊
+
+]
+
+⌋
+
+⌊
+
+⌋
+
+⌊
+
++
+
++
+
+10
+
+2
+⌋5
+/
+
+1 or 𝑘
+
+𝑆𝐴0, 𝑆𝐴1, ...
+
+2, depending on 𝑊
+
+Dividing SWAG into Sub-Aggregations: As the window in-
+stances, whose starts coincide with boundaries in every chunk, are
+trivial cases requiring only 𝑐𝑠𝑎 elements e.g., 𝑤0 in Fig. 2, we focus
+on the other cases in the sequel. To illustrate the PBA model, we first
+define 𝑘 =
+, which denotes the number of chunks a window
+
+𝑟
+𝑠
+⌋𝑏
+/
+⌊
+instance can fully cover, e.g., 𝑘 =
+= 1 in Fig. 2. In the PBA
+model, we use boundaries to divide a window instance 𝑤 of 𝑊
+𝑟, 𝑠
+]
+[
+into several sub-parts and merge partial aggregations of sub-parts
+to have a final aggregation of 𝑤. The number of sub-parts can be
+𝑟, 𝑠
+𝑘
+and the used chunk size. We
+[
+denote a partial aggregation of each sub-part as a sub-aggregation,
+and all sub-aggregations of 𝑤 as
+, i.e., 𝑆𝐴0 is the first
+(
+one (see Fig. 3 for an example). Then the first sub-aggregation is
+an element in 𝑙𝑐𝑠, and the last one in 𝑐𝑠𝑎. Each of the others is a
+chunk aggregation, i.e., the last element in a 𝑐𝑠𝑎 buffer. An exam-
+ple of 𝑘 = 1 is shown in Fig. 2, where each window instance is
+divided into 2 sub-parts and SWAGs are computed by merging 2
+sub-aggregations. To illustrate the case of 𝑘 > 1, Fig. 3 presents the
+example of computing a count-based 𝑊
+with a chunk size of
+4, where we have 𝑘 = 4 and each window instance is divided into 5
+𝑙𝑐𝑠0 [
+sub-parts, e.g., 𝑚𝑎𝑥
+(
+Efficient Computation of 𝑙𝑐𝑠: In the final aggregation stage,
+since 𝑙𝑐𝑠 and 𝑐𝑠𝑎 buffers used for merging are computed over com-
+pletely independent 𝑠𝑎𝑎 arrays, we compute 𝑙𝑐𝑠 and 𝑐𝑠𝑎 buffers in
+parallel, i.e., two tasks run simultaneously and each task focus on
+computing a single buffer. Specifically, we maintain two threads
+in PBA. The main thread is used to compute 𝑐𝑠𝑎 and the final ag-
+gregation, and the other for processing the task of computing 𝑙𝑐𝑠
+
+[
+, 𝑐𝑎1, 𝑐𝑎2, 𝑐𝑎3, 𝑐𝑠𝑎4 [
+
+𝑤1)
+(
+
+= 𝑚𝑎𝑥
+
+16, 1
+
+])
+
+1
+
+0
+
+]
+
+]
+
+)
+
+.
+
+#$
+
+'()$
+
+6
+
+6
+
+3
+
+1
+
+1
+
+1
+
+0
+
+#%
+
+'()%
+3
+
+3
+
+2
+
+2
+
+#,
+
+'(),
+7
+
+()*,
+
+5
+
+4
+
+4
+
+()*$
+
+0
+
+($
+0
+
+0
+
+0
+
+1
+
+1
+
+()*%
+
+1
+
+0
+
+2
+
+(%
+2
+
+3
+
+3
+
+5
+
+4
+
+6
+
+6
+
+6
+
+3
+
+3
+
+1
+
+3
+
+2
+
+7
+
+(,
+7
+
+7
+
+5
+
+7
+
+3
+
+7
+
+4
+
+#"
+
+'()"
+6
+
+()*"
+
+5
+
+("
+5
+!"
+
+!$
+
+#+
+
+'()+
+9
+
+8
+
+()*+
+9
+9
+
+(+
+9
+
+5
+
+8
+
+8
+
+9
+
+8
+
+9
+
+4
+
+…
+
+-."
+
+-.$
+
+-.%
+
+-.,
+
+-.+
+
+Figure 3: Example of using a chunk size of 4 to compute max
+1
+a count-based 𝑊
+= 4 and
+⌋4
+/
+⌋
+the window instance 𝑤1 is divided into 5 sub-parts.
+
+, which leads to 𝑘 =
+
+16, 1
+
+16
+
+⌊
+
+]
+
+[
+
+⌊
+
+launched at each boundary. Using a multi-core CPU, new stream-
+ing values can be immediately accumulated to 𝑐𝑠𝑎 without any
+interruption.
+
+4.3 Optimal Chunk Size in PBA
+The chunk size is crucial for PBA. Specifically, a carelessly selected
+chunk size can cause delay to compute final aggregations. For in-
+stance, consider the example in Fig. 2, and let 1 𝑇𝑢 be the time re-
+quired to execute
+, i.e., a merging function or a combine function.
+⊕
+Although the two tasks for computing 𝑙𝑐𝑠0 and 𝑐𝑠𝑎1 are simultane-
+ously started at the boundary 𝑏1, 𝑙𝑐𝑠0 [
+cannot be obtained earlier
+1
+]
+(3 𝑇𝑢 ) requires two more
+because computing 𝑙𝑐𝑠0 [
+than 𝑐𝑠𝑎1 [
+1
+0
+]
+]
+(1 𝑇𝑢 ). Thus, PBA needs to wait for 2 𝑇𝑢
+𝑇𝑢 than computing 𝑐𝑠𝑎1 [
+0
+]
+𝑤1)
+to compute 𝑚𝑎𝑥
+and 𝑐𝑠𝑎1 [
+to use 𝑙𝑐𝑠0 [
+.
+0
+1
+(
+]
+]
+The following two theorems identify the optimal chunk size,
+denoted as 𝑏∗, for count-based windows and time-based window,
+respectively. The corresponding proofs are provided in our technical
+report, which is available online [1].
+
+Theorem 1. Given a count-based sliding window 𝑊
+optimal chunk size 𝑏∗ in PBA can be obtained as follows:
+- if
+
+⩽ 𝑠
+
+;
+
+𝑟, 𝑠
+[
+
+]
+
+, the
+
+𝑟
+⌊
+
+𝑠
++ (
+⌋
+/
+- otherwise 𝑏∗ =
+
+𝑟 mod 𝑠
+𝑠
+𝑟
+/
+(⌊
+
+𝑠
+
+) +
+⌋ +
+
+⌊
+
+1, then 𝑏∗ =
+𝑟 mod 𝑠
+1
+) +
+𝑠
+1
++
+= 1.
+
+𝑠
+/
+1
+
+𝑟
+⌊
++
+
+⌋
+.
+
+⌋
+
+⌋
+
+⌊
+
+With 𝑏∗, we have 𝑘 =
+
+𝑟
+𝑠
+⌋𝑏∗
+⌊
+/
+Theorem 2. Given a time-based sliding window 𝑊
+mal chunk size 𝑏∗ in PBA can be obtained as follows:
+𝐶
+2𝑇𝑢 +
+, then 𝑏∗ =
+𝑠
+- if
+𝑇𝑢
+/
+⌋
+𝑠
+𝑇𝑢 )+
+𝑠
+- otherwise 𝑏∗ =
+/
++
+2𝑇𝑢
+𝑠
++
+where 𝐶 = 0 if 𝑟 mod 𝑠 = 0, otherwise 𝐶 = 𝑠
+𝑠
+𝑟
+𝑏∗, we have 𝑘 =
+⌋𝑏∗
+/
+⌊
+
+𝑠
+𝑟
+;
+⌋
+⌊
+/
+𝐶
+2𝑇𝑢 +
++
+
+𝑟 mod 𝑠
+
+⩽ 𝑠
+
+= 1.
+
+𝑟
+⌊
+
+𝑟
+⌊
+
+⌋ (
+
++
+
+⌊
+
+⌋
+
+(
+
+𝑠
+
+,
+
+⌊
+
+⌋
+
+𝑟, 𝑠
+[
+
+]
+
+, the opti-
+
+1 𝑇𝑢 . With
+
+) +
+
+The optimal chunk size ensures that (i) each 𝑙𝑐𝑠 buffer can be ob-
+tained without waiting, and (ii) 𝑘 = 1 which leads to the minimum
+number of merging operations to compute final aggregations.
+
+4.4 Complexity Analysis
+As previous works [25–27, 29] present complexities by computing a
+with a range of 𝑛 and a slide of 1, i.e., merging
+count-based 𝑊
+
+𝑛, 1
+[
+
+]
+
+𝑛 slice aggregations for each window instance, we also rest on such
+a scenario to discuss complexities of PBA.
+
+⌊
+
+⌋
+
++
+
++
+
+and 𝑘 =
+
+𝑟
+𝑠
+⌋𝑏∗
+⌊
+/
+
+1 = 2 or 𝑘
+
+𝑛, 1
+Given a sliding window 𝑊
+, as PBA is used with the optimal
+]
+[
+𝑛
+2
+chunk size 𝑏∗, we have 𝑏∗ =
+= 1 according
++
+2 ⌋
+⌊
+to Theorem 1. Thus, a window instance will be divided into either
+𝑘
+2 = 3 sub-parts, i.e., spanning 2 or 3 chunks. Based
+on this, we discuss the time and space complexity of PBA below.
+Time Complexity: In the final aggregation stage, merging 2 or
+3 sub-aggregations of sub-parts needs 1 or 2 merging operations.
+Considering that the last streaming value of a window will be
+merged with 𝑐𝑠𝑎, the total number of merging operations by PBA
+is 2 or 3. Therefore, the worst-case time is 3, and the amortized time
+is less than 3.
+
+−
+
+−
+
+2, 𝑐𝑖
+
+Space Complexity: As a window instance can span at most 3
+chunks, w.l.o.g, we denote the three chunks as 𝑐𝑖
+1, 𝑐𝑖 , and
+consider the current streaming value is arriving at a slice of 𝑐𝑖 .
+Thus, 3 𝑠𝑎𝑎 arrays of size 𝑏∗ are needed. Note that the 𝑙𝑐𝑠 arrays
+of the three chunks will be computed over 𝑠𝑎𝑎 arrays and do not
+require extra space. In addition, PBA only needs the 𝑐𝑠𝑎 array of
+the current chunk 𝑐𝑖 , i.e., 𝑐𝑠𝑎𝑖 , and maintains one element in 𝑐𝑠𝑎𝑖 ,
+the current one, rather than the entire 𝑐𝑠𝑎𝑖 array. For windows
+spanning 3 chunks, the chunk aggregation 𝑐𝑎𝑖
+1 of chunk 𝑐𝑖
+1 is
+−
+also needed. Thus, the total space required by PBA is: 3𝑏∗ +
+2 =
+3
+⌊
+
+2
++
+2 ⌋ +
+
+3𝑛
+
+≤
+
+13
+
+2
+
++
+2
+
+−
+
+𝑛
+
+.
+
+5 EXPERIMENTAL EVALUATION
+In this section, we evaluate the performance of PBA against the
+state-of-the-art algorithms for computing non-invertible aggrega-
+tions over sliding windows with FIFO semantics. Moreover, we
+integrate PBA into Apache Flink and present the corresponding
+improvement in local and cluster modes, respectively.
+
+5.1 PBA Compared to Alternatives
+State-of-the-Art Algorithms: In our experimental evaluation we
+compare PBA to the two best state-of-the-art algorithms: SlickD-
+eque [26] and TwoStack [27]. SlickDeque shows the best perfor-
+mance in terms of throughput and latency [26] while TwoStack is
+slightly worse than SlickDeque but behaves better than the others
+[26, 27, 29]. Note that, although DABA [27] has a constant time
+complexity in the worst case, it does not show a better performance
+result compared to SlickDeque in terms of throughput and latency
+[26], or TwoStack in terms of throughput [27]. We also consider
+the naive algorithm algorithm and call it Recal (recalculate). As the
+sliding window moves, it calculates an aggregation from scratch. To
+study the performance of our algorithm in the case of single-core
+machines, we implemented a sequential version of PBA, denoted as
+SBA (sequential boundary aggregator), which uses only one thread
+to compute SWAG. SBA follows the same procedure as PBA, except
+that the task of computing 𝑙𝑐𝑠 in SBA is done in the same thread
+as the one that computes 𝑐𝑠𝑎 buffer (SBA uses only one thread). In
+order to slice a data stream, we set each slice size to be equal to
+the slide size (as described in Section 2.2 for details). Notice that
+this is the underlying slice solution for all algorithms tested in our
+evaluation. We implemented PBA and SBA using Java 8, and the
+state-of-the-art algorithms based on the pseudo-codes in [27] and
+
+[26]. The source codes of PBA, SBA, and the implementation of
+state-of-the-art algorithms are available online [1].
+
+Datasets: We use two datasets, a real-world and a synthetic one,
+for throughput experiment. The real-world dataset is the DEBS12
+Grand Challenge Manufacturing Equipment Dataset [15], which
+is also used by SlickDeque [26]. This dataset contains energy con-
+sumption recorded by sensors of manufacturing equipment with
+the frequency of 100 records per second, and each tuple is associated
+with a timestamp, which we will use in our time-based experiments.
+The original dataset contains 32 million tuples, which we made into
+130 million tuples, i.e., 4 copies. The synthetic dataset contains 200
+million values generated using the uniform distribution. Note that
+in our experiments we observed the same tendency for PBA with
+different datasets, this is why we have not used more than two test
+datasets. For the latency experiments, we used the synthetic dataset
+and tested latency results for 1 million window instances.
+
+In our experiments, as aggregation function we use max, com-
+monly used in related works [25, 26, 28, 29] as the representa-
+tive of non-invertible aggregations. We first evaluate through-
+put for count-based windows with a fixed slide while vary-
+ing the ranges. Then we evaluate the case with a fixed range
+while varying the slides. Similarly, we evaluate the throughput
+for time-based windows in both settings (i.e., with a fixed slide
+and varying ranges, and then with a fixed range and varying
+slides). We test latency for both count-based and time-based
+windows. To further study the latency of different algorithms,
+we also test a more complex aggregation, MomentSketch =
+𝑥𝑙
+𝑚𝑖𝑛, 𝑚𝑎𝑥, 𝑠𝑢𝑚, 𝑐𝑜𝑢𝑛𝑡,
+𝑖 ,
+[9] with
+(
+𝑙 = 10, which can approximate percentiles.
+
+𝑙𝑜𝑔𝑥𝑖
+(
+
+𝑙𝑜𝑔𝑥𝑖, ...
+
+𝑥𝑖, ...
+
+)
+
+)
+
+𝑙
+
+Í
+
+Í
+
+Í
+
+Í
+
+Experiment Setup: We run the throughput and latency experi-
+ments at a server with Ubuntu 16.01.3 LTS, 6 virtual CPUs of Intel(R)
+Xeon(R) 2.40GHz, and 16GB main memory, where the heap size of
+JVM is configured to 14GB.
+
+5.1.1 Throughput Experiments. The workload for evaluating max
+over count-based windows is as follows: 1) range from 23 to 220
+with the slide size set to one; 2) slide from 1 to 10 with a range
+of 217. For the time-based windows the workload is as follows: 1)
+range from 6 to 60 minutes with a slide of 10 milliseconds; 2) slide
+from 10 milliseconds to 100 milliseconds with a range of 1 hour. We
+do not test for larger slide sizes as the overall throughput will be
+amortized by the time of computing slice aggregations, such that the
+differences between merging algorithms cannot be observed (see
+Section 3.2 for detailed discussion). We run the workload 20 times
+and report the median of all evaluation results. We stop reporting
+the throughput of the Recal algorithm when the corresponding
+throughput is too small. Our experimental results are presented in
+Fig. 4, Fig. 5, and Fig 6. We discuss the results in the sequel.
+
+Count-based windows with a fixed slide. Our throughput results
+for this case are shown in Fig. 4. PBA shows the best throughput
+with large window sizes, and SBA (the sequential version of PBA)
+shows a higher throughput than TwoStack and SlickDeque, even
+for small window sizes. More precisely, the throughput of PBA
+increases w.r.t to the increase of window size 𝑟 when 𝑟 < 215, and
+keeps consistent when 𝑟 ⩾ 215. When 𝑟 ⩾ 215, the throughput of
+PBA is 2.5
+higher than that
+SlickDeque. Note that, the throughput of PBA increases w.r.t to the
+
+higher than that of TwoStack and 4
+
+×
+
+×
+
+(a) DEBS’12 dataset [15]
+
+(b) Synthetic dataset
+
+Figure 4: Throughput for count-based windows by varying the window size and with a fixed slide size.
+
+(a) DEBS’12 dataset [16]
+
+(b) Synthetic dataset
+
+(a) Fixed-slide experiment
+
+(b) Fixed-range experiment
+
+Figure 5: Throughput for count-based windows by varying
+the slide size and with a fixed range.
+
+Figure 6: Throughput for time-based windows.
+
+window size 𝑟 when 𝑟 < 215, because a smaller window size will
+lead to a smaller optimal chunk size in PBA. Thus, the parallel task
+in PBA, i.e., computing 𝑙𝑐𝑠, will consequently require less time but
+will be launched more frequently, compared to a case with a larger
+window size. In such a case, the constant overhead for launching
+a parallel task will be relatively more obvious. For example, when
+𝑟 = 25, the optimal chunk size of PBA is 17. Then, the corresponding
+parallel computation for each chunk in PBA requires applying only
+15 times of the 𝑚𝑎𝑥 operation over 2 elements, and this cost is
+much less than the cost of launching a parallel task. But, if 𝑟 = 220,
+the optimal chunk size is 5242884, which requires 5242882 times of
+𝑚𝑎𝑥 over 2 elements. In the latter case, launching a parallel task
+can bring significant benefits.
+
+Count-based windows with various slide sizes. Our throughput
+results for this case are shown in Fig. 5. We observe that, with
+a larger slide size, combining slicing with merging can improve
+throughput. PBA shows better throughput with a small slide shown
+in Fig. 5, because 𝑟𝑎𝑛𝑔𝑒
+𝑠𝑙𝑖𝑑𝑒 is still large in such cases, which means there
+are still a large number of slice aggregation that need to be merged.
+Then, as the slide size is getting larger, the throughput of different
+algorithms are getting closer. There are mainly two reasons that
+explain such a behavior. The first reason comes from the fact that
+the ratio 𝑟𝑎𝑛𝑔𝑒
+𝑠𝑙𝑖𝑑𝑒 is smaller in these cases, which leads to less slice
+aggregations to be merged for each window instance. Thus, the
+required computations are not enough to exploit the full capacity
+of PBA. The second reason is that the overall difference between
+various algorithms will be amortized by the cost of computing
+partial aggregations over each slice (this is due to the large number
+of
+
+operations performed in each slice).
+
+⊕
+
+Time-based windows with various range and slide sizes. Our
+throughput results of this case are shown in Fig. 6. PBA shows
+the overall best throughput with large window sizes, and SBA
+(the sequential version of PBA) shows a higher throughput than
+TwoStack and SlickDeque. The corresponding reasons are identical
+to the case of count-based windows. Note that, in Fig. 6 (a), PBA
+outperforms the others because 𝑟𝑎𝑛𝑔𝑒
+𝑠𝑙𝑖𝑑𝑒 is large even for the case of
+𝑟𝑎𝑛𝑔𝑒 = 6 minutes.
+
+5.1.2 Latency Experiments. The workload consists in: (i) comput-
+ing the aggregation Max over count-based windows with a slide
+of 1 and ranges of 213 and 214 respectively, and (ii) computing the
+aggregation MS (MomentSketch) over time-based windows with
+a slide of 1 second (containing around 100 streaming values) and
+ranges of 1 and 2 hours respectively. In this experiment, we compare
+TwoStack, SlickDeque, SBA and PBA. We capture the computation
+time in nanoseconds, corresponding to the time required by an
+algorithm to compute the aggregation over each window when the
+ends of windows are reached. We run the experiments for 1 million
+windows, and report the latency for the last 970 thousand ones.
+
+Our latency results are presented in Fig. 7. In Table 2 and Table
+3, we present 7 statistical summaries for the latency experiments,
+i.e., Min (minimum), Max (maximum), Avg (average), Std (standard
+deviation), LQ (lower quartile, i.e., 25% percentile), Med (median),
+HQ (higher quartile, i.e., 75% percentile). On the whole, we observe
+that both SlickDeque and PBA do not have latency spikes, and PBA
+performs better than SlickDeque. We discuss detailed results of all
+tested algorithms in the sequel.
+
+As it can be observed, PBA has the overall best latency results
+in terms of all statistical summaries, especially for the Max and Std
+metrics shown in Table 2 and 3, which corresponds to the worst case
+
+���������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������Table 2: latency summaries of Max over count-based windows.
+
+Table 3: latency summaries of MS over time-based windows.
+
+Figure 7: Latency experiments.
+
+Algo. Range Min Max
+74543
+TS
+SD
+667
+15160
+SBA
+PBA
+559
+150024
+TS
+SD
+647
+31031
+SBA
+PBA
+537
+
+213
+213
+213
+213
+214
+214
+214
+214
+
+57
+57
+43
+40
+63
+61
+43
+42
+
+Avg
+69.21
+81.77
+50.39
+53.93
+77.55
+83.07
+50.06
+46.06
+
+Std
+754.3
+22.12
+233.64
+10.41
+1077.86
+21.86
+331.25
+5.24
+
+LQ, Med, HQ
+60, 60, 61
+64, 79, 88
+45, 46, 47
+45, 48, 65
+67, 68, 70
+65, 80, 90
+45, 46, 47
+44, 45, 47
+
+Algo. Range Min Max
+365582
+TS
+13638
+SD
+103716
+SBA
+PBA
+12837
+934212
+TS
+13175
+SD
+226099
+SBA
+PBA
+12971
+
+203
+267
+131
+129
+207
+266
+132
+135
+
+1 h
+1 h
+1 h
+1 h
+2 h
+2 h
+2 h
+2 h
+
+Avg
+337.65
+385.28
+194.85
+164.24
+381.1
+392.72
+201.77
+171.75
+
+Std
+5348.91
+101.5
+1566.49
+73.35
+9999.85
+84.86
+2471.56
+64.59
+
+LQ, Med, HQ
+223, 230, 258
+336, 370, 415
+160, 163, 166
+141, 145, 168
+226, 235, 290
+342, 380, 427
+162, 164, 168
+145, 150, 191
+
+time complexity of PBA shown in Table 1. Moreover, PBA shows
+better latency results with a larger window size, shown in Fig. 7, and
+Table 2 and 3 (the reason has been discussed in Section 5.1.1). SBA
+shows similar results as PBA except for Max and Std in Table 2 and
+3. SBA computes a 𝑙𝑐𝑠 buffer at each boundary, which postpones
+the computation of a 𝑐𝑠𝑎 buffer until the computation of 𝑙𝑐𝑠 has
+been completed. Therefore, SBA has a high latency periodically,
+e.g., in Fig. 2, at boundary 𝑏1, SBA needs to firstly compute 𝑙𝑐𝑠0, and
+then 𝑐𝑠𝑎1, and this incurs high latency for 𝑤1. Such a high latency
+of SBA can be observed in Fig. 7. Note that, PBA does not have
+high latency due to computing 𝑙𝑐𝑠 and 𝑐𝑠𝑎 in parallel.
+
+SlickDeque has almost the same latency as TwoStack for Avg,
+but much better than TwoStack for Max and Std. As shown in Fig.
+7, TwoStack has latency spikes periodically, and thus TwoStack
+does not perform well in terms of Max and Std. Such latency spikes
+become larger when the window size increases. TwoStack requires
+moving all elements of one stack to another one periodically, and
+the corresponding cost is linearly increasing w.r.t to the window
+size. This is why the periodical red spike of TwoStack for the case of
+16384 is higher than the corresponding one for the case of 8192, and
+similar for time-based window with a range of 2 hours compared
+to a range of 1 hour.
+
+We also observe that, as aggregation getting more complex, the
+latency is also getting higher, which can be observed in Table 2 and
+Table 3. As an aggregation defined in the LCL framework can have
+operation, the difference in the latency
+an arbitrarily complex
+caused by using a different merging algorithm can be more obvious.
+
+⊕
+
+5.2 Apache Flink Integration
+We integrate PBA into Apache Flink [3, 6], denoted as FPBA. PBA
+is integrated into Flink through KeyedProcessFunction, i.e., a low-
+level operator in Flink. To support parallel tasks of PBA, a thread
+pool for each task slot in Flink is launched, which will be used to
+compute the 𝑙𝑐𝑠 buffers for all key-value pairs associated with the
+
+(a) Local mode experiment
+
+(a) Cluster mode experiment
+
+Figure 8: Throughput on top of Apache Flink.
+
+corresponding task slot. Our goal in this subsection is to show that
+PBA can be easily integrated into modern distributed and parallel
+SPSs, and to evaluate FPBA in both local and cluster modes. In this
+experiment, we consider 210 as the representative of large windows.
+We compute 𝑚𝑎𝑥 over count-based sliding windows with a slide
+of 1 and a window size of 210, and capture the throughput of Flink
+and FPBA by using a different degree of parallelism in local mode,
+and a different number of nodes in cluster mode.
+
+Datasets: We use the DEBS14 Grand Challenge Smart Home
+Dataset [16], which contains recordings from smart plugs in private
+households. Each tuple of this dataset includes a power consump-
+tion and a plugin ID. The first 10 million tuples contain 14 plugin
+IDs with a slight data skew, which we made into different sizes with
+the identical distribution in our experiments, i.e., 60 million tuples
+with 84 plugin IDs for local execution, and 240 million tuples with
+336 plugin IDs for cluster execution.
+
+Experiment Setup: We run the cluster experiment at a Flink
+cluster having 1 master node and 6 worker nodes running Ubuntu
+server 16.01.3 LTS. The master node has 6 virtual CPU cores of
+Intel XEON 3GHz, and 16GB main memory, and the job manager
+of Flink is configured with 6GB of memory. Every worker node has
+4 virtual CPU cores of Intel XEON 3GHz, and 8GB main memory,
+
+���������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������and the task manager of Flink is configured with 6GB of memory.
+We run the local experiment only at the master node of the Flink
+cluster. We run both local and cluster experiments 10 times, where
+we consider the first 3 runs as warm-ups, and we repeat the whole
+execution 3 times. We report the median throughput for Flink and
+FPBA. We use Flink 1.10.0 and Java 8 in this experiment.
+
+We present the results in Fig. 8. In Fig. 8 (a), we observe the
+throughput of FPBA or Flink linearly increases up to 3 parallel
+instances (called parallelism in Flink). Each parallel instance of the
+execution pipeline of FPBA, or Flink, contains 2 tasks, i.e., reading
+data and computing SWAG. Therefore, up to 3 parallel instances,
+the task for computing SWAG can run on a dedicated CPU core at a
+machine with 6 cores. For more parallel instances, the throughput
+growth becomes less linear compared to the first phase. In Fig. 8
+(b), we observe the throughput of FPBA and Flink linearly scale up
+w.r.t more nodes used in a cluster.
+
+6 CONCLUSION
+In this paper, we presented PBA, a novel algorithm that calcu-
+lates incremental aggregations in parallel for efficiently computing
+SWAGs, and also its sequential version SBA. We also proposed an
+approach to optimize the chunk size, which guarantees the mini-
+mum latency for PBA. Our experimental results demonstrate that
+SBA has higher throughput than state-of-the-art algorithms irre-
+spective of window sizes, and PBA shows best performance for
+large windows (i.e., improving throughput up to 4
+while reducing
+latency). Thus, a simple strategy for obtaining high performance
+can be using SBA for small windows and PBA for larger ones. In
+addition, FPBA, an integration of PBA into Apache Flink, shows
+significant improvement in both local mode and cluster mode.
+
+×
+
+As future works, we plan to extend PBA to support both multi-
+query processing and out-of-order streams. The idea is to replace
+the array structure of 𝑙𝑐𝑠 buffers with a tree structure, where each
+leaf node stores a slice aggregation and any intermediate node
+stores partial aggregation of all its children (e.g., in the spirit of
+the array-based binary heap implementation of FlatFAT). In such a
+scenario, the major benefit of using PBA model is that any updates
+caused by late values can be processed only over 𝑙𝑐𝑠 buffers in
+parallel, such that the computation for accumulating streaming
+values will not be delayed. One technical challenge underlying the
+development of such an approach lies in optimizing the chunk size
+that ensures the overall minimum latency, while taking into account
+watermarks and multiple combinations of ranges and slides.
+
+7 ACKNOWLEDGMENTS
+This research was financed by the French government IDEX-ISITE
+initiative 16-IDEX-0001 (CAP 20-25).
+
+REFERENCES
+[1] 2021. https://github.com/chaozhang-db/PBA.
+[2] Tyler Akidau, Alex Balikov, Kaya Bekiroğlu, Slava Chernyak, Josh Haberman,
+Reuven Lax, Sam McVeety, Daniel Mills, Paul Nordstrom, and Sam Whittle. 2013.
+MillWheel: Fault-Tolerant Stream Processing at Internet Scale. Proc. VLDB Endow.
+(2013).
+
+[3] Apache Flink. 2019. https://flink.apache.org.
+[4] Apache Spark. 2019. https://spark.apache.org/.
+[5] Arvind Arasu and Jennifer Widom. 2004. Resource Sharing in Continuous Sliding-
+
+Window Aggregates. In VLDB.
+
+[6] Paris Carbone, Asterios Katsifodimos, Stephan Ewen, Volker Markl, Seif Haridi,
+and Kostas Tzoumas. 2015. Apache Flink: Stream and Batch Processing in a
+Single Engine. IEEE Data Eng. Bull. (2015).
+
+[7] Paris Carbone, Jonas Traub, Asterios Katsifodimos, Seif Haridi, and Volker Markl.
+2016. Cutty: Aggregate Sharing for User-Defined Windows. In CIKM ’16.
+[8] Gianpaolo Cugola and Alessandro Margara. 2012. Processing Flows of Infor-
+mation: From Data Stream to Complex Event Processing. ACM Comput. Surv.
+(2012).
+
+[9] Edward Gan, Jialin Ding, Kai Sheng Tai, Vatsal Sharan, and Peter Bailis. 2018.
+Moment-Based Quantile Sketches for Efficient High Cardinality Aggregation
+Queries. Proc. VLDB Endow. (2018).
+
+[10] Jim Gray, Surajit Chaudhuri, Adam Bosworth, Andrew Layman, Don Reichart,
+Murali Venkatrao, Frank Pellow, and Hamid Pirahesh. 1997. Data Cube: A Rela-
+tional Aggregation Operator Generalizing Group-By, Cross-Tab, and Sub-Totals.
+Data Min. Knowl. Discov. (1997).
+
+[11] Vibhuti Gupta and Rattikorn Hewett. 2020. Real-Time Tweet Analytics Using
+
+Hybrid Hashtags on Twitter Big Data Streams. Inf. (2020).
+
+[12] Thomas Heinze, Leonardo Aniello, Leonardo Querzoni, and Zbigniew Jerzak.
+
+2014. Cloud-Based Data Stream Processing. In DEBS.
+
+[13] Martin Hirzel, Scott Schneider, and Kanat Tangwongsan. 2017. Sliding-Window
+
+Aggregation Algorithms: Tutorial. In DEBS.
+
+[14] Martin Hirzel, Robert Soulé, Scott Schneider, Buğra Gedik, and Robert Grimm.
+2014. A Catalog of Stream Processing Optimizations. ACM Comput. Surv. (2014).
+[15] Zbigniew Jerzak, Thomas Heinze, Matthias Fehr, Daniel Gröber, Raik Hartung,
+and Nenad Stojanovic. 2012. The DEBS 2012 Grand Challenge. In DEBS.
+[16] Zbigniew Jerzak and Holger Ziekow. 2014. The DEBS 2014 Grand Challenge. In
+
+DEBS.
+
+[17] Alexandros Koliousis, Matthias Weidlich, Raul Castro Fernandez, Alexander L.
+Wolf, Paolo Costa, and Peter Pietzuch. 2016. SABER: Window-Based Hybrid
+Stream Processing for Heterogeneous Architectures. In SIGMOD.
+
+[18] Sailesh Krishnamurthy, Chung Wu, and Michael Franklin. 2006. On-the-Fly
+
+Sharing for Streamed Aggregation. In SIGMOD.
+
+[19] Sanjeev Kulkarni, Nikunj Bhagat, Maosong Fu, Vikas Kedigehalli, Christopher
+Kellogg, Sailesh Mittal, Jignesh M. Patel, Karthik Ramasamy, and Siddarth Taneja.
+2015. Twitter Heron: Stream Processing at Scale. In SIGMOD.
+
+[20] Jin Li, David Maier, Kristin Tufte, Vassilis Papadimos, and Peter A. Tucker. 2005.
+No Pane, No Gain: Efficient Evaluation of Sliding-Window Aggregates over Data
+Streams. SIGMOD Rec. (2005).
+
+[21] Jin Li, David Maier, Kristin Tufte, Vassilis Papadimos, and Peter A. Tucker. 2005.
+Semantics and Evaluation Techniques for Window Aggregates in Data Streams.
+In SIGMOD.
+
+[22] Gabriele Mencagli and Tiziano De Matteis. 2016. Parallel Patterns for Window-
+Based Stateful Operators on Data Streams: An Algorithmic Skeleton Approach.
+International Journal of Parallel Programming (2016).
+
+[23] Radko Mesiar Michel Grabisch, Jean-Luc Marichal and Endre Pap. 2009. Aggre-
+
+gation Functions. Cambridge University Press.
+
+[24] Henriette Röger and Ruben Mayer. 2019. A Comprehensive Survey on Paral-
+lelization and Elasticity in Stream Processing. ACM Comput. Surv. (2019).
+[25] Anatoli U. Shein, Panos K. Chrysanthis, and Alexandros Labrinidis. 2017. FlatFIT:
+Accelerated Incremental Sliding-Window Aggregation For Real-Time Analytics.
+In SSDBM.
+
+[26] Anatoli U. Shein, Panos K. Chrysanthis, and Alexandros Labrinidis. 2018. SlickD-
+eque: High Throughput and Low Latency Incremental Sliding-Window Aggrega-
+tion. In EDBT.
+
+[27] Kanat Tangwongsan, Martin Hirzel, and Scott Schneider. 2017. Low-Latency
+
+Sliding-Window Aggregation in Worst-Case Constant Time. In DEBS.
+
+[28] Kanat Tangwongsan, Martin Hirzel, Scott Schneider, and Kun-Lung Wu. 2015.
+
+General Incremental Sliding-Window Aggregation. PVLDB (2015).
+
+[29] Georgios Theodorakis, Peter Pietzuch, and Holger Pirk. 2020. SlideSide: A Fast
+Incremental Stream Processing Algorithm for Multiple Queries. In EDBT.
+[30] Ankit Toshniwal, Siddarth Taneja, Amit Shukla, Karthik Ramasamy, Jignesh M.
+Patel, Sanjeev Kulkarni, Jason Jackson, Krishna Gade, Maosong Fu, Jake Donham,
+Nikunj Bhagat, Sailesh Mittal, and Dmitriy Ryaboy. 2014. Storm@twitter. In
+SIGMOD.
+
+[31] Jonas Traub, Philipp M. Grulich, Alejandro Rodriguez Cuellar, Sebastian Breß,
+Asterios Katsifodimos, Tilmann Rabl, and Volker Markl. 2019. Efficient Window
+Aggregation with General Stream Slicing. In EDBT.
+
+[32] Matei Zaharia, Tathagata Das, Haoyuan Li, Timothy Hunter, Scott Shenker, and
+Ion Stoica. 2013. Discretized Streams: Fault-Tolerant Streaming Computation at
+Scale. In SOSP.
+
+[33] Steffen Zeuch, Bonaventura Del Monte, Jeyhun Karimov, Clemens Lutz, Manuel
+Renz, Jonas Traub, Sebastian Breß, Tilmann Rabl, and Volker Markl. 2019. An-
+alyzing Efficient Stream Processing on Modern Hardware. Proc. VLDB Endow.
+(2019).
+
+[34] Shuhao Zhang, Bingsheng He, Daniel Dahlmeier, Amelie Chi Zhou, and Thomas
+Heinze. 2017. Revisiting the Design of Data Stream Processing Systems on
+Multi-Core Processors. In ICDE.
+
+

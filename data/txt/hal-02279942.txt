@@ -1,0 +1,1671 @@
+Abstract Simulation of Reaction Networks via Boolean
+Networks
+Joachim Niehren, Athénaïs Vaginay, Cristian Versari
+
+To cite this version:
+
+Joachim Niehren, Athénaïs Vaginay, Cristian Versari. Abstract Simulation of Reaction Networks
+via Boolean Networks. CMSB 2022 - 20th International Conference on Computational Methods in
+Systems Biology, Sep 2022, Bucarest, Romania. ￿hal-02279942v9￿
+
+HAL Id: hal-02279942
+
+https://hal.science/hal-02279942v9
+
+Submitted on 24 Jun 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Abstract Simulation of Reaction Networks
+via Boolean Networks
+
+Joachim Niehren1,2[0000−0002−2611−8950], Ath´ena¨ıs
+Vaginay3,4[0000−0001−5062−7993], and Cristian Versari1
+
+1 BioComputing Team of CRIStAL Lab, Universit´e de Lille
+2 Inria Lille
+3 Universit´e de Lorraine, CNRS, CRAN, F-54000 Nancy,
+4 Universit´e de Lorraine, CNRS, Inria, LORIA, F-54000 Nancy
+{joachim.niehren,cristian.versari}@univ-lille.fr
+athenais.vaginay@loria.fr
+
+Abstract. We propose to simulate chemical reaction networks with the
+deterministic semantics abstractly, without any precise knowledge on
+the initial concentrations. For this, the concentrations of species are
+abstracted to Booleans stating whether the species is present or absent,
+and the derivatives of the concentrations are abstracted to signs saying
+whether the concentration is increasing, decreasing, or unchanged. We
+use abstract interpretation over the structure of signs for mapping the
+ODEs of a reaction network to a Boolean network with nondeterministic
+updates. The abstract state transition graph of such Boolean networks
+can be computed by ﬁnite domain constraint programming over the
+ﬁnite structure of signs. Constraints on the abstraction of the initial
+concentrations can be added naturally, leading to an abstract simulation
+algorithm that produces only the part of the abstract state transition
+graph that is reachable from the abstraction of the initial state. We
+prove the soundness of our abstract simulation algorithm, and show its
+applicability to reaction networks in the SBML format from the BioModels
+database.
+
+Keywords: Systems Biology · Reaction Networks · SBML · Boolean
+Networks · Abstract Interpretation · Logic · Constraint Programming.
+
+1
+
+Introduction
+
+Reaction networks [12,6,14,10] are the most prominent formalism for modeling
+the continuous dynamics of biological systems. Boolean networks [13,28,21,26]
+are the most prominent formalism for modeling discrete abstractions of the
+continuous dynamics. Hybrid automata [3] oﬀer a framework for mixed continuous
+and discrete modeling. How to discretize the continuous semantics of reaction
+networks or of hybrid automata into Boolean networks is a long standing general
+question [4,7,27,15,16,5].
+
+Reaction networks can be given diﬀerent semantics. The continuous dynam-
+ics of a reaction network is given by its deterministic semantics: a system of
+
+ordinary diﬀerential equations (ODEs), one per species, that is composed from
+the kinetic expressions of the reactions producing or consuming the species.
+The non-deterministic rewrite semantics [19], in contrast, ignores the kinetic
+expressions, while the stochastic semantics uses them diﬀerently, for computing
+the probability of a reaction to happen. Reaction networks also have a Boolean
+semantics which abstracts from the rewrite semantics [11]. In the present paper,
+we abstract the continuous semantics, which is notoriously diﬃcult to compare
+to the rewrite semantics and thus to the Boolean semantics.
+
+Any solution of the ODEs from the deterministic semantics provides a deriv-
+able function of type R+ → R per species, that is called the trajectory. At
+any time point, the value of a trajectory must be positive, since it stands for
+the concentration of the species. In contrast, the value of its derivative may be
+negative, meaning that the concentration of the species is decreasing. The value
+of the trajectory at time point 0 is called the initial concentration of the species.
+It is well-known that for any ﬁxed collection of initial concentrations per species,
+there exists at most one solution of the ODEs. This solution can be approximated
+numerically by using Euler’s deterministic simulation algorithm [9].
+
+A concrete continuous state of a reaction network at a given time point is a
+vector of positive real numbers, one for the concentration of each species. Any
+concrete state can be abstracted to a vector of Booleans, stating for each species
+whether its concentration is zero or not. The possible trajectories of a reaction
+network can thus be abstracted to a state transition graph whose states are bit
+vectors. The graph can be enriched, when not only considering the trajectories
+but also their derivatives. Since these may become negative, the concrete states
+now become vectors of real numbers that can be abstracted to vectors of signs:
+increasing (cid:37) = 1, decreasing (cid:38) = −1, and no-change → = 0. In this way, we
+obtain an enriched abstract state transition graph between sign vectors.
+
+In the present paper, we study an instance of the general discretization
+problem, which is whether one can compute the abstract state transition graph
+from a given reaction network. Clearly, abstract state transition graphs are ﬁnite,
+but may be large, since having Θ(2|S|) many states where |S| is the number
+of species. Computing the abstract state transition graph completely quickly
+becomes impossible, given that the size grows exponentially in the number of
+species. Therefore, we propose to study the problem of abstract simulation, which
+is to compute the part of the abstract state transition graph that is accessible from
+the abstraction of the initial concentrations. This also has the advantage that the
+concrete initial concentrations do not need to be known precisely. Nevertheless,
+the problem remains non-trivial, given that trajectories are inﬁnite objects, and
+that there are inﬁnitely many trajectories depending on the choice of the initial
+concentrations.
+
+Our idea for abstract simulation is based on the abstract interpretation of the
+system of ODEs of the reaction network over the structure of signs S = {(cid:37), →, (cid:38)}.
+This abstraction introduces non-determinism, since (cid:37) +S (cid:38) may be evaluated to
+any sign. It can be proven to provide a sound over-approximation based on John’s
+soundness theorem for the abstract interpretation of logic formulas [1,24,17]. We
+
+2
+
+show that the sign abstraction of the ODEs of a reaction network can be used to
+deﬁne a Boolean network with non-deterministic updates [25]. It will have rules
+stating that a species A is present in the next step, if A was already present at
+the previous step, or if the derivative of A was positive at the previous step. Since
+such rules can be deﬁned by ﬁrst-order (FO) formulas, we propose the notion of
+ﬁrst-order Boolean networks with non-deterministic semantics (FO-BNNs).
+
+We provide a soundness theorem for abstraction of reaction networks to FO-
+BNNs. It will rely on a causal next transition relation rather than on a temporal
+next transition relation inferred from the trajectories, given that concrete simula-
+tion algorithms too are based on causality. This may lead to approximation errors
+for the concrete numerical simulation, so we have to take care of approximation
+errors for abstract simulation too.
+
+Given that FO-BNNs are ﬁrst-order formulas that are to be interpreted over
+the ﬁnite structure of signs, we use ﬁnite domain constraint programming to
+compute the abstract state transition graphs of FO-BNNs. Constraints on the
+abstraction of the initial concentrations can be added naturally, leading to an
+algorithm for abstract simulation based on constraint programming. We have
+implemented this algorithm based on the Minizinc constraint solver [23].
+
+While abstract interpretation enables qualitative reasoning, we can still
+support exact quantitative reasoning about thresholds. We show that whether
+A ≤ (cid:15) for some threshold (cid:15) > 0 can be tested by introducing an artiﬁcial species
+B so that ˙B = A − (cid:15). In this way, the sign of the derivative of B indicates,
+whether the concentration of A is above, below or equal (cid:15). One can then use exact
+reasoning with linear equation systems [1] to improve the quality of our abstract
+simulation algorithm, while taking thresholds into account. For instance, we can
+show for the usual enzymatic reaction network that if the initial concentration
+of the substrate is above of a given threshold (cid:15), then (1) the concentration of
+the product may eventually become bigger than (cid:15), and (2) once this happens,
+it can never become smaller than (cid:15) again. Most interestingly, the precise initial
+concentration of the substrate does not matter for this argument, as long as it
+is above (cid:15). In this way, abstract simulation can sometimes show properties of
+inﬁnitely many concrete simulations.
+
+We apply our abstract simulation algorithm to a reaction network repre-
+sented in the Systems Biology Markup Language (SBML) [18] from the BioMod-
+els database [20]. We consider the model https://www.ebi.ac.uk/biomodels/
+BIOMD0000000448 that we will call B448 for short. This network describes the
+insulin signalling in human adipocytes in normal conditions [8]. It has 27 species
+and 34 reactions, and its graph covers one full page (see Fig. 13). The abstract
+simulation algorithm successfully yields a very small subgraph of the abstract
+state transition graph with more than 227 states.
+Related Work on Exact Computation of State Transition Graphs.
+Mover et al. [22] develop an eﬃcient implicit method for the exact abstraction of
+dynamical systems, whose abstract state space description and ODE dynamics
+are restricted to be systems of polynomial equations. While polynomial equations
+allow the exact description of abstract state spaces that are more general and
+
+3
+
+ﬁne-grained than the ones used for Boolean networks, they do not provide enough
+expressiveness to describe the kinetic expressions frequently used for the modeling
+of chemical reaction networks.
+
+Outline. After a few preliminaries in Section 2, we discuss arithmetic expressions
+with three diﬀerent interpretations in Section 3. We recall the notion of reaction
+networks and their deterministic semantics via ODEs in Section 4. In Section
+5, we recall the ﬁrst-order logic, which permits us to formally capture ODEs
+in Section 6, enables their abstract interpretation in Section 7, and lays the
+foundation of FO-BNNs in Section 8. We present our compiler from reaction
+networks to FO-BNNs and prove its soundness in Section 9. The treatment of
+thresholds is discussed in Section 10. It illustrates exact reasoning at the example
+of the enzymatic reaction network. The application of abstract simulation to
+reaction network B448 of the Biomodels database is shown in Section 11. The
+conclusion and future work are given in Section 12.
+
+2 Preliminaries
+
+The Cartesian product of sets A1, . . . , An is denoted by A1 × . . . × An. The
+domain of a partial function f ⊆ A × B is denoted by dom(f ). The restriction of
+f to a subset A(cid:48) ⊆ dom(f ) is written as f|A(cid:48). We write [a1/b1, . . . , an/bn] for the
+ﬁnite function f with dom(f ) = {a1, . . . , an} and f (ai) = bi for all 1 ≤ i ≤ n.
+For any two sets A, B, the power set BA = A → B = {f | f : A → B} is the set
+of total functions from A to B. A multiset M with elements in A is an element
+M ∈ NA. For any a ∈ A, the multiplicity of a in M is M (a).
+
+Let B = {0, 1} be the set of Booleans, S = {−1, 0, 1} the set of signs, N the set
+of natural numbers including 0, Z the set of integers, R the set of real numbers,
+and R+ the set of positive real numbers including 0. Note that B ⊆ N ⊆ R+ ⊆ R
+and that S ⊆ Z ⊆ R. For signs, we use the symbols (cid:37) = 1 for increase, → = 0
+for no-change and (cid:38) = −1 for decrease.
+
+3 Arithmetic Expressions
+
+We recall the syntax and semantics of arithmetic expressions while pointing out
+three diﬀerent interpretations and usages. Let V be a set of variables and Σ(2)
+arith
+be the set of binary operators {+, ∗, −, /, exp}. The set of arithmetic expressions
+e ∈ Earith(V) is the least set of terms that can be build from variables x ∈ V,
+real numbers ρ ∈ R, and binary operators (cid:12) ∈ Σ(2)
+
+arith:
+
+e1, e2 ∈ Earith(V) ::= ρ | x | e1 (cid:12) e2
+
+Deﬁnition 1. A relational structure with binary operators in Σ(2)
+arith and con-
+stants in R is a tuple S = (dom(S), ((cid:12)S)(cid:12)∈Σ(2)
+, (ρS)ρ∈R) where D = dom(S)
+is a set called the domain, (cid:12)S : D2 × D is the interpretation of (cid:12), and ρS ∈ D
+the interpretation of ρ.
+
+arith
+
+4
+
+α,S = {ρS},
+(cid:75)
+
+ρ
+(cid:74)
+e1 (cid:12) e2
+(cid:74)
+
+α,S = {s | s1 ∈
+(cid:75)
+
+α,S = {α(x)},
+x
+(cid:75)
+(cid:74)
+
+e1
+(cid:74)
+
+α,S, s2 ∈
+(cid:75)
+
+e2
+(cid:74)
+
+α,S, (s1, s2, s) ∈ (cid:12)S}
+(cid:75)
+
+Fig. 1: Interpretation of arithmetic expressions over a relational structure S and
+a variable assignment α : V → dom(S), where e1, e2 ∈ Earith(V), (cid:12) ∈ Σ(2)
+arith,
+ρ ∈ R, and x ∈ V.
+
+For any relational structure S, variable assignment α : V → dom(S) and
+S,α ⊆
+arithmetic expression e ∈ Earith(V), Fig. 1 deﬁnes the interpretation
+dom(S). We consider interpretations over three diﬀerent relational structures R,
+R+ → R, and S, that we freely confuse with their domain.
+
+e
+(cid:74)
+
+(cid:75)
+
+R,α = ∅ for any α : V → R.
+
+First, arithmetic expressions are used as kinetic expressions. They are then
+interpreted in the relational structure of the reals R. The binary operators are
+interpreted as the binary partial functions (cid:12)R for the addition, multiplication,
+subtraction, division, and exponentiation of real numbers respectively. Note
+that /R is not a total function, since division by zero is not deﬁned. Therefore,
+x/0
+(cid:74)
+(cid:75)
+Second, we use arithmetic expressions in ODEs. Then they are interpreted
+in the structure of real-valued functions R+ → R. The binary operators now
+denote the partial functions (cid:12)R+→R for the addition, multiplication, subtraction,
+division, and exponentiation of real-valued functions respectively. Note that any
+constant ρ ∈ R is interpreted as the constant function with ρR+→R(ρ(cid:48)) = ρ for
+all ρ(cid:48) ∈ R+.
+
+Third, we will interpret arithmetic expressions over the structure of signs
+S = {(cid:37), →, (cid:38)}. The binary operators need to be interpreted as ternary relations
+(cid:12)S ⊆ S2 × S. Let hS : R → S be the unique homomorphism between the
+structures of reals and of signs. It satisﬁes for all ρ ∈ R that hS(ρ) = 1 if
+ρ > 0, hS(ρ) = 0 if ρ = 0 and hS(ρ) = −1 if ρ < 0. Then we deﬁne for
+any constant ρ ∈ R that ρS = hS(ρ) and for any operator (cid:12) ∈ Σ(2)
+arith that
+(cid:12)S = {(hS(ρ), hS(ρ(cid:48)), hS(ρ(cid:48)(cid:48))) | (ρ, ρ(cid:48), ρ(cid:48)(cid:48)) ∈ (cid:12)R}. We note that the addition +S
+is not even a partial function, since ((cid:37), (cid:38), σ) ∈ +S for all three signs σ ∈ S.
+S,γ = S for any γ : V → S. The intuition is that an
+For this reason,
+(cid:75)
+arithmetic expression is evaluated non-deterministically to the set of all possible
+signs.
+
+(cid:37) + (cid:38)
+
+(cid:74)
+
+4 Chemical Reaction Networks
+
+Let S be a ﬁnite set. A chemical solution with species in S is a multiset M : S → N.
+The multiset [A/3, B/2] for instance is often written as 3A + 2B.
+
+Deﬁnition 2. A reaction with species in S is an element of NS × Earith(S) × NS .
+A reaction network with species in S is a subset of reactions with species in S.
+
+5
+
+−−−−−−−−→ C
+
+r1 : S + E 1000000∗S∗E
+r−1 : C 0.2∗C−−−−→ S + E
+r2 : C 0.1∗C−−−−→ E + P
+
+S
+
+1
+1000000S E
+
+E
+
+−1
+
+C
+
+P
+
+0.2C
+
+0.1C
+2
+
+˚S ◦= −r1 + r−1
+
+∧ ˚E ◦= −r1 + r−1 + r2
+∧ ˚C ◦= r1 − r−1 − r2
+∧ ˚P ◦= r2
+where
+r1 = 1000000 ∗ S ∗ E
+r−1 = 0.2 ∗ C
+r2 = 0.1 ∗ C
+
+(a) Reactions of Renz .
+
+(b) Graph of Renz .
+
+(c) odes(Renz ).
+
+Fig. 2: The enzymatic reaction network Renz .
+
+For instance, if e = 5.1 ∗ exp(A, 2) ∗ B then r = (3A + B, e, A + 2C) is a
+chemical reaction, that we denote as usual as r : 3A + B e−→ A + 2C. A state α of
+a reaction network R assigns each species of R a concentration, which is a positive
+R,α. The
+real number, so α : S → R+. Let
+above reaction states that the concentration of A changes at any time point with
+state α with speed −2 ∗R
+R,α,
+and the concentration of C with speed 2 ∗R
+R,α. Negative speeds mean that
+the species is consumed, while positive speeds mean that the species is produced.
+
+R,α, the concentration of B with speed −1 ∗R
+
+R,α = 5.1 ∗R expR(
+(cid:75)
+
+R,α, 2) ∗R
+(cid:75)
+
+B
+(cid:74)
+
+e
+(cid:74)
+
+A
+
+e
+
+e
+
+e
+
+(cid:74)
+
+(cid:75)
+
+(cid:74)
+
+(cid:74)
+
+(cid:75)
+
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+
+Let r = (M, e, M (cid:48)) be a chemical reaction with species in S. We denote the
+kinetic expression of r by kinr = e. For any species A ∈ S, the stoichiometry of
+A in r is deﬁned by stoicr(A) = M (cid:48)(A) − M (A). The ODE system of a reaction
+network R is the following equation system:
+
+odes(R) =def
+
+(cid:94)
+
+˙A ◦=
+
+A∈S
+
+(cid:88)
+
+r∈R
+
+stoicr(A) ∗ kinr ∧ A ≥ 0
+
+A formal deﬁnition of the syntax and semantics of ODEs will be given in Section
+6 based on notions from the ﬁrst-order logic in Section 5. For now, we just state
+that all species occurring in an arithmetic expression denote some real valued
+function of type R+ → R, that must be positive in addition. An expression
+˙A denotes the derivative of the denotation of A if its derivative exists, and is
+undeﬁned otherwise. Note that derivatives may become negative. The arithmetic
+operators are interpreted as arithmetic operations in the structure of real-valued
+functions R+ → R.
+
+As an example of a CRN, we show the network of enzymatic reactions in
+Fig. 2. It has species S = {S, E, C, P } and the three reactions in Fig. 2a, all
+with mass action kinetics. Reaction r1 transforms a pair of a substrate S and
+an enzyme E to a complex C, reaction r−1 does the inverse, and reaction r2
+transforms the complex C into the free enzyme E and the product P . The graph
+of the CRN Renz is given Fig. 2b and its ODEs in Fig. 2c.
+
+6
+
+e ◦= e(cid:48)
+(cid:74)
+
+α,S =
+(cid:75)
+
+(cid:26) 1 if
+
+α,S ∩
+e
+(cid:74)
+(cid:75)
+0 else
+
+e(cid:48)
+(cid:74)
+
+α,S (cid:54)= ∅
+(cid:75)
+
+φ ∧ φ(cid:48)
+(cid:74)
+
+α,S =
+(cid:75)
+
+α,S ∧B
+(cid:75)
+
+φ(cid:48)
+(cid:74)
+
+α,S
+(cid:75)
+
+¬φ
+(cid:74)
+
+α,S = ¬B(
+(cid:75)
+
+φ
+(cid:74)
+
+α,S)
+(cid:75)
+
+∃x.φ
+(cid:74)
+
+α,S =
+(cid:75)
+
+φ
+(cid:74)
+
+
+
+1 if exists s ∈ dom(S).
+
+α[x/s],S = 1
+φ
+(cid:74)
+(cid:75)
+0 else
+
+
+
+Fig. 3: Interpretation of formulas φ ∈ FΣ over a relational structure S with
+signature Σ with respect to a variable assignment α : V → dom(S).
+
+5 First-Order Logic
+
+We recall the syntax and semantics of ﬁrst-order logic formulas. Rather than
+opting for maximal generality, we restrict ourselves to signatures able to capture
+ODEs and FO-BNNs.
+
+We consider signatures Σ = Σ(2) ∪ Σ(1) ∪ R with a set of binary operators in
+Σ(2), unary operators in Σ(1), and constants in R. Arithmetic expression have
+the signature Σarith = Σ(2)
+arith = ∅. An expression in
+EΣ(V) then has the following form where x ∈ V, ρ ∈ R, (cid:12) ∈ Σ(2) and o ∈ Σ(1).
+
+arith ∪ R with Σ(1)
+
+arith ∪ Σ(1)
+
+e, e1, e2 ∈ EΣ(V)
+
+::= x | ρ | e1 (cid:12) e2 | o(e)
+
+Clearly, these expressions generalize on arithmetic expressions since Earith(V) =
+EΣarith(V). The notion of relational structures can be lifted from the signature
+of arithmetic expressions to expressions with general signatures in the obvious
+manner, and also the semantics from arithmetic expressions to expressions in
+EΣ(V).
+
+We are particularly interested in the signature ˙Σarith with ˙Σ(2)
+
+arith
+and ˙Σ(1)
+arith = {˙}. The structure of real-valued functions can be extended to give
+an interpretation of the unary operator ˙, so that ˙R+→R(f ) is the derivative of f
+for any derivable real-valued function f : R+ → R, and undeﬁned otherwise.
+
+arith = Σ(2)
+
+The set of ﬁrst-order formulas FΣ(V) is constructed from equations between
+
+expressions in e, e(cid:48) ∈ EΣ(V) and the usual ﬁrst-order connectives:
+
+φ ∈ FΣ(V) ::= e ◦= e(cid:48) | ∃x.φ | φ ∧ φ | ¬φ
+
+where x ∈ V
+
+We sometimes use shortcuts e ≥ 0 for the formula ∃x.e ◦= x ∗ x and e ≤ e(cid:48) for
+e(cid:48) − e ≥ 0. The set of free variables fv (φ) contains all those variables of φ that
+occur outside the scope of any occurrence of the existential quantiﬁer.
+φ
+The semantics of a ﬁrst-order formula φ ∈ FΣ(V) is the truth value
+(cid:74)
+
+α,S ∈ B
+deﬁned in Fig. 3. It depends on some relational structure S with signature Σ
+and variable assignment α : V → dom(S). An equation e ◦= e(cid:48) is true if the
+intersection of the possible values for e and the possible values for e(cid:48) is non-empty,
+α,S (cid:54)= ∅. The set of solutions of a formula φ ∈ FΣ(V) over
+that is, if
+a relational structure S with the same signature Σ is solS(φ)={α|fv (φ) | α : V →
+dom(S),
+
+α,S ∩
+(cid:75)
+(cid:75)
+α,S = 1}.
+
+e(cid:48)
+(cid:74)
+
+(cid:74)
+φ
+
+e
+
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+
+7
+
+Fig. 4: The deterministic numerical sim-
+ulation of odes(Renz ) with initial con-
+centrations S(0) = 1.0 ∗ 10−5, E(0) =
+0.5 ∗ 10−5 and P (0) = C(0) = 0 mol/L.
+
+6 Sign Abstraction of ODE Trajectories
+
+We deﬁne systems of ODEs as formulas of ﬁrst-order logic in order to formalize
+their syntax and semantics in a framework suitable for abstract interpretation.
+We then introduce a temporal and a causal transition relation on abstract states,
+by applying the sign abstraction to the trajectories of the ODEs.
+
+Deﬁnition 3. An ODE system is a ﬁrst-order logic formula φ ∈ F ˙Σarith
+(V) such
+that all subexpressions of φ that are rooted by the dot-operator have the form ˙x
+for some x ∈ V and do not occur below any existential quantiﬁer.
+
+Note in particular that higher-order derivations ˙˙x are not permitted. The
+semantics of an ODE system φ is the set of its solutions over the relational
+structure of real-valued functions, i.e., solR+→R(φ). For each such solution β and
+variable x ∈ fv (φ), we call β(x) : R+ → R a trajectory of x.
+
+For any choice of initial concentrations α : fv (φ) → R+, there exists at most
+one solution β ∈ solR+→R(φ), such that β(x)(0) = α(x) for all x ∈ fv (φ). This
+solution can be computed numerically by the usual integration methods for
+ODEs starting with the initial concentrations. If some operations of the ODEs
+are undeﬁned during the integration, no solution exists. For illustration, we show
+in Fig. 4 the solution of the ODEs of the reaction network Renz with initial
+concentrations S(0) = 1.0 ∗ 10−5, E(0) = 0.5 ∗ 10−5 and P (0) = C(0) = 0 mol/L.
+A (concrete) state with variables V ⊆ V is a function α : V → R, and an
+abstract state a function γ : V → S. We next show how to deﬁne a successor
+relation on the abstract states of ODEs.
+
+Deﬁnition 4 Temporal next transitions. Let γ1, γ2 : S → S be two abstract
+states and φ an ODE system. We call γ2 a (temporally) next state of γ1 with
+respect to φ and write (γ1, γ2) ∈ next φ if there exists a real-valued function
+β ∈ solR+→R(φ) and two time points 0 ≤ t1 < t2 such that, for all species A ∈ S
+and time points t(cid:48)
+
+2 ∈]t1, t2]: γ1(A) = hS(β(A)(t1)) and γ2(A) = hS(β(A)(t(cid:48)
+
+2)).
+
+For instance, for odes(Renz ), the next state of [S/1, E/1, C/0, P/0] is [S/1,
+E/1, C/1, P/1], which has itself as next state. For this example, the next states
+are always unique, but in general this may not be the case.
+
+8
+
+Interestingly, [S/1, E/1, C/0, P/0] does not have [S/1, E/1, C/1, P/0] as next
+state. The reason is that instantaneously when C is produced, reaction r2 starts
+producing P , so that both C and P will appear at the same time point. Never-
+theless, the creation of C causes the creation of P , but this is not observable in
+the temporal order and thus not in the relation next ode(Renz ).
+
+So far, the states do not contain any information about the values of the
+derivatives (since ˙x is not a variable but an expression). In order to change this,
+let˚: V → V be a bijection such that ˚V is disjoint from V for any V ⊆ V. For
+any ODE system φ we deﬁne a formula ˚φ ∈ FΣarith
+without dot operator, by
+replacing any subexpression of the form ˙x in φ by ˚x:
+˚φ =def φ[ ˙x/˚x | x ∈ fv (φ)]
+
+Note that no dot operators remain in ˚φ, since all subexpressions of φ that are
+rooted by the dot operator must be of the form ˙x by the deﬁnition of ODEs. For
+any assignment β : V → (R+ → R) and time point t ≥ 0 we deﬁne an assignment
+βt : {x, ˚x | x ∈ V } → R such that: βt(x) = β(x)(t) and βt(˚x) = ˙R+→R(β(x))(t).
+Lemma 5. If β ∈ solR+→R(φ) then βt ∈ solR(˚φ).
+
+When interested in derivatives, we consider the successor relation of the
+formula next ˚φ. For instance, with respect to next
+˚odes(Renz ), the abstract state
+γ1 = [S/1, E/1, C/0, P/0, ˚S/(cid:38), ˚E/(cid:38), ˚C/(cid:37), ˚P /→] has the successor γ2 = [S/1,
+E/1, C/1, P/1, ˚S/(cid:38), ˚E/(cid:38), ˚C/(cid:37), ˚P /(cid:37)]. Furthermore, causality can be observed
+in the signs of the derivatives: we have γ1( ˚C) = (cid:37) since γ1(E) = γ1(S) = 1.
+In contrast, we have γ1(˚P ) = → since γ1(C) = 0. As a consequence, for any
+solution β ∈ solR+→R(odes(Renz )), the value of limt→0 β(C)(t)/t (cid:54)= 0 so the
+change of C(t) at t = 0 can be observed in the limit, while limt→0 β(P )(t)/t = 0,
+so the change of P (t) at t = 0 cannot be observed in the limit. Nevertheless
+γ2(C) = γ2(P ) = 1, since the successor time point of 0 is not in the limit.
+
+Deﬁnition 6 Causal next transitions. Let φ be an ODE system, V = fv (φ),
+and γ1, γ2 : (V ∪ ˚V ) → S abstract states. We call γ2 a causally-next dotted state
+of γ1 and write (γ1, γ2) ∈ ˚cnextφ if γ2 ∈ solS(˚φ) and there exists an abstract state
+γ(cid:48)
+2 such that (γ1, γ(cid:48)
+2(˚x) = 0 and
+γ2(x) = γ(cid:48)
+2(x) otherwise. We say that γ2|V is a causally-next state of γ1|V and
+write (γ1|V , γ2|V ) ∈ cnextφ if (γ1, γ2) ∈ ˚cnextφ.
+
+2) ∈ next ˚φ and for all x ∈ V : γ2(x) = γ1(x) if γ(cid:48)
+
+For odes(Renz ), the causally next state of [S/1, E/1, C/0, P/0] is [S/1, E/1,
+C/1, P/0], of which the causally next state is [S/1, E/1, C/1, P/1]. As here
+we often have next odes(R) ⊆ (cnextodes(R))∗. We believe that this holds more
+generally for any reaction network R for which the numerical simulation by
+Euler’s algorithm is sound when using exact arithmetics. Euler’s algorithm
+performs simulation steps, which may introduce approximation errors. These
+errors may lead to arbitrarily false traces in some case, but may also be ignored
+in many others. For Renz , this is the error of setting the value of P at the next
+step to 0 if the value of P was 0 at the previous step and ˙P = 0 (since C was
+absent). In reality, P should be set to a small non-zero value at the next step.
+
+9
+
+7 Abstract Interpretation of ODEs
+
+We recall John’s soundness theorem [17] for the abstract interpretation of ﬁrst-
+order logic formulas, and apply it for interpreting ODEs abstractly over signs.
+
+Theorem 7 John’s Soundness Theorem [1,24,17]. For any homomorphism
+h : S → ∆ between relational structures with signature Σ and any negation-free
+formula φ ∈ FΣ(V):
+
+h ◦ solS(φ) ⊆ sol∆(φ).
+
+Proof We only give a sketch of the proof. Let α : V → dom(S). For any
+h◦α,∆ by induction on
+expression e ∈ EΣ(V) we can show that h(
+(cid:74)
+(cid:75)
+the structure of e. It then follows for any positive formula φ ∈ FΣ(V) that
+h◦α,∆. This is equivalent to that: {h ◦ α | α ∈ solS(φ)} ⊆ sol∆(φ)
+φ
+(cid:74)
+and thus h ◦ solS(φ) ⊆ sol∆(φ).
+
+α,S) =
+
+α,S ≤
+
+φ
+(cid:74)
+
+e
+(cid:75)
+
+e
+
+(cid:74)
+
+(cid:75)
+
+(cid:75)
+
+Recall that hS : R → S is a homomorphism between relational structures with
+signature Σarith and that the formula ˚φ has the same signature Σarith for any
+ODE φ. John’s theorem thus shows:
+
+Corollary 8. For any ODE φ: hS ◦ solR(˚φ) ⊆ solS(˚φ).
+
+This corollary states that the set of abstract dotted states of an ODE φ can
+be overapproximated by interpreting ˚φ abstractely in the structure of signs. It
+can be used to reason about the temporal and causal next transition relations of
+ODEs as follows:
+Lemma 9. For any ODE φ, if (γ1, γ2) ∈ next ˚φ ∪ ˚cnextφ, then {γ1, γ2} ⊆ solS(˚φ).
+
+Proof
+
+1. Deﬁnition 4 of the temporal next relation and Lemma 5 show that for any
+pair (γ1, γ2) ∈ next ˚φ that it satisﬁes γ1 = hS ◦ α1 and γ2 = hS ◦ α2 for
+some α1, α2 ∈ solR(˚φ). Corollary 8 of John’s soundness theorem for abstract
+interpretation of logic formulas applied to ODEs shows that hS ◦ solR(˚φ) ⊆
+solS(˚φ) and thus {γ1, γ2} ⊆ solS(˚φ).
+
+2. If (γ1, γ2) ∈ ˚cnextφ then γ2 ∈ solS(˚φ) by Deﬁnition 6. Furthermore, there
+2) ∈ next ˚φ. The ﬁrst property shows that γ1 ∈ solS(˚φ)
+
+2 such that (γ1, γ(cid:48)
+
+exists γ(cid:48)
+too.
+
+8 Boolean Networks with Non-deterministic Updates
+
+Any (abstract) state in BV is a function β : V → B that we call a bit vector. For
+instance, the state [S/1, E/1, C/0, P/1] can be identiﬁed with the bit vector 1101
+when ordering the species as in above. In the pictures of state transition graphs,
+the states are drawn as bit vectors in oval nodes and the state transitions as
+arrows linking these nodes. The legends in blue boxes specify the species order.
+Following [25], a Boolean network B with non-deterministic updates (BNN)
+and species in S is generally some kind of deﬁnition of an abstract state transition
+
+10
+
+Fig. 5: The state transition graph of the FO-BNN bnn(Renz ) in Fig. 6.
+
+graph B ⊆ BS × BS , as for instance in Fig. 5. Deﬁnitions of state transition
+graphs can be expressed in various manners. Here we propose a novel alternative
+that is based on formulas of ﬁrst-order logic interpreted over the structure of
+signs S. We assume that S ⊆ V and ﬁx two bijections −→ : V → V and ˚: V → V
+−→
+˚S are disjoint subsets of V. Furthermore, we assume
+such that S, ˚S,
+that
+
+−→
+S , and
+−→
+˚x = ˚−→x for any x ∈ V.
+
+From the perspective of the sign abstraction of a reaction network, variable
+A ∈ S states whether species A is present at the current time point and ˚A is the
+−→
+A stands for the presence of A at the next time point, and
+sign of
+
+˙A. Variable
+
+similarly,
+
+−→
+˚A for the sign of the derivative at the next time point
+
+˙−→
+A .
+
+Deﬁnition 10. A ﬁrst-order Boolean network with nondeterministic updates
+with free
+(FO-BNN) and variables in V ⊆ V is a ﬁrst-order formula φ ∈ FΣarith
+variables fv (φ) = V ∪
+
+−→
+V .
+
+Notice that the dot operator cannot occur in FO-BNNs φ. Any variable
+−→
+V → S yields an abstract state transition:
+
+assignment γ : V ∪
+
+trans(γ) = (γ|V , γ|
+
+−→
+
+V ◦−→) ∈ SV × SV
+
+For illustration, an FO-BNN for Renz with the (free) variables in S = {S, E, C, P }
+is shown in Fig. 6. It can be inferred from the ODEs of the reaction network
+as follows: First the formula ode(Renz ) is added. Second, a copy of ode(Renz )
+−→
+is added, in which all variables x are replaced by −→x . All variables in ˚S ∪
+˚S
+are existentially quantiﬁed. Furthermore, for any species A ∈ S, we relate the
+−→
+A ◦= A + ˚A. This states
+variable
+−→
+A can be true only if either A or ˚A are true, i.e. if the concentration of
+that
+A is either present or increasing at the previous time point. Finally, we impose
+−→
+A ≤
+A for stating that species A can never become absent when it was present
+before. Because the kinetics in Renz are all mass-action laws, this invariant holds
+here for all the species. It may be false for other reaction networks though.
+
+−→
+A to the variables A and ˚A by the equation
+
+Furthermore, the solution sets of FO formulas over ﬁnite relational structures
+such as S can be computed by ﬁnite set constraint programming. We have
+implemented a constraint solver for the relational structure S in Minizinc [23]
+which allows us to compute the transition graph of FO-BNNs, i.e., the relation
+
+11
+
+∃˚S∃˚E∃˚C∃˚P∃
+
+−→
+˚S ∃
+
+−→
+˚E ∃
+˚S ◦= −r1 + r−1
+
+−→
+˚C ∃
+
+−→
+˚P .
+
+∧ ˚E ◦= −r1 + r−1 + r2
+∧ ˚C ◦= r1 − r−1 − r2
+∧ ˚P ◦= r2
+where
+r1 = 1000000 ∗ S ∗ E
+−→
+−→r1 = 1000000 ∗
+S ∗
+
+−→
+E
+
+−→
+˚S ◦= −−→r1 + −→r−1
+−→
+˚E ◦= −−→r1 + −→r−1 + −→r2
+−→
+˚C ◦= −→r1 − −→r−1 − −→r2
+−→
+˚P ◦= −→r2
+
+∧
+
+∧
+
+∧
+
+∧
+
+−→
+S ◦= S + ˚S
+−→
+E ◦= E + ˚E
+−→
+C ◦= C + ˚C
+−→
+P ◦= P + ˚P
+
+∧
+
+∧
+
+∧
+
+∧
+
+∧ S ≤
+
+∧ E ≤
+
+∧ C ≤
+
+∧ P ≤
+
+−→
+S
+−→
+E
+−→
+C
+−→
+P
+
+r−1 = 0.2 ∗ C
+−→
+−→r−1 = 0.2 ∗
+C
+
+r2 = 0.1 ∗ C
+−→
+−→r2 = 0.1 ∗
+C
+
+Fig. 6: An FO-BNN for the reaction network Renz .
+
+of bit vectors that it deﬁnes. The transition graph in Fig. 5 is deﬁned by the
+FO-BNN for the reaction network Renz in Fig. 6.
+
+The set of species of reaction network Renz has cardinality 4. Therefore, the
+state transition graph of the FO-BNN of Renz has 24 = 16 states. So clearly, the
+number of states of a FO-BNN may be exponential in the number of its species.
+Therefore, it is generally advantageous if one does not have to compute the whole
+state transition graph, but only the needed part of it. Suppose that we know
+the sign abstraction of the initial state, we can then generate the subgraph of
+the state transition graph that is accessible from the abstraction of the initial
+state, without computing any further states or transitions. In this way, much
+smaller subgraphs can be observed. For Renz , for instance, for any Boolean state
+the accessible subgraph contains at most 3 Boolean states.
+
+fun abs sim(φ, V, γ0)
+
+Treach := ∅ Sreach := {γ0} Snew := Sreach
+while Snew (cid:54)= ∅ :
+
+Tnew := trans ◦ solS(φ∧
+
+(cid:86)
+
+(cid:87)
+
+γ∈Snew
+
+V x ◦= γ(x))
+Snew := {γ2 | (γ1, γ2) ∈ Tnew} \ Sreach
+Treach := Treach ∪ Tnew
+Sreach := Sreach ∪ Snew
+
+x∈V ∪
+
+−→
+
+Fig. 7: Abstract simula-
+tion of the FO-BNN in
+Fig. 6 for the reaction
+network Renz .
+
+return Treach
+
+Fig. 8: The abstract simulation of an FO-BNN φ
+with variables in V from an abstract initial state γ0
+computes the set of abstract state transitions Treach.
+
+The abstract simulation of the FO-BNN of Renz , starting with the abstract
+state [S/1, E/1, C/0, P/0] is given in Fig. 7. This example illustrates, that abstract
+simulation is related to the causality rather than the temporality of species
+
+12
+
+production. For instance, the temporal transition (1100, 1111) ∈ nextode(Renz ) is
+represented by two causal edges 1100 → 1110 → 1111 in the abstract simulation.
+These show the causality of the production: C is produced if S and E are present,
+and P is produced if C is present. But when C is produced then instantaneously
+P is produced too, so even though C causally precedes P (as shown by the
+abstract simulation), they are both produced at the same time (in any solution of
+the ODEs). We notice that causality also plays for concrete numerical simulation
+with Euler’s method: P will be produced shortly after C, depending on the step
+size that is admitted. The reachable subgraph can be computed by repeated
+constraint solving. In each step, the values of the variables in S are constrained
+to the Boolean states from which the subgraph is to be explored.
+
+In general, for any FO-BNN φ with species in S and abstract initial state
+−→
+V → S, the abstract simulation represented by the set Sreach of all
+γ0 : V ∪
+reachable states and the corresponding transition relation Treach can be obtained
+by iteratively computing the sets of new transitions Tnew and new reachable
+states Snew starting from the initial state γ0, as in Fig. 8. The algorithm ends
+when no new reachable states are obtained from the available transitions.
+
+9 Abstract Simulation of Reaction Networks
+
+To simulate reaction networks abstractly, we propose to translate them to FO-
+BNNs based on the abstract interpretation of logic formulas over the structure of
+−→
+signs. For any variable assignment α : V → R, we deﬁne −→α :
+V → R such that
+−→
+α(x) = −→α (−→x ) for all x ∈ V . For any reaction network R, let
+R be the reaction
+−→
+S obtained from R by replacing any species A ∈ S by
+network with species in
+−→
+−→
+˚A .
+A . For any A ∈ S, let vars A be the sequence of the four variables A, ˚A,
+Our objective is to approximate the relation cnextode(R) on abstract states
+by a Boolean network. For any A ∈ S, we consider formulas next spec(vars A)
+with the following property. For all γ1, γ2 : S ∪ ˚S → S and all reaction networks
+R with species in S:
+
+−→
+A ,
+
+(γ1, γ2) ∈ ˚cnextodes(R) ⇒ (γ1 ∪ −→γ2)|{vars A} ∈ solS(next spec(vars A))
+
+There are several possibilities to deﬁne next spec(vars A), of which we propose:
+−→
+A ◦= 0 →
+
+−→
+A ◦= 1 → (A ◦= 0 ∧ ˚A ◦= 1) ∨ A ◦= 1)) ∧ (
+
+– next spec1(vars A) =def (
+
+(A ◦= 0 ∧ ˚A ◦= 0) ∨
+
+−→
+˚A ◦= −1))
+
+−→
+A ◦= 0 → ((A ◦= 0 ∧ ˚A ◦=
+
+– next spec2(vars A) =def next spec1(vars A) ∧ (
+
+0) ∨ (A ◦= 1 ∧ ˚A ◦= −1 ∧
+
+−→
+˚A ◦= 1))))
+
+– next spec3(vars A) =def next spec1(vars A) ∧ (
+
+−→
+A ◦= 0 → A ◦= 0)
+
+It is not diﬃcult to see that next spec1(vars A) satisﬁes the above requirement
+since using causally-next relation (but this would not hold for the temporal-
+next relation). If all kinetic expressions are inﬁnitely derivable, then, when a
+concentration becomes 0, the derivative requires an increase immediately after,
+
+13
+
+in order to not become negative. If all reactions follow the mass action law then
+non-zero concentrations can never become zero later on, so next spec3(vars A)
+should satisfy the requirement too.
+
+Let next spec(vars A) be one of the three formulas next speci(vars A) above
+or any other formula satisfying the above property. Which of these choices is
+applicable or best depends on properties of the reaction network.
+
+Deﬁnition 11. For any reaction network R with species S = {A1, . . . , An}, we
+deﬁne the FO-BNN bnn(R) depending on the choice of next spec as follows:
+−→
+˚Ai)
+∃ ˚A1. . . . .∃ ˚An.
+
+i=1 next spec(Ai, ˚Ai,
+
+−→
+˚A1. . . . .∃
+
+˚odes(R) ∧ ∃
+
+−→
+R ) ∧ (cid:86)n
+
+˚
+odes(
+
+−→
+˚An.
+
+−→
+Ai,
+
+Fig. 6 gives the FO-BNN of the reaction network Renz with next spec3.
+Theorem 12 Soundness of bnn(R). cnextodes(R) ⊆ trans ◦ solS(bnn(R)).
+
+Proof Let (γ1, γ2) ∈ cnextodes(R). Then there exists (γ(cid:48)
+
+1 = γ1|S and γ(cid:48)
+
+such that γ(cid:48)
+implies for all A ∈ S that γ(cid:48)
+1, γ(cid:48)
+
+2) ∈ ˚cnextodes(R)
+2 = γ2|S . By assumption on next spec(vars A), this
+A∈S next spec(vars A)). Lemma 9
+−→
+R )). By deﬁnition of
+2|S ) ∈
+
+−→
+2 ∈ solS( ˚odes(R)) so that
+2 ∈ solS(
+γ(cid:48)
+−−→
+2|S ∈ solS(bnn(R)). Hence, (γ1, γ2) = (γ(cid:48)
+γ(cid:48)
+
+−→
+2 ∈ solS((cid:86)n
+γ(cid:48)
+
+shows that γ(cid:48)
+bnn(R), we obtain γ(cid:48)
+1|S ∪
+trans ◦ solS(bnn(R)) as stated by the theorem.
+
+˚
+odes(
+
+1|S , γ(cid:48)
+
+1, γ(cid:48)
+
+1 ∪
+
+Based on the Soundness Theorem 12 we can simulate any reaction network
+R by abstractly simulate the Boolean network bnn(R). The abstract simulation
+of bnn(Renz ) with next spec3 for next spec, for instance, was shown earlier.
+
+10 Thresholds
+
+We use Booleans to distinguish whether the concentration of a species is zero
+or not. It often happens, thought, that we would like to know whether the
+concentration of a species is above or below a given threshold. We now show that
+this can be treated with the above techniques.
+
+Suppose we are given a species S ∈ S and a threshold (cid:15) > 0, say (cid:15) = 0.3, and
+we want to know whether the concentration of S is above, equal, or below (cid:15), so
+whether S − (cid:15) < 0. The idea is to add an artiﬁcial species S(cid:15) to the network, such
+that ˙S(cid:15) = S − (cid:15). This can be done by adding the following two reactions:
+
+Scons
+(cid:15)
+Sprod
+(cid:15)
+
+:
+
+:
+
+S(cid:15)
+
+0.3−−→
+S−→ S(cid:15)
+
+The ODEs of the so extended reaction network contain the expected equation.
+We can thus run the abstract simulation algorithm on the extended reaction
+network. When applied to the reaction network Renz with the same initial
+concentrations than above, this yields the following accessible transition graph:
+
+14
+
+Fig. 9: Abstract simulation for the Renz network with two thresholds.
+
+In this picture, we write S−(cid:15) instead of ˚S(cid:15). The negative sign S−(cid:15) = (cid:38) means
+S < (cid:15), and a positive sign S−(cid:15) = (cid:37) means S > (cid:15), and S−(cid:15) = → means S = (cid:15).
+The proper addition of thresholds, combined with the utilisation of the exact
+Boolean abstraction algorithm [2] for the set of linear equations of the extended
+reaction network, provides a considerably more ﬁne-grained abstract simulation
+of the network. For example, with the addition of a further threshold for P in
+Renz and an upper bound on the sum of the initial concentrations of S, C, P ,
+the abstract simulation allows us to conclude that only one ﬁnal state may
+be reachable during the abstract simulation, where the concentration of S is
+below the given threshold, as shown in Fig. 9. The automatic application of the
+exact Boolean abstraction algorithm to the simulation of Boolean networks with
+thresholds requires however an extension of the algorithm to the inhomogeneous
+case, which is under implementation. For the simulation shown in Fig. 9, a subset
+of the inhomogeneous equations was reduced to the homogeneous case by manual
+rewriting, so that the original algorithm could be applied.
+
+11 Application to Biomodel’s Reaction Networks
+
+Biomodels [20] is an online repository which contains a curated collection of
+over a thousand published models about various biological systems [20]. Most
+of these were previously published as ODE, but are now provided as reaction
+networks in the SBML format [18]. We applied abstract simulation to reaction net-
+work B448 of the Biomodels database at https://www.ebi.ac.uk/biomodels/
+BIOMD0000000448. It models insulin signalling in human adipocytes in normal
+conditions [8]. Once converted to the BioComputing’s XML format, the network
+involves 27 species and 34 reactions. Its graph in Fig. 13 covers one full page,
+and its ODEs are given in Fig. 14. In the initial (concrete) state given in the
+SBML model, all the species except IRins start with a concentration strictly
+
+15
+
+Fig. 10: The numerical simulation of B448
+projected to species IRins.
+
+Fig. 11: Abstract simulation of
+B448
+
+above 0. The full numerical simulation of the 27 species is given in Fig. 12. while
+Fig. 10 focuses on the concentration of IRins over time.
+
+The total number of abstract states is 227. However, by starting from the
+abstraction of the initial concentrations in the SBML model (all species are present
+except IRins), the state transition graph is reduced to 2 edges between 2 states
+(Fig. 11). One of these states being the initial abstract state mentioned above,
+and the other is the 1-only bit vector. The latter is an attractor, as its exiting
+edge is making a self-loop. This is consistent with the concrete simulation of the
+model (Fig. 10) and the steady-state computed numerically, but independent of
+the precise initial concentrations chosen in the SBML model.
+
+Fig. 12: The numeric simulation of B448 with all species.
+
+16
+
+GLUT4m 2286
+v7b
+
+GLUT4m
+
+GLUT4
+
+GLUT4 50.98AS160p
+v7f
+
+AS160p 65.18
+v6b1
+
+AS160
+
+AS160p
+
+AS160 (2.652PKB308p473p+
+
+0.5361PKB473p
+v4h
+
+PKB473p
+
+36.93 (PKB473p)2.137
+(30.54)2.137+(PKB473p)2.137 )
+v6f1
+
+PKB
+
+143.6PKB308p473p
+v4f
+
+42.84PKB473p IRS1p307
+v4e
+
+34.8PKB308p
+v4b
+
+PKB308p473p
+
+5790PKB IRS1p
+v4a
+
+IRS1p307
+
+mTORC1
+mTORC1 (1.842PKB308p473p+0.05506PKB308p)
+v5a
+
+PKB308p
+
+IRS1307
+
+IRS1p307 2.913
+v2f
+
+IRS1307 0.2671
+v2g
+
+IRS1 0.04228
+v2basal
+
+IRS1p307 280.8
+v2d
+
+IRS1
+
+IRS1p 3424
+v2b
+
+IRS1p
+
+IRS1p 5759mTORC1a
+v2c
+
+4.456PKB308p mTORC2a
+v4c
+
+mTORC1a
+
+mTORC1a 24.83
+v5b
+
+S6K 0.1298 (mTORC1a)0.9855
+(5873)0.9855+(mTORC1a)0.9855
+v9f1
+
+S6Kp
+
+S6p
+
+S6 3.329S6Kp
+v9f2
+
+S6K
+
+S6Kp 0.04441
+v9b1
+
+S6p 31
+v9b2
+
+S6
+
+IRS1 3.227IRip
+v2a
+
+X 0.001377IRS1p
+v3a
+
+mTORC2a
+
+X
+
+Xp 0.09876
+v3b
+
+mTORC2 0.08575IRip
+v5c
+
+1.06mTORC2a
+v5d
+
+mTORC2
+
+Xp
+
+IRip
+
+IRip 1840Xp
+v1e
+
+IRp 31.01
+v1d
+
+IRi
+
+IRi 0.5471
+v1r
+
+IRp
+
+0.03683IR
+v1basal
+
+IRp 1944
+v1g
+
+IR
+
+IRins 0.8768
+v1c
+
+IR 0.6331 10
+v1a
+
+IRins
+
+Fig. 13: The graph of reaction network B448
+
+17
+
+˚
+
+˚IR = −rv1a − rv1basal + rv1g + rv1r
+˚IRp = rv1basal + rv1c − rv1d − rv1g
+˚IRins = rv1a − rv1c
+˚IRip = rv1d − rv1e
+˚IRi = rv1e − rv1r
+˚IRS1 = −rv2a + rv2b − rv2basal + rv2g
+˚IRS1p = rv2a − rv2b − rv2c + rv2d
+˚IRS1p307 = rv2c − rv2d − rv2f
+˚IRS1307 = rv2f + rv2basal − rv2g
+˚X = −rv3a + rv3b
+˚Xp = rv3a − rv3b
+˚PKB = −rv4a + rv4b + rv4h
+˚PKB308p = rv4a − rv4b − rv4c
+˚PKB473p = −rv4e + rv4f − rv4h
+PKB308p473p = rv4c + rv4e − rv4f
+˚mTORC1 = −rv5a + rv5b
+˚mTORC1a = rv5a − rv5b
+˚mTORC2 = −rv5c + rv5d
+˚mTORC2a = rv5c − rv5d
+˚AS160 = −rv6f1 + rv6b1
+˚AS160p = rv6f1 − rv6b1
+˚GLUT4m = rv7f − rv7b
+˚GLUT4 = −rv7f + rv7b
+˚S6K = −rv9f1 + rv9b1
+˚S6Kp = rv9f1 − rv9b1
+˚S6 = −rv9f2 + rv9b2
+˚S6p = rv9f2 − rv9b2
+rv1a = IR 0.6331 10
+rv1basal = 0.03683IR
+rv1c = IRins 0.8768
+rv1d = IRp 31.01
+rv1e = IRip 1840Xp
+
+rv1g = IRp 1944
+rv1r = IRi 0.5471
+rv2a = IRS1 3.227IRip
+rv2b = IRS1p 3424
+rv2c = IRS1p 5759mTORC1a
+rv2d = IRS1p307 280.8
+rv2f = IRS1p307 2.913
+rv2basal = IRS1 0.04228
+rv2g = IRS1307 0.2671
+rv3a = X 0.001377IRS1p
+rv3b = Xp 0.09876
+rv5a = mTORC1 (1.842PKB308p473p +
+0.05506PKB308p)
+rv5b = mTORC1a 24.83
+rv5c = mTORC2 0.08575IRip
+rv5d = 1.06mTORC2a
+rv4a = 5790PKB IRS1p
+rv4b = 34.8PKB308p
+rv4c = 4.456PKB308p mTORC2a
+rv4e = 42.84PKB473p IRS1p307
+rv4f = 143.6PKB308p473p
+rv4h = 0.5361PKB473p
+rv6f1 = AS160
+36.93 (PKB473p)2.137
+(30.54)2.137+(PKB473p)2.137 )
+rv6b1 = AS160p 65.18
+rv7f = GLUT4 50.98AS160p
+rv7b = GLUT4m 2286
+rv9f1 = S6K 0.1298 (mTORC1a)0.9855
+(5873)0.9855+(mTORC1a)0.9855
+rv9b1 = S6Kp 0.04441
+rv9f2 = S6 3.329S6Kp
+rv9b2 = S6p 31
+
+(2.652PKB308p473p +
+
+Fig. 14: The ODEs of reaction network B448.
+
+12 Conclusion and Future Work
+
+We presented an algorithm that simulates a reaction network abstractely without
+any exact knowledge on the initial concentrations. The soundness Theorem 12
+relies on the causal next relation of the reaction network, rather than on its
+temporal next relation. The precise relationship between these two relations
+seems to be related to approximation errors of Euler’s numeric simulation.
+
+One open question is whether one can compute the causal next relation exactly,
+similarly to the exact computation of the Boolean abstraction of linear equation
+systems from [2]. Another question is whether more accurate approximations
+may be possible than those presented here.
+
+18
+
+The next step will be to lift our abstract simulation algorithm to reaction
+networks for which the kinetic expressions are only partially known. The most
+frequent case is that some parameters of the kinetic expressions are unknown.
+Alternatively, the form of the kinetic expressions may be known only up to
+similarity [24,1]. Such networks cannot even be simulated concretely without
+estimating the missing kinetic information from data, so abstract simulation may
+provide an interesting alternative for the qualitative analysis of such networks.
+We hope that the present work could be of interest to the research community
+of Boolean networks. We believe that FO-BNNs oﬀer an interesting alternative to
+classical Boolean networks with deterministic updates. So the classical questions
+for Boolean networks should be reconsidered for FO-BNNs.
+
+Acknowledgements. We thank Jun Pang and Lo¨ıc Paulev´e for the helpful
+discussions and references on the relation of reaction and Boolean networks as
+well as our colleagues from BioComputing Emilie Allart, Maxime Folschette and
+C´edric Lhoussaine.
+
+References
+
+1. E. Allart, J. Niehren, and C. Versari. Computing diﬀerence abstractions of metabolic
+networks under kinetic constraints. In L. Bortolussi and G. Sanguinetti, editors,
+Computational Methods in Systems Biology - 17th International Conference, CMSB
+2019, Trieste, Italy, September 18-20, 2019, Proceedings, volume 11773 of Lecture
+Notes in Computer Science, pages 266–285. Springer, 2019.
+
+2. E. Allart, J. Niehren, and C. Versari. Exact Boolean Abstraction of Linear Equation
+
+Systems. Computation, 9(11):32, Oct. 2021.
+
+3. R. Alur, C. Courcoubetis, T. A. Henzinger, and P.-H. Ho. Hybrid automata: An
+algorithmic approach to the speciﬁcation and veriﬁcation of hybrid systems. In
+Hybrid systems, pages 209–229. Springer, 1992.
+
+4. G. Batt, H. de Jong, M. Page, and J. Geiselmann. Symbolic reachability analysis of
+genetic regulatory networks using discrete abstractions. Automatica, 44(4):982–989,
+Apr. 2008.
+
+5. N. Benes, L. Brim, J. Drazanova, S. Pastva, and D. Safranek. Facetal abstraction
+for non-linear dynamical systems based on δ-decidable SMT. In Proceedings of the
+22nd ACM International Conference on Hybrid Systems: Computation and Control,
+pages 99–108, Montreal Quebec Canada, Apr. 2019. ACM.
+
+6. L. Calzone, F. Fages, and S. Soliman. BIOCHAM: an environment for model-
+ing biological systems and formalizing experimental knowledge. Bioinformatics,
+22(14):1805–1807, July 2006.
+
+7. P. J. Collins, L. Habets, J. H. van Schuppen, I. Cern´a, J. Fabrikov´a, and D. Safr´anek.
+Abstraction of Biochemical Reaction Systems on Polytopes. IFAC Proceedings
+Volumes, 44(1):14869–14875, Jan. 2011.
+
+8. G. M. Di Guglielmo, P. G. Drake, P. C. Baass, F. Authier, B. I. Posner, and J. J.
+Bergeron. Insulin receptor internalization and signalling. Molecular and Cellular
+Biochemistry, 182(1-2):59–63, May 1998.
+
+9. L. Euler. Institutionum Calculi Integralis. Number vol. 1 in Institutionum Calculi
+
+Integralis. imp. Acad. imp. Sa`ent., 1768.
+
+10. F. Fages, S. Gay, and S. Soliman. Inferring reaction systems from ordinary diﬀeren-
+
+tial equations. Theor. Comput. Sci., 599:64–78, 2015.
+
+19
+
+11. F. Fages and S. Soliman. Abstract interpretation and types for systems biology.
+
+Theor. Comput. Sci., 403(1):52–70, 2008.
+
+12. M. Feinberg. Chemical reaction network structure and the stability of complex
+isothermal reactors–I. the deﬁciency zero and deﬁciency one theorems. Chemical
+Engineering Science, 42(10):2229 – 2268, 1987.
+
+13. L. Glass and S. A. Kauﬀman. The logical analysis of continuous, non-linear
+biochemical control networks. Journal of Theoretical Biology, 39(1):103–129, 1973.
+14. S. Hoops, S. Sahle, R. Gauges, C. Lee, J. Pahle, N. Simus, M. Singhal, L. Xu,
+P. Mendes, and U. Kummer. Copasi—a complex pathway simulator. Bioinformatics,
+22(24):3067–3074, 2006.
+
+15. S. Jamshidi, H. Siebert, and A. Bockmayr. Comparing Discrete and Piecewise
+Aﬃne Diﬀerential Equation Models of Gene Regulatory Networks (Long Version).
+page 20, 2012.
+
+16. S. Jamshidi, H. Siebert, and A. Bockmayr. Preservation of dynamic properties
+in qualitative modeling frameworks for gene regulatory networks. Biosystems,
+112(2):171–179, May 2013.
+
+17. M. John, M. Nebut, and J. Niehren. Knockout Prediction for Reaction Networks
+with Partial Kinetic Information. In 14th International Conference on Veriﬁcation,
+Model Checking, and Abstract Interpretation, pages 355–374, Rom, Italy, Jan. 2013.
+18. S. M. Keating, et al. and SBML Level 3 Community members. SBML Level 3:
+An extensible format for the exchange and reuse of biological models. Molecular
+Systems Biology, 16(8):e9110, Aug. 2020.
+
+19. G. Madelaine, C. Lhoussaine, and J. Niehren. Attractor Equivalence: An Obser-
+vational Semantics for Reaction Networks. In First International Conference on
+Formal Methods in Macro-Biology, Lecture Notes in Bioinformatics, pages 82–101,
+Noum´ea, New Caledonia, Sept. 2014. Springer-Verlag.
+
+20. R. S. Malik-Sheriﬀ, M. Glont, T. V. N. Nguyen, K. Tiwari, M. G. Roberts, A. Xavier,
+M. T. Vu, J. Men, M. Maire, S. Kananathan, E. L. Fairbanks, J. P. Meyer,
+C. Arankalle, T. M. Varusai, V. Knight-Schrijver, L. Li, C. Due˜nas-Roca, G. Dass,
+S. M. Keating, Y. M. Park, N. Buso, N. Rodriguez, M. Hucka, and H. Hermjakob.
+BioModels—15 years of sharing computational models in life science. Nucleic Acids
+Research, 48(D1):D407–D415, 2020.
+
+21. A. Mizera, J. Pang, H. Qu, and Q. Yuan. Taming asynchrony for attractor detection
+in large boolean networks. IEEE/ACM Transactions on Computational Biology
+and Bioinformatics, 16(1):31–42, 2019.
+
+22. S. Mover, A. Cimatti, A. Griggio, A. Irfan, and S. Tonetta. Implicit Semi-Algebraic
+Abstraction for Polynomial Dynamical Systems. In A. Silva and K. R. M. Leino,
+editors, Computer Aided Veriﬁcation, volume 12759, pages 529–551. Springer Inter-
+national Publishing, Cham, 2021.
+
+23. N. Nethercote, P. J. Stuckey, R. Becket, S. Brand, G. J. Duck, and G. Tack. Minizinc:
+Towards a standard CP modelling language. In C. Bessiere, editor, Principles and
+Practice of Constraint Programming - CP 2007, 13th International Conference, CP
+2007, Providence, RI, USA, September 23-27, 2007, Proceedings, volume 4741 of
+Lecture Notes in Computer Science, pages 529–543. Springer, 2007.
+
+24. J. Niehren, C. Versari, M. John, F. Coutte, and P. Jacques. Predicting Changes
+of Reaction Networks with Partial Kinetic Information. BioSystems, 149:113–124,
+July 2016.
+
+25. L. Paulev´e and S. Sen´e. Non-deterministic updates of Boolean networks.
+
+In
+AUTOMATA 2021 (27th International Workshop on Cellular Automata and Discrete
+Complex Systems), Marseille, France, 2021.
+
+20
+
+26. L. Paulev´e, J. Kol¸c`a, T. Chatain, and S. Haar. Reconciling Qualitative, Abstract,
+and Scalable Modeling of Biological Networks. Nature Communications, 11, 2020.
+27. S. Sankaranarayanan and A. Tiwari. Relational Abstractions for Continuous
+and Hybrid Systems. In G. Gopalakrishnan and S. Qadeer, editors, Computer
+Aided Veriﬁcation, volume 6806, pages 686–702. Springer Berlin Heidelberg, Berlin,
+Heidelberg, 2011.
+
+28. R. Thomas. Boolean formalization of genetic control circuits. Journal of Theoretical
+
+Biology, 42(3):563–585, 1973.
+
+21
+
+

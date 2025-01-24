@@ -1,0 +1,752 @@
+ESTOCADA: Towards Scalable Polystore Systems
+Rana Alotaibi, Bogdan Cautis, A. Deutsch, Moustafa Latrache, Ioana
+
+Manolescu, Y. Yang
+
+To cite this version:
+
+Rana Alotaibi, Bogdan Cautis, A. Deutsch, Moustafa Latrache, Ioana Manolescu, et al.. ESTOCADA:
+Towards Scalable Polystore Systems. Proceedings of the VLDB Endowment (PVLDB), 2020, 13 (12),
+pp.2949-2952. ￿10.14778/3415478.3415516￿. ￿hal-03150404￿
+
+HAL Id: hal-03150404
+
+https://inria.hal.science/hal-03150404
+
+Submitted on 23 Feb 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+ESTOCADA: Towards Scalable Polystore Systems
+
+R. Alotaibi‡
+
+B. Cautis§
+
+A. Deutsch‡
+
+M. Latrache†
+
+I. Manolescu†
+
+Y. Yang ‡
+
+†Inria & Institut Polytechnique de Paris
+
+‡UC San Diego
+
+§Univ. Paris-Saclay
+
+ralotaib, deutsch, yiy032
+
+@eng.ucsd.edu, bogdan.cautis@u-psud.fr,
+
+{
+
+moustafa.latrache, ioana.manolescu
+
+}
+
+@inria.fr
+
+}
+
+{
+
+ABSTRACT
+Big data applications increasingly involve diverse datasets,
+conforming to diﬀerent data models. Such datasets are rou-
+tinely hosted in heterogeneous stores, each capable of han-
+dling one or a few data models, and each eﬃcient for some,
+but not all, kinds of data processing. Systems capable of
+exploiting disparate data in this fashion are usually termed
+polystores. A current limitation of polystores is that appli-
+cations are written taking into account which part of the
+data is stored in which store and how. This fails to take
+advantage of (i) possible redundancy, when the same data
+may be accessible (with diﬀerent performance) from distinct
+data stores; (ii) previous query results (in the style of ma-
+terialized views), which may be available in the stores.
+
+We propose to demonstrate ESTOCADA [4], a novel ap-
+proach that can be used in a polystore setting to transpar-
+ently enable each query to beneﬁt from the best combination
+of stored data and available processing capabilities. The
+system leverages recent advances in the area of view-based
+query rewriting under constraints, which we use to describe
+the various data models and stored data.
+
+PVLDB Reference Format:
+R. Alotaibi, B. Cautis, A. Deutsch, M. Latrache, I. Manolescu,
+Y. Yang. ESTOCADA: Towards Scalable Polystore Systems.
+PVLDB, 13(12): 2949 - 2952, 2020.
+DOI: https://doi.org/10.14778/3415478.3415516
+
+1.
+
+INTRODUCTION
+
+Big Data applications increasingly involve diverse data
+sources, such as ﬂat or nested relations, structured or un-
+structured documents, data graphs, etc. Such datasets are
+routinely hosted in heterogeneous stores. One reason is that
+the fast pace of application development prevents consoli-
+dating all the sources into a single data format and load-
+Instead, the data model of-
+ing them into a single store.
+ten dictates the choice of the store, e.g., JSON documents
+get loaded in a JSON store. Systems capable of exploit-
+ing diverse data in this fashion are termed polystores [8, 3].
+
+licensed under
+
+This work is
+the Creative Commons Attribution-
+NonCommercial-NoDerivatives 4.0 International License. To view a copy
+of this license, visit http://creativecommons.org/licenses/by-nc-nd/4.0/. For
+any use beyond those covered by this license, obtain permission by emailing
+info@vldb.org. Copyright is held by the owner/author(s). Publication rights
+licensed to the VLDB Endowment.
+Proceedings of the VLDB Endowment, Vol. 13, No. 12
+ISSN 2150-8097.
+DOI: https://doi.org/10.14778/3415478.3415516
+
+Query evaluation in a polystore recalls to some extent medi-
+ator systems; in both cases, sub-queries are delegated to the
+underlying stores when possible, while the remaining opera-
+tions are applied in the integration layer. Polystores process
+a query assuming that each of its input datasets is available
+in one store (chosen for its support of a dataset data model).
+We identify two limitations of such architectures. First,
+they do not exploit possible data redundancy: the same
+data could be stored in several stores, some of which may
+support a query operation much more eﬃciently than others.
+Second, they are unable to take advantage of the presence of
+previously computed query results, which may be available
+in one or several stores (in the style of materialized views),
+when the data model of the queried dataset diﬀers from the
+data model of the store hosting the view.
+
+To overcome these limitations, we have described in [4]
+ESTOCADA, a novel approach for allowing an application
+to transparently exploit data stored in a set of heterogeneous
+stores, as a set of (potentially overlapping) data fragments;
+if fragments store results of partial computations applied
+on the data, we show how to speed up queries using them
+as materialized views, which reduces query processing eﬀort
+and seeks to take maximum advantage of the eﬃcient query
+processing features of each store. Our approach does not re-
+quire any change to the application code. The example below
+illustrates these performance-enhancing opportunities.
+
+1.1 Motivating Scenario
+Dataset. The Medical Information Mart for Intensive Care
+III (MIMIC-III) [11] dataset comprises health data for more
+than 40000 Intensive Care Unit (ICU) patients. The to-
+tal size is 46.6 GB, and it consists of: (i) all charted data
+for all patients and their hospital admission information,
+ICU stays, laboratory measurements, caregivers’ notes, and
+prescriptions; (ii) the role of caregivers and (iii) diagnosis
+related groups’ codes descriptions.
+Our motivation query Q1 is: “for the patients transferred
+into the ICU due to “coronary artery” issues, with abnor-
+mal blood test results, ﬁnd the date/time of their admis-
+sion, previous location (e.g., clinic referral), and the drugs of
+type “additive” prescribed to them”. Evaluating this query
+through AsterixDB [1] (v0.9.4) JSON store took more than
+25 minutes; this is because the system does not support full-
+text search by an index if the text occurs within a JSON
+array. In SparkSQL (v2.3.2), the query took more than an
+hour, due to its lack of indexes for selective data access. In
+the MongoDB JSON store (v4.0.2), it took more than 17
+minutes due to its limited join capability. Finally, in Post-
+greSQL with JSON support (v9.6), Q1 took 12.6 minutes.
+
+Now, consider we had at our disposal three materialized
+views, which pre-compute partial results for Q1. Consider
+a SOLR (well-known full-text search engine) sever stores a
+view V1 storing the IDs of patients and the caregivers’ notes
+on the patients’ stay. Full-text search on V1 for ”coronary
+artery” allows to eﬃciently retrieve the respective patients’
+IDs. Further, consider that a PostgreSQL server stores a
+view V2 with the patients information and their hospital ad-
+mission information such as patients’ location prior to ad-
+mission. Finally, assume available a view V3, which stores
+all drugs prescribed for each patient with “abnormal blood”
+test results, as a JSON document stored in PostgreSQL.
+
+×
+
+×
+
+×
+
+and speedup of 3
+
+Using these views, we can evaluate Q1 by a full-text search
+on V1 followed by a BindJoin with the result of ﬁltering
+V3, and projecting prescribed drugs as well as patients’ ad-
+mission time and prior location from V2. Using a Poly-
+store Java-based execution engine [4] (implementing select,
+project, join, etc.) to access the views and join them, this
+takes about speedup of 5
+w.r.t. plain JSON query evalu-
+ation in SparkSQL and AsterixDB. This is also a speedup
+of 2
+w.r.t. plain JSON query evalu-
+ation in MongoDB and Postgres, respectively.
+Lessons learned. We can draw the following conclusions
+from the above example. (1.) Unsurprisingly, materialized
+views improve query performance since they pre-compute
+partial query results. (2.) More interestingly: material-
+ized views can strongly improve performance even when
+stored across several data stores, although such a hybrid
+scenario incurs a certain performance penalty due to the
+marshaling of data from one data model/store to another.
+In fact, exploiting the diﬀerent strengths of each system
+(e.g., SOLR’s text search capability) is the second reason
+(together with materialized view usage) for the performance
+gains. (3.) Diﬀerent system combinations work best for dif-
+ferent queries. Thus it must be easy to add/remove a view
+in one system, without disrupting other queries that may
+be currently well-served. As known from classical data in-
+tegration research [9], such ﬂexibility is attained through
+the “local-as-view” (LAV) approach, where the content of
+each data source is described as a view. Thus, adding or
+removing a data source from the system is easily imple-
+mented by adding or removing the respective view deﬁni-
+tion. (4.) Application data sets may come in a variety of
+formats. However, while the storage model may change as
+data migrates, applications should not be disrupted. A sim-
+ple way of achieving this is to guarantee them access to the
+data in its native format, regardless of where it is stored.
+
+Observe that the combination of 2., 3. and 4. above goes
+well beyond the state of the art. Most LAV systems assume
+both the application data and the views are organized ac-
+cording to the same data model. Thus, their view-based
+query rewriting algorithms are designed speciﬁcally within
+the bounds of that model, e.g., relational or XML. Diﬀerent
+from these, some LAV systems [12, 7] allow diﬀerent data
+models for the stored views, but consider only the case when
+the application data model is XML. As a consequence, the
+query answering approach adopted in these systems is tai-
+lored toward the XML data model and query language. In
+contrast, we aim at a uniﬁed approach, supporting any data
+model both at the application and at the view level.
+
+The core technical question to be answered in order to
+attain such performance beneﬁts without disrupting appli-
+cations is view-based query rewriting across an arbitrary set
+
+Table 1: Supported Languages and Data Stores
+Query language/API
+SQL
+SparkSQL
+AQL/SQL++
+SQLw/JSON
+MongoDB QL
+DML
+TensorFlow APIs
+Redis API
+Solr API
+Cypher
+XQuery, XPath
+
+Systems
+Major vendors
+Apache Spark
+Apache AsterixDB
+PostgreSQL
+MongoDB
+Apache SystemML
+TensorFlow
+Redis
+Apache Solr
+Neo4j
+Saxon
+
+Data model
+Relational
+JSON
+JSON
+JSON
+JSON
+Array/Tensor
+Array/Tensor
+Key-value
+Full-text and JSON
+Graph
+XML
+
+of data models. Our research paper [4] covers the technical
+details of ESTOCADA; here, we overview the system and
+detail our demonstration walkthrough. Table 1 depicts the
+supported systems, languages and data models; those added
+since the publication of [4] appear in bold.
+Relation with prior work. A much earlier version of
+ESTOCADA was presented in [6]. This demonstration im-
+proves over it through several contributions at the level
+of: (i) modeling: support for the array (matrix), JSON,
+and graph models; (ii) algorithms: optimizing the state-
+of-the-art algorithm for relational view-based rewriting un-
+der constraints to make it scale to a polytsore setting [4],
+and (iii) systems, by deploying ESTOCADA on top of three
+existing polystore systems: BigDAWG [8], SparkSQL, and
+Tatooine [5] and showing the performance beneﬁts that our
+approach can bring to these systems.
+
+2. REWRITING PROBLEM STATEMENT
+=
+We assume a set of data model-query language pairs
+P
+i, an Li
+(M1, L1), (M2, L2), . . .
+{
+query evaluated against an Mi instance returns an answer
+which is also an Mi instance. The same model may be as-
+sociated to several query languages (e.g., AsterixDB and
+MongoDB have diﬀerent query languages for JSON).
+
+such that for each 1
+
+≤
+
+}
+
+We consider expressive languages for realistic settings, sup-
+porting conjunctive querying, nesting, aggregation, and ob-
+ject creation. Without loss of generality, we consider that a
+language is paired with one data model only.
+
+We consider a polystore setting comprising a set of stores
+is characterized
+=
+∈ S
+, indicating that S stores instances
+
+S1, S2, . . .
+S
+by a pair (MS, LS)
+of the model MS and evaluates queries expressed in LS.
+
+such that each store S
+
+∈ P
+
+{
+
+}
+
+}
+
+{
+
+D
+
+=
+
+∈ D
+
+D1, D2, . . .
+
+We consider a set of datasets
+
+, such that
+each dataset D
+is an instance of a data model MD.
+A dataset D is stored as a set of (potentially overlapping)
+D, V 2
+V 1
+materialized views
+≤
+{
+. Thus, V j
+j, V j
+D is stored within the storage system Sj
+D
+D ∈ S
+is an instance of a data model supported by Sj
+1.
+D
+We consider a Polystore integration language
+
+[8, 3],
+capable of expressing computations to be made within each
+store and across all of them, as follows:
+
+, such that for every 1
+
+D . . .
+
+IL
+
+}
+
+•
+
+•
+
+For every store S and query qS
+IL
+fying that qS should be evaluated over S;
+
+LS,
+
+∈
+
+allows speci-
+
+Further,
+the results of one or several such source queries.
+
+allows expressing powerful processing over
+
+IL
+
+1For uniformity, we describe any collection of stored data
+as a view, e.g., a table stored in an RDBMS is an (identity)
+view over itself.
+
+View V1 :
+FOR AJ :{ SELECT
+
+M . patientID AS patientID ,
+A . admissionID AS admissionID ,
+A . report AS report
+
+FROM
+
+MIMIC M , M . admissions A }
+
+RETURN SJ :{ " patientID " : patientID ,
+
+" admissionID " : admissionID ,
+" report " : report }
+
+Figure 1: QBT XM Deﬁnition of View V1
+
+We assume available a cost model which, given an
+ex-
+pression e, returns an estimation of the cost of evaluating e
+(including the cost of its source sub-queries). We outline the
+concrete model we use in [4]. We term a rewriting of a query
+q an integration query expressed in
+, which is equivalent
+to q. We consider the following rewriting problem:
+
+IL
+
+IL
+
+(Cross-model rewriting problem).
+Definition 1
+n,
+over several datasets Di, 1
+Given a query q
+and a set of views
+materialized over these datasets, ﬁnd
+the equivalent rewriting r of q using the views, which mini-
+mizes the cost estimation c(r).
+
+∈ IL
+V
+
+≤
+
+≤
+
+i
+
+3. ESTOCADA OVERVIEW
+
+IL
+
+We describe below our approach for solving the above
+rewriting problem and the technical challenges this raises.
+We refer readers to our paper [4] for details.
+Polystore Integration Language. We designed QBT XM
+∈
+, a concrete polystore integration language. QBT XM fol-
+IL
+lows a block-based design, with blocks organized into a tree,
+each block can be expressed in a diﬀerent query language
+and carry over data of a diﬀerent data model. Other existing
+polystore integration languages, e.g., [8] resemble QBT XM .
+Cross-Model Views. Each materialized view V is deﬁned
+by an
+query; it may draw data from one or several data
+sources, of the same or diﬀerent data models. Each view
+returns (holds) data following one data model, and is stored
+in a data store supporting that model. Figure 1 depicts
+the QBT XM deﬁnition of view V1 from Section 1. FOR
+clauses bind variables, while RETURN clauses specify how
+to construct new data based on the variable bindings. Blocks
+are delimited by braces annotated by the language whose
+syntax they conform to. The annotations AJ and SJ stand
+for AsterixDB’s SQL++ and SOLR search, respectively.
+Encoding into a Single Pivot Model. We reduce the
+cross-model rewriting problem to a single model setting,
+namely relational constraint-based query reformulation, as
+follows (see Figure 2; yellow background identiﬁes the areas
+where we bring contributions in this work.). First, we encode
+relationally the structure of original datasets, the views’ def-
+initions and the application query. Note that the relations
+used in the encoding are virtual, i.e., no data is migrated into
+them; they are also hidden, i.e., invisible to both the appli-
+cation designers and to users. They only serve to support
+query rewriting via relational techniques.
+
+The virtual relations are accompanied by integrity con-
+straints that reﬂect the features of the underlying data mod-
+els (for each model M , a set enc(M ) of constraints). The
+pivot model is fully detailed in [4].
+From Cross Model to Single Model Rewriting. Our
+reduction translates the declaration of each view V to addi-
+tional constraints enc(V ) that reﬂect the correspondence be-
+tween V ’s input data and its output. Constraints have been
+
+Figure 2: Outline of our approach
+
+used to encode single-model views and correspondences be-
+tween source and target schemas in data exchange [9]. The
+novelty here is the rich collection of supported models, and
+the cross-model character of the views. An incoming query
+Q
+is encoded as a relational query enc(Q) over the
+relational encoding of the datasets it refers to.
+
+∈ IL
+
+The reformulation problem is thus reduced to a purely
+relational setting: given a relational query enc(Q), a set of
+relational integrity constraints encoding the views, enc(V1)
+∪
+. . .
+enc(Vn), and the set of relational constraints obtained
+∪
+by encoding the data models M1, . . . , Ml, ﬁnd the queries
+RW i
+r expressed over the relational views, for some integer k
+and 1
+r is equivalent to enc(Q)
+≤
+under these constraints.
+
+k, such that each RW i
+
+≤
+
+i
+
+{
+
+}
+
+IL
+
+r into a
+
+V1, . . . , Vn
+
+if R = dec(RW i
+
+query R = dec(RW i
+
+The challenge in coming up with the reduction consists
+in designing a faithful encoding, i.e., one in which rewritings
+found by (i) encoding relationally, (ii) solving the resulting
+relational reformulation problem, and (iii) decoding each
+reformulation RW i
+r ) over the
+views in the polystore, correspond to rewritings found by
+solving the original problem. That is, R is a rewriting of Q
+r ), where RW i
+given the views
+r
+is a relational reformulation of enc(Q) under the constraints
+obtained from encoding V1, . . . , Vn, M1, . . . , Ml.
+Relational Rewriting Using Constraints. To solve the
+single-model rewriting problem, we need to reformulate rela-
+tional queries under constraints. The algorithm of choice is
+the recent Provenance-Aware Chase& Backchase algorithm
+(PACB, in short) [10]. PACB was designed to work with
+relatively few views and constraints. However, in the poly-
+store setting, each of the many datasources is described by
+a view, and each view is encoded by many constraints. ES-
+TOCADA also includes a set of optimization techniques we
+brought to PACB to make it scale in a polystore setting [4].
+Decoding Relational Rewritings. On each relational
+reformulation RW i
+r issued by our modiﬁed PACB rewriting
+engine, a decoding step dec(RW i
+r ) is performed to translate
+RWr into
+syntax by (i) grouping the reformulation atoms
+by the view they pertain to, (ii) translating each such atom
+group into a query which can be evaluated over a single view,
+and (iii) if several views reside in the same store, identify
+the largest subquery that can be delegated to that store.
+Choice of an Eﬃcient Rewriting. Decoding may lead to
+several rewritings R1, . . . , Rk; for each Ri, several evaluation
+plans may lead to diﬀerent performance. For each rewriting
+Ri, we denote by c(Ri) the lowest cost of an evaluation plan
+that we can ﬁnd for Ri; we choose the rewriting Rbest that
+minimizes this cost. We architectured ESTOCADA to take
+the cost model as a conﬁguration parameter2.
+
+IL
+
+2Devising cost models for polystore settings is beyond the
+scope of this paper
+
+(a) Browsing through datasets
+
+(b) Query rewriting
+
+(c) Understanding constraints
+
+Figure 3: Screenshots of various ESTOCADA demonstration GUIs
+
+4. DEMO WALKTHROUGH
+
+The ESTOCADA approach can be combined with (ap-
+plied on top of) any polystore, to enhance its performance
+through exploiting materialized views. We propose to demon-
+strate it on three existing polystores: BigDAWG [8], Spark-
+SQL, and Tatooine [5], with underlying data stores: Post-
+greSQL, PostgresSQL with JSON support, Apache Solr, and
+Apache SystemML. We extended ESTOCADA to support
+array(matrix) and graph data models in addition to the sup-
+ported data models in [4].
+
+We propose to show ESTOCADA in action on a set of sce-
+narios similar to the one described in Section 1. We use three
+datasets:
+(i) MIMIC-III [11], described in Section 1.(ii)
+GDELT [2], which captures worldwide events (e.g., protests,
+peace appeals) and consists of the events’ structural infor-
+mation (e.g., event’s id and date), events’ actors, geogra-
+phy, and various links to articles describing each event. The
+dataset is in a relational form, and 26GB (2015 events) in
+ﬁle size. (iii) GENOMICS [13], comprising patients, gene
+metadata and microarray data (matrix form-dense). The
+size of the dataset is 32GB.
+
+Demo attendees can interact with the systems through
+
+the following interfaces:
+
+Datasets Interface. This allows to browse, for each data
+source, the schema (or its structural summary, for semistruc-
+tured data such as JSON lacking a schema), and sample of
+the data, to get familiar with its structure and help formu-
+late queries (see Figure 3(a)).
+
+Query Rewriting Interface. The user can interact with
+this interface by selecting a dataset, a polystore system
+query language (QBT XM , SparkSQL or BigDAWG) to use,
+and a query (expressed in the chosen polystore’s system
+query language) from a workload we prepared, as shown in
+Figure 3(b). Each dataset comes with a previously speciﬁed
+workload, and a set of stored overlapping/redundant views
+(their deﬁnitions, storage model, and location will be shown
+to the user); the users also have the option to write their
+queries and views. On the same interface, the user can in-
+spect the cross-model query rewriting, its translation in the
+pivot model, and its translated form in the chosen language.
+
+Understanding Constraints Interface. This interface
+enables the users to select one of the supported data mod-
+els, inspect the relational integrity constraints that capture
+the properties of that model, disable/enable/add some con-
+straints, and observe the query rewritings thus obtained. In
+the same interface, we provide a real-time visualization of
+which constraints are exploited by the rewriting engine.
+
+Performance Enhancement Interface. In this interface,
+users can see the performance comparison between a native
+polystore query execution and the one enabled by cross-
+stores views-based rewriting.
+5. CONCLUSION
+
+The goal of our demonstration is to show that query eval-
+uation performance in polystore architectures can be signif-
+icantly enhanced by exploiting materialized views. In such
+a setting, operating over multiple data stores, with poten-
+tially diﬀerent data models, dramatic performance enhance-
+ments can be attained by materializing the right view in the
+right store, that is: the one which can provide the best per-
+formance for the operations that need to be applied on it.
+ESTOCADA supports this functionality by enabling local-
+as-view query rewriting over a large range of data models
+and heterogeneous stores. Its immediate beneﬁt is ﬂexibility
+since it enables taking advantage in an optimal way of any
+combination of underlying data stores. At the technical core
+of ESTOCADA lies the constraint-based query rewriting.
+
+As part of our future work, we will devise cost-based rec-
+ommendation algorithms to pick the best possible placement
+of a materialized view.
+6. REFERENCES
+[1] AsterixDB. https://asterixdb.apache.org/.
+[2] GDELT.https://www.gdeltproject.org/data.html.
+[3] D. Agrawal et al. RHEEM: enabling cross-platform data
+processing - may the big data be with you! PVLDB,
+11(11):1414–1427, 2018.
+
+[4] R. Alotaibi et al. Towards scalable hybrid stores:
+
+Constraint-based rewriting to the rescue. In SIGMOD,
+2019.
+
+[5] R. Bonaque et al. Mixed-instance querying: a lightweight
+integration architecture for data journalism. PVLDB,
+9(13):1513–1516, 2016.
+
+[6] F. Bugiotti et al. Flexible hybrid stores: Constraint-based
+
+rewriting to the rescue. In ICDE, 2016.
+
+[7] A. Deutsch et al. MARS: A system for publishing XML
+from mixed and redundant storage. In Proc. of VLDB,
+pages 201–212, 2003.
+
+[8] J. Duggan et al. The BigDAWG polystore system. In
+
+SIGMOD, 2015.
+
+[9] A. Halevy. Answering queries using views: A survey. The
+
+VLDB Journal, 10(4):270–294, 2001.
+
+[10] I. Ileana et al. Complete yet practical search for minimal
+
+query reformulations under constraints. In SIGMOD, 2014.
+
+[11] A. Johnson et al. MIMIC-III. Available at:
+
+http://www.nature.com/articles/sdata201635, 2016.
+
+[12] I. Manolescu et al. Answering XML queries on
+
+heterogeneous data sources. In Proc. of VLDB, pages
+241–250, 2001.
+
+[13] R. Taft et al. Genbase: A complex analytics genomics
+
+benchmark. In SIGMOD, 2014.
+
+

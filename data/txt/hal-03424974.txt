@@ -1,0 +1,6008 @@
+Differentially Private Coordinate Descent for Composite
+Empirical Risk Minimization
+Paul Mangold, Aurélien Bellet, Joseph Salmon, Marc Tommasi
+
+To cite this version:
+
+Paul Mangold, Aurélien Bellet, Joseph Salmon, Marc Tommasi. Differentially Private Coordinate
+Descent for Composite Empirical Risk Minimization. ICML 2022 - 39th International Conference on
+Machine Learning, Jul 2022, Baltimore, United States. pp.14948-14978. ￿hal-03424974v3￿
+
+HAL Id: hal-03424974
+
+https://inria.hal.science/hal-03424974v3
+
+Submitted on 21 Oct 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Differentially Private Coordinate Descent
+for Composite Empirical Risk Minimization
+
+Paul Mangold 1 Aurélien Bellet 1 Joseph Salmon 2 3 Marc Tommasi 4
+
+Abstract
+Machine learning models can leak information
+about the data used to train them. To mitigate
+this issue, Differentially Private (DP) variants of
+optimization algorithms like Stochastic Gradient
+Descent (DP-SGD) have been designed to trade-
+off utility for privacy in Empirical Risk Minimiza-
+tion (ERM) problems. In this paper, we propose
+Differentially Private proximal Coordinate De-
+scent (DP-CD), a new method to solve composite
+DP-ERM problems. We derive utility guarantees
+through a novel theoretical analysis of inexact co-
+ordinate descent. Our results show that, thanks
+to larger step sizes, DP-CD can exploit imbal-
+ance in gradient coordinates to outperform DP-
+SGD. We also prove new lower bounds for com-
+posite DP-ERM under coordinate-wise regularity
+assumptions, that are nearly matched by DP-CD.
+For practical implementations, we propose to clip
+gradients using coordinate-wise thresholds that
+emerge from our theory, avoiding costly hyperpa-
+rameter tuning. Experiments on real and synthetic
+data support our results, and show that DP-CD
+compares favorably with DP-SGD.
+
+1 Introduction
+
+Machine learning fundamentally relies on the availability
+of data, which can be sensitive or conﬁdential. It is now
+well-known that preventing learned models from leaking
+information about individual training points requires partic-
+ular attention (Shokri et al., 2017). A standard approach for
+training models while provably controlling the amount of
+leakage is to solve an empirical risk minimization (ERM)
+
+1Univ. Lille, Inria, CNRS, Centrale Lille, UMR 9189
+- CRIStAL, F-59000 Lille, France 2IMAG, Univ Montpellier,
+CNRS, Montpellier, France 3Institut Universitaire de France
+(IUF) 4Univ. Lille, CNRS, Inria, Centrale Lille, UMR 9189 -
+CRIStAL, F-59000 Lille, France. Correspondence to: Paul Man-
+gold <paul.mangold@inria.fr>.
+
+Proceedings of the 39 th International Conference on Machine
+Learning, Baltimore, Maryland, USA, PMLR 162, 2022. Copy-
+right 2022 by the author(s).
+
+problem under a differential privacy (DP) constraint (Chaud-
+huri et al., 2011). In this work, we aim to design a differen-
+tially private algorithm which approximates the solution to
+a composite ERM problem of the form:
+
+w∗ ∈ arg min
+
+w∈Rp
+
+1
+n
+
+n
+(cid:88)
+
+i=1
+
+(cid:96)(w; di) + ψ(w) ,
+
+(1)
+
+where D = (d1, . . . , dn) is a dataset of n samples drawn
+from a universe X , (cid:96) : Rp ×X → R is a loss function which
+is convex and smooth in w, and ψ : Rp → R is a convex
+regularizer which is separable (i.e., ψ(w) = (cid:80)p
+j=1 ψj(wj))
+and typically nonsmooth (e.g., (cid:96)1-norm).
+
+Differential privacy constraints induce a trade-off between
+the privacy and the utility (i.e., optimization error) of the
+solution of (1). This trade-off was made explicit by Bassily
+et al. (2014), who derived lower bounds on the achievable
+error given a ﬁxed privacy budget. To solve the DP-ERM
+problem in practice, the most popular approaches are based
+on Differentially Private variants of Stochastic Gradient De-
+scent (DP-SGD) (Bassily et al., 2014; Abadi et al., 2016;
+Wang et al., 2017), in which random perturbations are added
+to the (stochastic) gradients. Bassily et al. (2014) analyzed
+DP-SGD in the non-smooth DP-ERM setting, and Wang
+et al. (2017) then proposed an efﬁcient DP-SVRG algorithm
+for composite DP-ERM. Both algorithms match known
+lower bounds. SGD-style algorithms perform well in a wide
+variety of settings, but also have some ﬂaws: they either re-
+quire small (or decreasing) step sizes or variance reduction
+schemes to guarantee convergence, and they can be slow
+when gradients’ coordinates are imbalanced. These ﬂaws
+propagate to the private counterparts of these algorithms.
+Despite a few attempts at designing other differentially pri-
+vate solvers for ERM under different setups (Talwar et al.,
+2015; Damaskinos et al., 2021), the differentially private
+optimization toolbox remains limited, which undoubtedly
+restricts the resolution of practical problems.
+
+In this paper, we propose and analyze a Differentially Private
+proximal Coordinate Descent algorithm (DP-CD), which
+performs updates based on perturbed coordinate-wise gra-
+dients (i.e., partial derivatives). Coordinate Descent (CD)
+methods have encountered a large success in non-private ma-
+chine learning due to their simplicity and effectiveness (Liu
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+et al., 2009; Friedman et al., 2010; Chang et al., 2008; Sardy
+et al., 2000), and have seen a surge of practical and theo-
+retical interest in the last decade (Nesterov, 2012; Wright,
+2015; Shi et al., 2017; Richtárik & Takáˇc, 2014; Fercoq
+& Richtárik, 2015; Tappenden et al., 2016; Hanzely et al.,
+2020; Nutini et al., 2015; Karimireddy et al., 2019). In con-
+trast to SGD, they converge with constant step sizes that
+adapt to the coordinate-wise smoothness of the objective.
+Additionally, CD updates naturally tend to have a lower
+sensitivity. Operating with partial gradients thus enables
+our private algorithm to reduce the perturbation required
+to guarantee privacy without resorting to ampliﬁcation by
+subsampling (Balle et al., 2018; Mironov et al., 2019).
+
+We propose a novel analysis of proximal CD with perturbed
+gradients to derive optimal upper bounds on the privacy-
+utility trade-off achieved by DP-CD. We prove a recursion
+on distances of CD iterates to an optimal point that keeps
+track of coordinate-wise regularity constants in a tight man-
+ner and allows to use large, constant step sizes that yield
+high utility. Our results highlight the fact that DP-CD can
+exploit imbalanced gradient coordinates to outperform DP-
+SGD. They also improve upon known convergence rates
+for inexact CD in the non-private setting (Tappenden et al.,
+2016). We assess the optimality of DP-CD by deriving lower
+bounds that capture coordinate-wise Lipschitz regularity
+measures, and show that DP-CD matches those bounds up
+to logarithmic factors. Our lower bounds also suggest inter-
+esting perspectives for future work on DP-CD algorithms.
+
+Our theoretical results have important consequences for
+practical implementations, which heavily rely on gradient
+clipping to achieve good utility. In contrast to DP-SGD,
+DP-CD requires to set coordinate-wise clipping thresholds,
+which can lead to impractical coordinate-wise hyperparam-
+eter tuning. We instead propose a simple rule for adapting
+these thresholds from a single hyperparameter. We also
+show how the coordinate-wise smoothness constants used
+by DP-CD can be estimated privately. We validate our
+theory with numerical experiments on real and synthetic
+datasets. These experiments further show that even in bal-
+anced problems, DP-CD can still improve over DP-SGD,
+conﬁrming the relevance of DP-CD for DP-ERM.
+
+Our main contributions can be summarized as follows:
+
+1. We propose the ﬁrst proximal CD algorithm for com-
+posite DP-ERM, formally prove its utility, and high-
+light regimes where it outperforms DP-SGD.
+
+2. We show matching lower bounds under coordinate-
+
+wise regularity assumptions.
+
+3. We give practical guidelines to use DP-CD, and show
+
+its relevance through numerical experiments.
+
+The rest of this paper is organized as follows. We ﬁrst
+
+describe some mathematical background in Section 2. In
+Section 3, we present our DP-CD algorithm, show that it
+satisﬁes DP, establish utility guarantees, and compare these
+guarantees with those of DP-SGD. In Section 4, we derive
+lower bounds under coordinate-wise regularity assumptions,
+and show that DP-CD can match them. Section 5 discusses
+practical questions related to gradient clipping and the pri-
+vate estimation of smoothness constants. Section 6 presents
+our numerical experiments, comparing DP-CD and DP-SGD
+on LASSO and (cid:96)2-regularized logistic regression problems.
+Finally, we review existing work in Section 7, and conclude
+with promising lines of future work in Section 8.
+
+2 Preliminaries
+
+In this section, we introduce important technical notions
+that will be used throughout the paper.
+
+Norms. We start by deﬁning two conjugate norms that will
+be crucial in our analysis, for they allow to keep track of
+coordinate-wise quantities. Let (cid:104)u, v(cid:105) = (cid:80)p
+j=1 uivi be the
+Euclidean dot product, let M = diag(M1, . . . , Mp) with
+M1, . . . , Mp > 0, and
+(cid:107)w(cid:107)M = (cid:112)(cid:104)M w, w(cid:105) ,
+
+(cid:107)w(cid:107)M −1 = (cid:112)(cid:104)M −1w, w(cid:105) .
+
+When M is the identity matrix I, the I-norm (cid:107)·(cid:107)I is the
+standard (cid:96)2-norm (cid:107)·(cid:107)2.
+Regularity assumptions. We recall classical regularity as-
+sumptions along with ones speciﬁc to the coordinate-wise
+setting. We denote by ∇f the gradient of a differentiable
+function f , and by ∇jf its j-th coordinate. We denote by
+ej the j-th vector of Rp’s canonical basis.
+Convexity: a differentiable function f : Rp → R is convex
+if for all v, w ∈ Rp, f (w) ≥ f (v) + (cid:104)∇f (v), w − v(cid:105).
+Strong convexity: a differentiable function f : Rp → R is
+µM -strongly-convex w.r.t. the norm (cid:107)·(cid:107)M if for all v, w ∈
+Rp, f (w) ≥ f (v) + (cid:104)∇f (v), w − v(cid:105) + µM
+M . The
+case M1 = · · · = Mp = 1 recovers standard µI -strong
+convexity w.r.t. the (cid:96)2-norm.
+Component Lipschitzness: a function f : Rp → R
+is L-component-Lipschitz for L = (L1, . . . , Lp) with
+L1, . . . , Lp > 0 if for all w ∈ Rp, t ∈ R and j ∈ [p],
+|f (w + tej) − f (w)| ≤ Lj |t|. It is Λ-Lipschitz if for all
+v, w ∈ Rp, |f (v) − f (w)| ≤ Λ (cid:107)v − w(cid:107)2.
+Component smoothness: a differentiable function f : Rp →
+R is M -component-smooth for M1, . . . , Mp > 0 if for all
+2 (cid:107)w − v(cid:107)2
+v, w ∈ Rp, f (w) ≤ f (v)+(cid:104)∇f (v), w − v(cid:105)+ 1
+M .
+When M1 = · · · = Mp = β, f is said to be β-smooth.
+
+2 (cid:107)w − v(cid:107)2
+
+The above component-wise regularity hypotheses are not
+restrictive: Λ-Lipschitzness implies (Λ, . . . , Λ)-component-
+(β, . . . , β)-
+Lipschitzness and β-smoothness
+
+implies
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+component-smoothness. Yet, the actual component-wise
+constants of a function can be much lower than what can be
+deduced from their global counterparts. This will be crucial
+for our analysis and in the performance of DP-CD.
+
+Remark 2.1. When ψ is the characteristic function of a con-
+vex set (with separable components), the regularity assump-
+tions only need to hold on this set. This allows considering
+problem (1) with a smooth objective under box-constraints.
+
+Differential privacy (DP). Let D be a set of datasets and
+F a set of possible outcomes. Two datasets D, D(cid:48) ∈ D are
+said neighboring (denoted by D ∼ D(cid:48)) if they differ on at
+most one element.
+
+Deﬁnition 2.2 (Differential Privacy, Dwork 2006). A ran-
+domized algorithm A : D → F is ((cid:15), δ)-differentially pri-
+vate if, for all neighboring datasets D, D(cid:48) ∈ D and all
+S ⊆ F in the range of A:
+
+Pr [A(D) ∈ S] ≤ exp((cid:15))Pr [A(D(cid:48)) ∈ S] + δ .
+
+The value of a function h : D → Rp can be privately re-
+leased using the Gaussian mechanism, which adds centered
+Gaussian noise to h(D) before releasing it (Dwork & Roth,
+2014). The scale of the noise is calibrated to the sensitivity
+∆(h) = supD∼D(cid:48) (cid:107)h(D) − h(D(cid:48))(cid:107)2 of h. In our setting,
+we will perturb coordinate-wise gradients: we denote by
+∆(∇j(cid:96)) the sensitivity of the j-th coordinate of gradient of
+the loss function (cid:96) with respect to the data. When (cid:96)(·; d) is L-
+component-Lipschitz for all d ∈ X , upper bounds on these
+sensitivities are readily available: we have ∆(∇j(cid:96)) ≤ 2Lj
+for any j ∈ [p] (see Appendix A). The following quan-
+tity, relating the coordinate-wise sensitivities of gradients to
+coordinate-wise smoothness is central in our analysis:
+
+∆M −1(∇(cid:96)) =
+
+(cid:16)
+
+p
+(cid:88)
+
+j=1
+
+1
+Mj
+
+∆(∇j(cid:96))2(cid:17) 1
+
+2
+
+≤ 2 (cid:107)L(cid:107)M −1
+
+. (2)
+
+In this paper, we consider the classic central model of DP,
+where a trusted curator has access to the raw dataset and
+releases a model trained on this dataset1.
+
+3 Differentially Private Coordinate Descent
+
+In this section, we introduce the Differentially Private proxi-
+mal Coordinate Descent (DP-CD) algorithm to solve prob-
+lem (1) under ((cid:15), δ)-DP constraints. We ﬁrst describe our
+algorithm, show how to parameterize it to satisfy the desired
+privacy constraint, and prove corresponding utility results.
+Finally, we compare these utility guarantees with DP-SGD.
+
+1In fact, our privacy guarantees hold even if all intermediate
+
+iterates are released (not just the ﬁnal model).
+
+3.1 Private Proximal Coordinate Descent
+
+(cid:80)n
+
+Let D = {d1, . . . , dn} ∈ X n be a dataset. We denote by
+f (w) = 1
+i=1 (cid:96)(w; di) the M -component-smooth part
+n
+of (1), by ψ(w) = (cid:80)p
+j=1 ψj(wj) its separable part, and let
+F (w) = f (w) + ψ(w). Proximal coordinate descent meth-
+ods (Richtárik & Takáˇc, 2014) solve problem (1) through
+iterative proximal gradient steps along each coordinate of F .
+Formally, given w ∈ Rp and j ∈ [p], the j-th coordinate of
+w is updated as follows:
+
+w+
+
+j = proxγj ψj
+
+(cid:0)wj − γj∇jf (wt)(cid:1) ,
+
+(3)
+
+where γj > 0 is the step size and proxγj ψj (w) =
+2 + γjψj(v)(cid:9) is the proximal op-
+arg minv∈Rp
+erator associated with ψj (Parikh & Boyd, 2014).
+
+(cid:8) 1
+2 (cid:107)v − w(cid:107)2
+
+Update (3) only requires the computation of the j-th entry of
+the gradient. To satisfy differential privacy, we perturb this
+gradient entry with additive Gaussian noise of variance σ2
+j .
+The complete DP-CD procedure is shown in Algorithm 1.
+At each iteration, we pick a coordinate uniformly at random
+and update according to (3), albeit with noise addition (see
+line 7). For technical reasons related to our analysis, we
+use a periodic averaging scheme (line 9). This scheme is
+similar to DP-SVRG (Johnson & Zhang, 2013), although
+no variance reduction is required since DP-CD computes
+coordinate gradients over the whole dataset.
+
+3.2 Privacy Guarantees
+
+For Algorithm 1 to satisfy ((cid:15), δ)-DP, the noise scales σ =
+(σ1, . . . , σp) can be calibrated as given in Theorem 3.1.
+Theorem 3.1. Assume (cid:96)(·; d) is L-component-Lipschitz
+j T K log(1/δ)
+∀d ∈ X . Let (cid:15) ≤ 1 and δ < 1/3. If σ2
+for all j ∈ [p], then Algorithm 1 satisﬁes ((cid:15), δ)-DP.
+
+j =
+
+12L2
+
+n2(cid:15)2
+
+Sketch of Proof. (Complete proof in Appendix B). We track
+the privacy loss using Rényi differential privacy (RDP),
+which gives better guarantees than ((cid:15), δ)-DP for the com-
+position of Gaussian mechanisms (Mironov, 2017). The
+j-th entry of ∇f has sensitivity ∆(∇jf ) = ∆(∇j(cid:96))/n ≤
+2Lj/n. By the Gaussian mechanism each iteration of DP-
+)-RDP for all α > 1. The composition
+CD is (α,
+theorem for RDP gives a global RDP guarantee for DP-CD,
+that we convert to ((cid:15), δ)-DP using Proposition 3 of Mironov
+(2017). Choosing α carefully ﬁnally proves the result.
+
+2L2
+j α
+n2σ2
+j
+
+The dependence of the noise scales on (cid:15), δ, n and T K (the
+number of updates) in Theorem 3.1 is standard in DP-ERM.
+However, the noise is calibrated to the loss function’s com-
+ponent-Lipschitz constants. These can be much lower their
+global counterpart, the latter being used to calibrate the
+noise in DP-SGD algorithms. This will be crucial for DP-
+CD to achieve better utility than DP-SGD in some regimes.
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Set θ0 = ¯wt
+for k = 0, . . . , K − 1 do
+
+Algorithm 1 Differentially Private Proximal Coordinate Descent Algorithm (DP-CD).
+Input: noise scales σ = (σ1, . . . , σp) for σ1, . . . , σp > 0; step sizes γ1, . . . , γp > 0; initial point ¯w0 ∈ Rp; iteration budgets
+T, K > 0.
+1: for t = 0, . . . , T − 1 do
+2:
+3:
+4:
+5:
+6:
+7:
+8:
+9:
+10: end for
+11: return wpriv = ¯wT
+
+Pick j from {1, . . . , p} uniformly at random
+Draw ηj ∼ N (0, σ2
+j )
+Set θk+1 = θk
+Set θk+1
+
+end for
+Set ¯wt+1 = 1
+K
+
+j − γj(∇jf (θk) + ηj))
+
+j = proxγj ψj (θk
+
+k=1 θk
+
+(cid:80)K
+
+We also note that, unlike DP-SGD, DP-CD does not rely
+on privacy ampliﬁcation by subsampling (Balle et al., 2018;
+Mironov et al., 2019), and thereby avoids the approxima-
+tions required by these schemes to bound the privacy loss.
+
+Remark 3.2. Theorem 3.1 assumes (cid:15) ∈ (0, 1] to give a
+simple closed form for the noise scales. In practice we com-
+pute tighter values numerically using Rényi DP formulas
+directly (see Eq. 18 in Appendix B), removing the need for
+this assumption.
+
+3.3 Utility Guarantees
+
+We now state our central result on the utility of DP-CD for
+the composite DP-ERM problem. As done in previous work,
+we use the asymptotic notation (cid:101)O to hide non-signiﬁcant
+logarithmic factors. Non-asymptotic utility bounds can be
+found in Appendix C.
+
+Theorem 3.3. Let (cid:96)(·; d) be a convex and L-component-
+Lipschitz loss function for all d ∈ X , and f be convex and
+M -component-smooth. Let ψ : Rp → R be a convex and
+separable function. Let (cid:15) ≤ 1, δ < 1/3 be the privacy
+budget. Let w∗ be a minimizer of F and F ∗ = F (w∗).
+Let wpriv ∈ Rp be the output of Algorithm 1 with step
+sizes γj = 1/Mj, and noise scales σ1, . . . , σp set as in
+Theorem 3.1 (with T and K chosen below) to ensure ((cid:15), δ)-
+DP. Then, the following holds:
+
+1. For F convex, K = O
+
+(cid:16) RM
+
+√
+
+pn(cid:15)
+(cid:107)L(cid:107)M −1
+
+(cid:17)
+
+, and T = 1, then:
+
+E[F (wpriv) − F ∗] = (cid:101)O
+
+(cid:18) (cid:112)p log(1/δ)
+n(cid:15)
+
+(cid:19)
+
+(cid:107)L(cid:107)M −1 RM
+
+,
+
+where RM = max((cid:112)F (w0) − F (w∗), (cid:13)
+and more simply RM = (cid:13)
+
+(cid:13)w0 − w∗(cid:13)
+
+(cid:13)w0 − w∗(cid:13)
+(cid:13)M when ψ = 0.
+
+(cid:13)M )
+
+2. For F µM -strongly convex w.r.t. (cid:107)·(cid:107)M , K = O (p/µM ),
+
+and T = O (log(n(cid:15)µM /p (cid:107)L(cid:107)M −1 )), then:
+
+E[F (wpriv) − F ∗] = (cid:101)O
+
+(cid:18) p log(1/δ)
+n2(cid:15)2
+
+(cid:107)L(cid:107)2
+µM
+
+M −1
+
+(cid:19)
+
+.
+
+Expectations are over the randomness of the algorithm.
+
+Sketch of Proof. (Complete proof in Appendix C). Existing
+analyses of CD fail to track the noise tightly across coordi-
+nates when adapted to the private setting. Contrary to these
+classical analyses, we prove a recursion on E (cid:13)
+(cid:13)θk − w∗(cid:13)
+2
+M ,
+(cid:13)
+rather than on E(cid:2)F (θk) − F (w∗)(cid:3). Our key technical result
+is a descent lemma (Lemma C.3) allowing us to obtain
+
+E(cid:2)F (θk+1) − F ∗(cid:3) −
+
+E(cid:2)F (θk) − F ∗(cid:3)
+
+p − 1
+p
+M − E (cid:13)
+(cid:13)θk − w∗(cid:13)
+2
+(cid:13)
+
+≤ E (cid:13)
+
+(cid:13)θk+1 − w∗(cid:13)
+2
+M +
+(cid:13)
+
+(4)
+
+(cid:107)σ(cid:107)2
+M
+p
+
+.
+
+The above inequality shows that coordinate-wise updates
+leave a fraction p−1
+p of the function “unchanged”, while the
+remaining part decreases (up to additive noise). Importantly,
+all quantities are measured in M -norm. When summing (4)
+for k = 0, . . . , K − 1, its left hand side simpliﬁes and its
+right hand side is simpliﬁed as a telescoping sum:
+
+1
+p
+
+K
+(cid:88)
+
+k=1
+
+E(cid:2)F (θk) − F ∗(cid:3)
+
+≤ E(cid:2)F ( ¯wt) − F ∗(cid:3) + E (cid:13)
+
+(cid:13) ¯wt − w∗(cid:13)
+2
+M + K
+(cid:13)
+
+p (cid:107)σ(cid:107)2
+
+M −1
+
+(5)
+
+,
+
+where ¯wt comes from θ0 = ¯wt. As ¯wt+1 = (cid:80)K
+θk
+K and
+F is convex, we have F ( ¯wt+1) − F ∗ ≤ 1
+k=1 F (θk) −
+K
+F ∗. This proves the sub-linear convergence (up to an ad-
+ditive noise term) of the inner loop. The result in the
+convex case follows directly (since T = 1, only one in-
+ner loop is run). For strongly convex F , it further holds
+
+(cid:80)K
+
+k=1
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+M ≤ 2
+µM
+
+that E (cid:107) ¯wt − w∗(cid:107)2
+E[F ( ¯wt) − F (w∗)]. Replacing
+in (5) with large enough K gives E(cid:2)F ( ¯wt+1) − F ∗(cid:3) ≤
+E[F ( ¯wt) − F ∗] + (cid:107)σ(cid:107)2
+1
+M −1 , and linear convergence (up to
+2
+an additive noise term) follows. Finally, K and T are chosen
+to balance the “optimization” and the “privacy” errors.
+
+Remark 3.4. Our novel convergence proof of CD is also
+useful in the non-private setting. In particular, we improve
+upon known convergence rates for inexact CD methods
+with additive error (Tappenden et al., 2016), under the hy-
+pothesis that gradients are noisy and unbiased.
+In their
+formalism, we have α = 0 and β = (cid:107)σ(cid:107)2
+M −1 /p. With
+our analysis, the algorithm requires 2pR2
+M /(ξ − pβ) (resp.
+4p/µM log((F (w0) − F ∗)/(ξ − pβ))) iterations to achieve
+expected precision ξ > pβ when F is convex (resp. µM -
+strongly-convex w.r.t. (cid:107)·(cid:107)M ), improving upon Tappenden
+et al. (2016)’s results by a factor (cid:112)pβ/2R2
+M (resp. µM /2).
+See Appendix C.3 for details. Moreover, unlike this prior
+work, our analysis does not require the objective to decrease
+at each iteration, which is essential to guarantee DP.
+
+Our utility guarantees stated in Theorem 3.3 directly depend
+on precise coordinate-wise regularity measures of the objec-
+tive function. In particular, the initial distance to optimal,
+the strong convexity parameter and the overall sensitivity
+of the loss function are measured in the norms (cid:107)·(cid:107)M and
+(cid:107)·(cid:107)M −1 (i.e., weighted by coordinate-wise smoothness con-
+stants or their inverse). In the remainder of this section, we
+thoroughly compare our utility results with existing ones
+for DP-SGD. We will show the optimality of our utility
+guarantees in Section 4.
+
+3.4 Comparison with DP-SGD and DP-SVRG
+
+We now compare DP-CD with DP-SGD and DP-SVRG, for
+which Bassily et al. (2014) and Wang et al. (2017) proved
+utility guarantees. In this section, we assume that the loss
+function (cid:96) satisﬁes the hypotheses of Theorem 3.3, and
+is Λ-Lipschitz. We denote by µI the strong convexity pa-
+rameter of (cid:96)(·, d) w.r.t. (cid:107)·(cid:107)2 and RI the equivalent of RM
+when M is the identity matrix I. As can be seen from Ta-
+ble 1, comparing DP-CD and DP-SGD boils down to com-
+paring (cid:107)L(cid:107)M −1 RM with ΛRI for convex functions and
+(cid:107)L(cid:107)2
+M −1/µM with Λ2/µI for strongly-convex functions.
+We compare these terms in two scenarios, depending on the
+distribution of coordinate-wise smoothness constants. To
+ease the comparison, we assume that RM = (cid:13)
+(cid:13)w0 − w∗(cid:13)
+(cid:13)M
+and RI = (cid:13)
+(cid:13)I (which is notably the case when
+ψ = 0), and that F has a unique minimizer w∗.
+
+(cid:13)w0 − w∗(cid:13)
+
+Balanced. When the smoothness constants M are all equal,
+(cid:107)L(cid:107)M −1 RM = (cid:107)L(cid:107)2 RI and (cid:107)L(cid:107)2
+2/µI .
+This boils down to comparing (cid:107)L(cid:107)2 to Λ. As Λ ≤ (cid:107)L(cid:107)2 ≤
+√
+pΛ, DP-CD can be up to p times worse than DP-SGD.
+This can only happen when features are extremely corre-
+
+M −1/µM = (cid:107)L(cid:107)2
+
+lated, which is generally not the case in machine learning.
+We show empirically in Section 6.2 that, even in balanced
+regimes, DP-CD can still signiﬁcantly outperform DP-SGD.
+
+M −1. This yields (cid:107)L(cid:107)2
+
+Unbalanced. More favorable regimes exist when smooth-
+ness constants are imbalanced. To illustrate this, consider
+the case where the ﬁrst coordinate of the loss function (cid:96)
+dominates others. There, Mmax = M1 (cid:29) Mmin = Mj and
+Lmax = L1 (cid:29) Lmin = Lj for all j (cid:54)= 1, so that L2
+1/M1 dom-
+inates the other terms of (cid:107)L(cid:107)2
+M −1 ≈
+L2
+1/M1 ≈ Λ/Mmax, and µM = µI Mmin. Moreover, if the
+ﬁrst coordinate of w∗ is already well estimated by w0 (which
+is common for sparse models), then RM ≈ MminRI . We
+obtain that (cid:107)L(cid:107)M −1 RM ≈ (cid:112)Mmin/MmaxΛRI for convex
+losses and (cid:107)L(cid:107)M −1
+Λ2
+for strongly-convex ones.
+µI
+In both cases, DP-CD can perform arbitrarily better than
+DP-SGD, depending on the ratio between the smallest and
+largest coordinate-wise smoothness constants of the loss
+function. This is due to the inability of DP-SGD to adapt its
+step size to each coordinate. DP-CD thus converges quicker
+than DP-SGD on coordinates with smaller-scale gradients,
+requiring fewer accesses to the dataset, and in turn less noise
+addition. We give more details on this comparison in Ap-
+pendix D, and complement it with an empirical evaluation
+on synthetic and real-world data in Section 6.
+
+≈ Mmin
+Mmax
+
+µM
+
+4 Lower Bounds
+
+We now prove a new lower bound on the error achievable
+for composite DP-ERM with L-component-Lipschitz loss
+functions. While our proof borrows some ideas from the
+lower bounds known for constrained ERM with Λ-Lipschitz
+losses (Bassily et al., 2014), deriving our lower bounds re-
+quires to address a number of speciﬁc challenges. First,
+we cannot use an (cid:96)2 norm constraint as in Bassily et al.
+(2014) in the design of the worst-case problem instances:
+we can only rely on separable regularizers. Second, imbal-
+anced coordinate-wise Lipschitz constants prevent lower-
+bounding the distance between an arbitrary point and the
+solution. This leads us to revisit the construction of a “rei-
+dentiﬁable dataset” from Bun et al. (2014) so that we have
+L-component-Lipschitzness while the sum of each column
+is large enough, which is crucial in our proof. The full proof
+is given in Appendix E.
+
+j∈J L2
+
+j = Ω((cid:107)L(cid:107)2
+
+Theorem 4.1. Let n, p > 0, (cid:15) > 0, δ = o( 1
+n ),
+L1, . . . , Lp > 0, such that for all J ⊆ [p] of size at least
+75 (cid:101), (cid:80)
+(cid:100) p
+j=1{±Lj} and
+consider any ((cid:15), δ)-differentially private algorithm that out-
+puts wpriv. In each of the two following cases there exists a
+dataset D ∈ X n, a L-component-Lipschitz loss (cid:96)(·, d) for
+all d ∈ D and a regularizer ψ so that, with F the objective
+of (1) minimal at w∗ ∈ Rp:
+
+2). Let X = (cid:81)p
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Table 1. Utility guarantees for DP-CD, DP-SGD, and DP-SVRG for L-component-Lipschitz, Λ-Lipschitz loss.
+
+DP-CD (this paper)
+
+DP-SGD (Bassily et al., 2014)
+DP-SVRG (Wang et al., 2017)
+
+Convex
+
+(cid:32) (cid:112)p log(1/δ)
+n(cid:15)
+
+(cid:101)O
+
+(cid:33)
+
+(cid:107)L(cid:107)M −1 RM
+
+(cid:32) (cid:112)p log(1/δ)
+n(cid:15)
+
+(cid:101)O
+
+(cid:33)
+
+ΛRI
+
+Strongly-convex
+
+(cid:32)
+
+(cid:101)O
+
+p log(1/δ)
+n2(cid:15)2
+
+(cid:107)L(cid:107)2
+µM
+
+M −1
+
+(cid:33)
+
+(cid:18) p log(1/δ)
+n2(cid:15)2
+
+Λ2
+µI
+
+(cid:101)O
+
+(cid:19)
+
+1. If F is convex:
+
+(cid:16)
+E(cid:2)F (wpriv; D) − F (w∗)(cid:3) = Ω
+
+√
+
+p (cid:107)L(cid:107)2 (cid:107)w∗(cid:107)2
+n(cid:15)
+
+(cid:17)
+
+.
+
+2. If F is µI -strongly-convex w.r.t. (cid:107)·(cid:107)2:
+
+E(cid:2)F (wpriv; D) − F (w∗)(cid:3) = Ω
+
+(cid:16) p (cid:107)L(cid:107)2
+2
+µI n2(cid:15)2
+
+(cid:17)
+
+.
+
+√
+
+j=1 L2
+
+We recover the lower bounds of Bassily et al. (2014) for
+Λ-Lipschitz losses as a special case of ours by setting L1 =
+p. In this case, the loss function used in
+· · · = Lp = Λ/
+our proof is indeed ((cid:80)p
+j )1/2 = Λ-Lipschitz. To relate
+these lower bounds to the performance of DP-CD, consider
+a suboptimal version of our algorithm where the step sizes
+are set to γ1 = · · · = γp = (maxj Mj)−1. In this setting,
+results from Theorem 3.3 still hold, and match the lower
+bounds from Theorem 4.1 up to logarithmic factors. We
+leave open the question of the optimality of DP-CD under
+the additional hypothesis of smoothness.
+
+We note that the assumption on the sum of the Lj’s over a
+set of indices J in Theorem 4.1 can be eliminated at the
+cost of an additional factor of Lmin/Lmax for convex losses
+and (Lmin/Lmax)2 for strongly-convex losses, making the
+bound looser. Although the aforementioned assumption
+may seem solely technical, we conjecture that better utility
+is possible when a few coordinate-wise Lipschitz constants
+dominate the others. We discuss this further in Section 8.
+
+5 DP-CD in Practice
+
+We now discuss practical questions related to DP-CD. First,
+we show how to implement coordinate-wise gradient clip-
+ping using a single hyperparameter. Second, we explain
+how to privately estimate the smoothness constants. Finally,
+we discuss the possibility of standardizing the features and
+how this relates to estimating smoothness constants for the
+important problem of ﬁtting generalized linear models.
+
+constants for the loss function (cid:96)(·; d) that must hold for
+all possible data points d ∈ X , see inequality (2) and the
+discussion above it. This is classic in the analysis of DP
+optimization algorithms (see e.g., Bassily et al., 2014; Wang
+et al., 2017). In practice however, these Lipschitz constants
+can be difﬁcult to bound tightly and often give largely pes-
+simistic estimates of sensitivities, thereby making gradients
+overly noisy. To overcome this problem, the common prac-
+tice in concrete deployments of DP-SGD algorithms is to
+clip per-sample gradients so that their norm does not exceed
+a ﬁxed threshold parameter C > 0 (Abadi et al., 2016):
+
+clip(∇(cid:96)(w), C) = min
+
+(cid:16)
+
+1,
+
+(cid:17)
+
+C
+(cid:107)∇(cid:96)(w)(cid:107) 2
+
+∇(cid:96)(w) .
+
+(6)
+
+This effectively ensures that the sensitivity ∆(clip(∇(cid:96), C))
+of the clipped gradient is bounded by 2C.
+
+In DP-CD, gradients are released one coordinate at a time
+and should thus be clipped in a coordinate-wise fashion.
+Using the same threshold for each coordinate would ruin the
+ability of DP-CD to account for imbalance across gradient
+coordinates, whereas tuning coordinate-wise thresholds as
+p individual hyperparameters {Cj}p
+
+j=1 is impractical.
+
+Instead, we leverage the results of Theorem 3.3 to adapt
+them from a single hyperparameter. We ﬁrst remark that
+our utility guarantees are invariant to the scale of the matrix
+M . After rescaling M to (cid:102)M = p
+tr(M ) M so that tr( (cid:102)M ) =
+tr(I) = p, as proposed by Richtárik & Takáˇc (2014), the key
+quantity ∆
+(cid:102)M −1(∇(cid:96)) as deﬁned in (2) appears in our utility
+bounds instead of (cid:107)L(cid:107)M −1. This suggests to parameterize
+the j-th threshold as Cj = (cid:112)Mj/tr(M )C for some C >
+(cid:102)M −1 ({clip(∇j(cid:96), Cj)}p
+0, ensuring that ∆
+j=1) ≤ 2C. The
+parameter C thus controls the overall sensitivity, allowing
+clipped DP-CD to perform p iterations for the same privacy
+budget as one iteration of clipped DP-SGD.
+
+5.1 Coordinate-wise Gradient Clipping
+
+To bound the sensitivity of coordinate-wise gradients, our
+analysis of Section 3 relies on the knowledge of Lipschitz
+
+DP-CD requires the knowledge of the coordinate-wise
+smoothness constants M1, . . . , Mp of f to set appropriate
+step sizes (see Theorem 3.3) and clipping thresholds (see
+
+5.2 Private Smoothness Constants
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+above).2 In most problems, the Mj’s depend on the dataset
+D and must thus be estimated privately using a fraction of
+the overall privacy budget. Since f is an average of loss
+terms, its coordinate-wise smoothness constants are the aver-
+age of those of (cid:96)(·, d) over d ∈ D. These per-sample quanti-
+ties are easy to get for typical losses (see Section 5.3 for the
+case of linear models). Privately estimating M1, . . . , Mp
+thus reduces to a classic private mean estimation problem
+for which many methods exist. For instance, assuming that
+the practitioner knows a crude upper bound on per-sample
+smoothness constants, he/she can compute the smoothness
+constants of the (cid:96)(·, d)’s, clip them to the pre-deﬁned upper
+bounds, and privately estimate their mean using the Laplace
+mechanism (see Appendix F for details). We show numer-
+ically in Section 6 that dedicating 10% of the total budget
+(cid:15) to this strategy allows DP-CD to effectively exploit the
+imbalance across gradients’ coordinates.
+
+5.3 Feature Standardization
+
+CD algorithms are very popular to solve generalized linear
+models (Friedman et al., 2010) and their regularized version
+(e.g., LASSO, logistic regression). For these problems, the
+n (cid:107)X:,j(cid:107)2
+coordinate-wise smoothness constants are Mj ∝ 1
+2,
+where X:,j ∈ Rn is the vector containing the value of the
+j-th feature. Therefore, standardizing the features to have
+zero mean and unit variance (a standard preprocessing step)
+makes coordinate-wise smoothness constants equal. How-
+ever, this requires to compute the mean and variance of each
+feature in D, which is more costly than the smoothness
+constants to estimate privately.3 Moreover, while our the-
+ory suggests that DP-CD may not be superior to DP-SGD
+when smoothness constants are all equal (see Section 3.4),
+the numerical results of Section 6 show that DP-CD often
+outperforms DP-SGD even when features are standardized.
+
+Finally, we emphasize that standardization is not always
+possible. This notably happens when solving the problem
+at hand is a subroutine of another algorithm. For instance,
+the Iteratively Reweighted Least Squares (IRLS) algorithm
+(Holland & Welsch, 1977) ﬁnds the maximum likelihood
+estimate of a generalized linear model by solving a sequence
+of linear regression problems with reweighted features, pro-
+scribing standardization. Similar situations happen when us-
+ing reweighted (cid:96)1 methods for non-convex sparse regression
+(Candès et al., 2008), relying on convex (LASSO) solvers
+for the inner loop. DP-CD is thus a method of choice to
+serve as subroutine in private versions of these algorithms.
+
+2In fact, only Mj/ (cid:80)
+
+j(cid:48) Mj(cid:48) is needed, as we tune the clipping
+
+threshold and scaling factor for the step sizes. See Section 6.
+
+3We note that the privacy cost of standardization is rarely ac-
+
+counted for in practical evaluations.
+
+(a) Electricity
+Logistic, λ = 1/n.
+
+(b) California
+LASSO, λ = 1.0.
+
+Figure 1. Relative error to non-private optimal for DP-CD (blue),
+DP-CD with privately estimated coordinate-wise smoothness con-
+stants (green), DP-SGD (orange) and DP-SCD (red, only applica-
+ble to the smooth case) on two imbalanced problems. The number
+of passes is tuned separately for each algorithm to achieve lowest
+error. We report min/mean/max values over 10 runs.
+
+6 Numerical Experiments
+
+In this section, we assess the practical performance of
+DP-CD against (proximal) DP-SGD on LASSO4 and (cid:96)2-
+regularized logistic regression5. On the latter problem, we
+also consider the dual private coordinate descent algorithm
+of Damaskinos et al. (2021) (DP-SCD). For LASSO, we use
+the California dataset (Kelley Pace & Barry, 1997), with
+n = 20, 640 records and p = 8 features as well as a syn-
+thetic dataset (coined “Sparse LASSO”) with n = 1, 000
+records and p = 1, 000 independent features that follow a
+standard normal distribution. The labels are then computed
+as a noisy sparse linear combination of a subset of 10 active
+features. For logistic regression, we consider the Electric-
+ity dataset (Electricity) with 45, 312 records and 8 features.
+On California and Electricity, we set (cid:15) = 1 and δ = 1/n2,
+which is generally seen as a rather high privacy regime. The
+Sparse LASSO dataset corresponds to a challenging setting
+for privacy (n = p), so we consider a low privacy regime
+with (cid:15) = 10, δ = 1/n2. Privacy accounting for DP-SGD
+is done by numerically evaluating the Rényi DP formula
+given by the sampled Gaussian mechanism (Mironov et al.,
+2019). Similarly for DP-CD, we do not use the closed-form
+formula of Theorem 3.1 but rather numerically evaluate the
+tighter Rényi DP formula given in Appendix B.
+
+For DP-SGD, we use constant step sizes and standard gra-
+dient clipping. For DP-CD, we adapt the coordinate-wise
+clipping thresholds from one hyperparameter, as described
+in Section 5.1. Similarly, coordinate-wise step sizes are set
+to γj = γ/Mj, where γ is a hyperparameter. When the
+coordinate-wise smoothness constants are not all equal, we
+also consider DP-CD with privately computed Mj’s, as de-
+scribed in Section 5.2. For each dataset and each algorithm,
+we simultaneously tune the clipping threshold, the number
+
+4i.e., (cid:96)(w, (x, y)) = (w(cid:62)x − y)2, ψ(w) = λ (cid:107)w(cid:107)1.
+5i.e., (cid:96)(w, (x, y)) = log(1+exp(−yw(cid:62)x)), ψ(w) = λ
+
+2 (cid:107)w(cid:107)2
+2.
+
+Relative Error toNon-Private Opt01020304050Passes on data103102101DP-CDDP-SGDDP-CD-PDP-SCD01020304050Passes on data102101100Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+of passes over the dataset and, for DP-CD and DP-SGD, the
+step sizes. After tuning these parameters, we report the rela-
+tive error to the (non-private) optimal objective value. The
+complete tuning procedure is described in Appendix G.1,
+where we also give the best error for various numbers of
+passes for each algorithm and dataset. The code used to
+obtain all our results is available in a public repository6 and
+in the supplementary material.
+
+6.1
+
+Imbalanced Datasets
+
+In the Electricity and California datasets, features are natu-
+rally imbalanced. DP-CD can exploit this through the use
+of coordinate-wise smoothness constants. We also consider
+a variant of DP-CD (DP-CD-P) which dedicates 10% of
+the privacy budget (cid:15) to estimate these constants (see Sec-
+tion 5.2) from a crude upper bound on each feature (twice
+their maximal absolute value). It then uses the resulting pri-
+vate smoothness constants in step sizes and clipping thresh-
+olds. Figure 1 shows that DP-CD outperforms DP-SGD and
+DP-SCD by an order of magnitude on both datasets, even
+when the smoothness constants are estimated privately.
+
+6.2 Balanced Datasets
+
+To assess the performance of DP-CD when coordinate-
+wise smoothness constants are balanced, we standardize
+the Electricity and California datasets (see Section 5.3). As
+standardization is done for all algorithms, we do not ac-
+count for it in the privacy budget. On standardized datasets,
+coordinate-wise smoothness constants are all equal, remov-
+ing the need of estimating them privately. We report the
+results in Figure 2. Although our theory suggests that DP-
+CD may do worse than DP-SGD in balanced regimes, we
+observe that it still improves over DP-SGD (and DP-SCD)
+in practice. Similar observations hold in our challenging
+Sparse LASSO problem, where DP-SGD is barely able to
+make any progress. We believe these results are in part due
+to the beneﬁcial effect of clipping in DP-CD, and the fact
+that DP-SGD relies on ampliﬁcation by subsampling, for
+which privacy accounting is not perfectly tight. Addition-
+ally, CD methods are known to perform well on ﬁtting linear
+models: our results show that this transfers well to private
+optimization.
+
+6.3 Running Time
+
+The results above showed that DP-CD yields better util-
+ity than DP-SGD. We also observe that DP-CD tends to
+reach these results in up to 10 times fewer passes on the
+data than DP-SGD (see Appendix G.1 for detailed results).
+Additionally, when accounting for running time, DP-CD sig-
+
+6https://gitlab.inria.fr/pmangold1/
+
+private-coordinate-descent/
+
+niﬁcantly outperforms DP-SGD: we refer to Appendix G.2
+for the counterparts of Figure 1 and 2 as a function of the
+running time instead of the number of passes.
+
+7 Related Work
+
+DP-ERM. Differentially Private Empirical Risk Minimiza-
+tion was ﬁrst studied by Chaudhuri et al. (2011), using
+output perturbation (adding noise to the solution of the non-
+private ERM problem) and objective perturbation (adding
+noise to the ERM objective itself). Bassily et al. (2014) then
+proposed DP-SGD and proved its near-optimality. Wang
+et al. (2017) obtained faster convergence rates using a DP
+version of the SVRG algorithm (Johnson & Zhang, 2013;
+Xiao & Zhang, 2014). DP-SGD has become the standard
+approach to DP-ERM. In our work, we show that coordinate-
+wise updates can have lower sensitivity than DP-SGD up-
+dates and propose a DP-CD algorithm achieving competi-
+tive results. A private variant of the Frank-Wolfe algorithm
+(DP-FW) was also proposed to solve constrained DP-ERM
+problems (Talwar et al., 2015). Although these algorithms
+achieve a good privacy-utility trade-off in theory, we are
+not aware of any empirical evaluation. DP-FW algorithms
+access gradients indirectly through a linear optimization or-
+acle over a constrained set. Restricting to a constrained set
+is not necessary in DP-CD, allowing its use for a different
+family of problems.
+
+DP-SCO. Recent work has also studied algorithms and
+utility guarantees for stochastic convex optimization under
+differential privacy constraints, a problem very similar to
+DP-ERM. Bassily et al. (2019) (following work from Hardt
+et al., 2016; Bassily et al., 2020) extended results known
+for DP-ERM to this setting, showing that the population
+risk of DP-SCO is asymptotically equivalent to the one of
+non-private SCO. Efﬁcient algorithms for DP-SCO were
+proposed by Feldman et al. (2020); Wang et al. (2022), and
+Asi et al. (2021); Bassily et al. (2021) studied stochastic
+variants of DP-FW. As detailed by Dwork et al. (2015);
+Bassily et al. (2016); Jung et al. (2021) results from DP-
+ERM can be converted to DP-SCO.
+
+Coordinate descent. Coordinate descent (CD) algorithms
+have a long history in optimization. Luo & Tseng (1992);
+Tseng (2001); Tseng & Yun (2009) have shown convergence
+results for (block) CD algorithms for nonsmooth optimiza-
+tion. Nesterov (2012) later proved a global non-asymptotic
+1/k convergence rate for CD with random choice of coordi-
+nates for a convex, smooth objective. Parallel, proximal vari-
+ants were developed by Richtárik & Takáˇc (2014); Fercoq
+& Richtárik (2015), while Hanzely et al. (2018) further con-
+sidered non-separable non-smooth parts. Shalev-Shwartz &
+Zhang (2013) introduced Dual CD algorithms for smooth
+ERM, showing performance similar to SVRG. We refer to
+Wright (2015) and Shi et al. (2017) for detailed reviews on
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+(a) Electricity
+Logistic, λ = 1/n.
+
+(b) California
+LASSO, λ = 0.1.
+
+(c) Sparse
+LASSO, λ = 30.
+
+Figure 2. Relative error to non-private optimal for DP-CD (blue), DP-SGD (orange) and DP-SCD (red, only applicable to the smooth
+case) on three balanced problems. The number of passes is tuned separately for each algorithm to achieve lowest error. We report
+min/mean/max values over 10 runs.
+
+CD. Inexact CD was studied by Tappenden et al. (2016), but
+their analysis requires updates not to increase the objective,
+which is hardly compatible with DP. We obtain tighter re-
+sults for inexact CD with noisy gradients (see Remark 3.4).
+
+Private coordinate descent. Damaskinos et al. (2021) in-
+troduced a CD method to privately solve the dual problem
+associated with generalized linear models with (cid:96)2 regulariza-
+tion. Dual CD is tightly related to SGD, as each coordinate
+in the dual is associated with one data point. The authors
+brieﬂy mention the possibility of performing primal coor-
+dinate descent but discard it on account of the seemingly
+large sensitivity of its updates. We show that primal DP-CD
+is in fact quite effective, and can be used to solve more gen-
+eral problems than considered by Damaskinos et al. (2021).
+Primal CD was successfully used by Bellet et al. (2018)
+to privately learn personalized models from decentralized
+datasets. For the smooth objective they consider, each coor-
+dinate depends only on a subset of the full dataset, which
+directly yields low coordinate-wise sensitivity updates. In
+contrast, we introduce a general algorithm for composite
+DP-ERM, for which a novel utility analysis was required.
+
+8 Conclusion and Discussion
+
+We presented the ﬁrst differentially private proximal coordi-
+nate descent algorithm for composite DP-ERM. Using an
+original approach to analyze proximal CD with perturbed
+gradients, we derived optimal upper bounds on the privacy-
+utility trade-off achieved by DP-CD. We also prove new
+lower bounds under a component-Lipschitzness assumption,
+and showed that DP-CD matches these bounds. Our results
+demonstrate that DP-CD strongly outperforms DP-SGD
+when gradients’ coordinates are imbalanced. Numerical
+experiments show that DP-CD also performs very well in
+balanced regimes. The choice of coordinate-wise clipping
+thresholds is crucial for DP-CD to achieve good utility in
+practice, and we provided a simple rule to set them.
+
+Although DP-CD already achieves good utility when most
+
+coordinates have small sensitivity, our lower bounds suggest
+that even better utility could be achieved by dynamically
+allocating more privacy budget to coordinates with largest
+sensitivities. A promising direction is to design DP-CD
+algorithms that leverage active set methods (Yuan et al.,
+2010; Lewis & Wright, 2016; Nutini et al., 2017; De Santis
+et al., 2016; Massias et al., 2018), which could provide
+practical alternatives to recent DP-SGD approaches that use
+a subspace assumption (Zhou et al., 2021; Kairouz et al.,
+2021). Finally, we believe that adaptive clipping techniques
+(Pichapati et al., 2019; Thakkar et al., 2021) may help to
+further improve the practical performance of DP-CD when
+coordinate-wise smoothness constants are more balanced.
+
+Acknowledgments
+
+The authors would like to thank the anonymous reviewers
+who provided useful feedback on previous versions of this
+work, which helped to improve the paper.
+
+This work was supported in part by the Inria Exploratory Ac-
+tion FLAMED and by the French National Research Agency
+(ANR) through grant ANR-20-CE23-0015 (Project PRIDE)
+and ANR-20-CHIA-0001-01 (Chaire IA CaMeLOt).
+
+References
+
+Abadi, M., Chu, A., Goodfellow, I., McMahan, H. B.,
+Mironov, I., Talwar, K., and Zhang, L. Deep Learn-
+ing with Differential Privacy. In Proceedings of the 2016
+ACM SIGSAC Conference on Computer and Communica-
+tions Security, pp. 308–318, 2016.
+
+Asi, H., Feldman, V., Koren, T., and Talwar, K. Private
+stochastic convex optimization: Optimal rates in (cid:96)1 ge-
+ometry. In ICML, volume 139, pp. 393–403, 2021.
+
+Balle, B., Barthe, G., and Gaboardi, M. Privacy Ampliﬁca-
+tion by Subsampling: Tight Analyses via Couplings and
+Divergences. In NeurIPS, 2018.
+
+Relative Error toNon-Private Opt01020304050Passes on data10310210101020304050Passes on data103102101012345Passes on data0.20.40.6DP-CDDP-SGDDP-SCDDifferentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Bassily, R., Smith, A., and Thakurta, A. Private Empirical
+Risk Minimization: Efﬁcient Algorithms and Tight Error
+Bounds. In 2014 IEEE 55th Annual Symposium on Foun-
+dations of Computer Science, pp. 464–473, Philadelphia,
+PA, USA, October 2014. IEEE.
+
+Bassily, R., Nissim, K., Smith, A., Steinke, T., Stemmer,
+U., and Ullman, J. Algorithmic stability for adaptive
+data analysis. In Proceedings of the Forty-Eighth Annual
+ACM Symposium on Theory of Computing, STOC ’16, pp.
+1046–1059, New York, NY, USA, June 2016. Association
+for Computing Machinery.
+
+Bassily, R., Feldman, V., Talwar, K., and Guha Thakurta,
+A. Private Stochastic Convex Optimization with Optimal
+Rates. In Advances in Neural Information Processing
+Systems, volume 32. Curran Associates, Inc., 2019.
+
+Bassily, R., Feldman, V., Guzmán, C., and Talwar, K. Stabil-
+ity of Stochastic Gradient Descent on Nonsmooth Convex
+Losses. In Advances in Neural Information Processing
+Systems, volume 33, pp. 4381–4391. Curran Associates,
+Inc., 2020.
+
+Bassily, R., Guzman, C., and Nandi, A. Non-Euclidean
+Differentially Private Stochastic Convex Optimization. In
+COLT, pp. 474–499. PMLR, 2021.
+
+Bellet, A., Guerraoui, R., Taziki, M., and Tommasi, M.
+Personalized and Private Peer-to-Peer Machine Learning.
+In International Conference on Artiﬁcial Intelligence and
+Statistics, pp. 473–481. PMLR, March 2018.
+
+Bun, M. and Steinke, T. Concentrated Differential Privacy:
+Simpliﬁcations, Extensions, and Lower Bounds. In Hirt,
+M. and Smith, A. (eds.), Theory of Cryptography, Lec-
+ture Notes in Computer Science, pp. 635–658, Berlin,
+Heidelberg, 2016. Springer.
+
+Bun, M., Ullman, J., and Vadhan, S. Fingerprinting codes
+and the price of approximate differential privacy.
+In
+STOC, pp. 10, 2014.
+
+Candès, E. J., Wakin, M. B., and Boyd, S. P. Enhancing
+sparsity by reweighted l1 minimization. J. Fourier Anal.
+Applicat., 14(5-6):877–905, 2008.
+
+Chang, K.-W., Hsieh, C.-J., and Lin, C.-J. Coordinate De-
+scent Method for Large-scale L2-loss Linear Support
+Vector Machines. J. Mach. Learn. Res., 9:1369–1398,
+June 2008.
+
+Chaudhuri, K., Monteleoni, C., and Sarwate, A. D. Differ-
+entially Private Empirical Risk Minimization. J. Mach.
+Learn. Res., 12(29):1069–1109, 2011.
+
+Damaskinos, G., Mendler-Dünner, C., Guerraoui, R., Papan-
+dreou, N., and Parnell, T. Differentially Private Stochastic
+
+Coordinate Descent. In Proceedings of the AAAI Confer-
+ence on Artiﬁcial Intelligence, volume 35, May 2021.
+
+De Santis, M., Lucidi, S., and Rinaldi, F. A fast active
+set block coordinate descent algorithm for (cid:96)1-regularized
+least squares. SIAM J. Optim., 26(1):781–809, January
+2016.
+
+Dwork, C. Differential Privacy. In Bugliesi, M., Preneel, B.,
+Sassone, V., and Wegener, I. (eds.), Automata, Languages
+and Programming, Lecture Notes in Computer Science,
+pp. 1–12, Berlin, Heidelberg, 2006. Springer.
+
+Dwork, C. and Roth, A. The Algorithmic Foundations
+of Differential Privacy. Foundations and Trends® in
+Theoretical Computer Science, 9(3-4):211–407, 2014.
+
+Dwork, C., McSherry, F., Nissim, K., and Smith, A. Cali-
+brating Noise to Sensitivity in Private Data Analysis. In
+Halevi, S. and Rabin, T. (eds.), Theory of Cryptography,
+Lecture Notes in Computer Science, pp. 265–284, Berlin,
+Heidelberg, 2006. Springer.
+
+Dwork, C., Feldman, V., Hardt, M., Pitassi, T., Reingold, O.,
+and Roth, A. L. Preserving Statistical Validity in Adap-
+tive Data Analysis. In Proceedings of the Forty-Seventh
+Annual ACM Symposium on Theory of Computing, STOC
+’15, pp. 117–126, New York, NY, USA, June 2015. Asso-
+ciation for Computing Machinery.
+
+Electricity. Electricity Dataset. URL https://www.
+
+openml.org/d/151.
+
+Feldman, V., Koren, T., and Talwar, K. Private stochastic
+convex optimization: Optimal rates in linear time. In Pro-
+ceedings of the 52nd Annual ACM SIGACT Symposium
+on Theory of Computing, pp. 439–449. Association for
+Computing Machinery, New York, NY, USA, June 2020.
+
+Fercoq, O. and Richtárik, P. Accelerated, parallel and prox-
+imal coordinate descent. SIAM J. Optim., 25(3):1997–
+2013, 2015.
+
+Friedman, J., Hastie, T., and Tibshirani, R. Regularization
+Paths for Generalized Linear Models via Coordinate De-
+scent. Journal of Statistical Software, 33(1):1–22, 2010.
+ISSN 1548-7660.
+
+Hanzely, F., Mishchenko, K., and Richtárik, P. SEGA: Vari-
+ance reduction via gradient sketching. In Advances in
+Neural Information Processing Systems, NIPS’18, pp.
+2086–2097, Red Hook, NY, USA, December 2018. Cur-
+ran Associates Inc.
+
+Hanzely, F., Kovalev, D., and Richtárik, P. Variance reduced
+coordinate descent with acceleration: New method with
+a surprising application to ﬁnite-sum problems. In ICML,
+volume 119, pp. 4039–4048. PMLR, 2020.
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Hardt, M., Recht, B., and Singer, Y. Train faster, generalize
+better: Stability of stochastic gradient descent. In ICML,
+pp. 1225–1234. PMLR, June 2016.
+
+Mironov, I. Renyi Differential Privacy. 2017 IEEE 30th
+Computer Security Foundations Symposium (CSF), pp.
+263–275, August 2017. arXiv: 1702.07476.
+
+Holland, P. W. and Welsch, R. E. Robust regression using
+iteratively reweighted least-squares. Communications in
+Statistics - Theory and Methods, 6(9):813–827, January
+1977.
+
+Johnson, R. and Zhang, T. Accelerating stochastic gradient
+descent using predictive variance reduction. In Burges,
+C. J. C., Bottou, L., Welling, M., Ghahramani, Z., and
+Weinberger, K. Q. (eds.), Advances in Neural Information
+Processing Systems, volume 26. Curran Associates, Inc.,
+2013.
+
+Jung, C., Ligett, K., Neel, S., Roth, A., Shariﬁ-Malvajerdi,
+S., and Shenfeld, M. A new analysis of differential pri-
+vacy&#x2019;s generalization guarantees (invited paper).
+In Proceedings of the 53rd Annual ACM SIGACT Sym-
+posium on Theory of Computing, pp. 9. Association for
+Computing Machinery, New York, NY, USA, June 2021.
+
+Kairouz, P., Diaz, M. R., Rush, K., and Thakurta, A.
+(Nearly) Dimension Independent Private ERM with Ada-
+Grad Rates via Publicly Estimated Subspaces. In Belkin,
+M. and Kpotufe, S. (eds.), COLT, volume 134 of Pro-
+ceedings of Machine Learning Research, pp. 2717–2746.
+PMLR, 2021.
+
+Karimireddy, S. P., Koloskova, A., Stich, S. U., and Jaggi,
+M. Efﬁcient Greedy Coordinate Descent for Composite
+Problems. In The 22nd International Conference on Arti-
+ﬁcial Intelligence and Statistics, pp. 2887–2896. PMLR,
+April 2019.
+
+Kelley Pace, R. and Barry, R. Sparse spatial autoregressions.
+Statistics & Probability Letters, 33, May 1997. doi: 10.
+1016/S0167-7152(96)00140-X.
+
+Lewis, A. S. and Wright, S. J. A proximal method for
+composite minimization. Mathematical Programming,
+158(1):501–546, July 2016.
+
+Liu, H., Palatucci, M., and Zhang, J. Blockwise coordinate
+descent procedures for the multi-task lasso, with appli-
+cations to neural semantic basis discovery. In ICML, pp.
+649–656, New York, NY, USA, June 2009. Association
+for Computing Machinery.
+
+Mironov, I., Talwar, K., and Zhang, L. R\’enyi Differ-
+ential Privacy of the Sampled Gaussian Mechanism.
+arXiv:1908.10530 [cs, stat], August 2019.
+
+Nesterov, Y. Efﬁciency of coordinate descent methods on
+huge-scale optimization problems. SIAM J. Optim., 22
+(2):341–362, 2012.
+
+Nutini, J., Schmidt, M., Laradji, I., Friedlander, M., and
+Koepke, H. Coordinate Descent Converges Faster with
+the Gauss-Southwell Rule Than Random Selection. In
+ICML, pp. 1632–1641. PMLR, June 2015.
+
+Nutini, J., Laradji, I., and Schmidt, M. Let’s Make Block Co-
+ordinate Descent Go Fast: Faster Greedy Rules, Message-
+Passing, Active-Set Complexity, and Superlinear Conver-
+gence. arXiv:1712.08859 [math], December 2017.
+
+Parikh, N. and Boyd, S. Proximal Algorithms. Foundations
+and Trends in Optimization, 1(3):127–239, January 2014.
+
+Pichapati, V., Suresh, A. T., Yu, F. X., Reddi, S. J., and
+Kumar, S. AdaCliP: Adaptive Clipping for Private SGD.
+arXiv:1908.07643 [cs, stat], October 2019.
+
+Richtárik, P. and Takáˇc, M. Iteration complexity of random-
+ized block-coordinate descent methods for minimizing
+a composite function. Mathematical Programming, 144
+(1-2):1–38, April 2014.
+
+Sardy, S., Bruce, A. G., and Tseng, P. Block Coordinate Re-
+laxation Methods for Nonparametric Wavelet Denoising.
+Journal of Computational and Graphical Statistics, 9(2):
+361–379, June 2000.
+
+Shalev-Shwartz, S. and Zhang, T. Stochastic dual coordinate
+ascent methods for regularized loss. J. Mach. Learn. Res.,
+14(1):567–599, February 2013.
+
+Shi, H.-J. M., Tu, S., Xu, Y., and Yin, W. A Primer on Co-
+ordinate Descent Algorithms. arXiv:1610.00040 [math,
+stat], January 2017.
+
+Shokri, R., Stronati, M., Song, C., and Shmatikov, V. Mem-
+bership Inference Attacks Against Machine Learning
+Models. In 2017 IEEE Symposium on Security and Pri-
+vacy (SP), pp. 3–18, May 2017. doi: 10.1109/SP.2017.41.
+
+Luo, Z.-Q. and Tseng, P. On the convergence of the coordi-
+nate descent method for convex differentiable minimiza-
+tion. J. Optim. Theory Appl., 72(1):7–35, 1992.
+
+Talwar, K., Guha Thakurta, A., and Zhang, L. Nearly Op-
+timal Private LASSO. Advances in Neural Information
+Processing Systems, 28, 2015.
+
+Massias, M., Gramfort, A., and Salmon, J. Celer: a Fast
+Solver for the Lasso with Dual Extrapolation. In ICML,
+volume 80, pp. 3315–3324, 2018.
+
+Tappenden, R., Richtárik, P., and Gondzio, J. Inexact Co-
+ordinate Descent: Complexity and Preconditioning. J.
+Optim. Theory Appl., 170(1):144–176, July 2016.
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Thakkar, O., Andrew, G., and McMahan, H. B. Differen-
+tially Private Learning with Adaptive Clipping. In Ad-
+vances in Neural Information Processing Systems, 2021.
+
+Tseng, P. Convergence of a block coordinate descent method
+for nondifferentiable minimization. J. Optim. Theory
+Appl., 109(3):475–494, 2001.
+
+Tseng, P. and Yun, S. Block-coordinate gradient descent
+method for linearly constrained nonsmooth separable op-
+timization. J. Optim. Theory Appl., 140(3):513, 2009.
+
+van Erven, T. and Harremoës, P. Rényi divergence and
+Kullback-Leibler divergence. IEEE Transactions on In-
+formation Theory, 60(7):3797–3820, July 2014.
+
+Wang, D., Ye, M., and Xu, J. Differentially private empiri-
+cal risk minimization revisited: Faster and more general.
+In Guyon, I., Luxburg, U. V., Bengio, S., Wallach, H.,
+Fergus, R., Vishwanathan, S., and Garnett, R. (eds.), Ad-
+vances in Neural Information Processing Systems, vol-
+ume 30. Curran Associates, Inc., 2017.
+
+Wang, P., Lei, Y., Ying, Y., and Zhang, H. Differentially pri-
+vate SGD with non-smooth losses. Applied and Compu-
+tational Harmonic Analysis, 56:306–336, January 2022.
+
+Wright, S. J. Coordinate descent algorithms. Mathematical
+
+Programming, 151(1):3–34, June 2015.
+
+Xiao, L. and Zhang, T. A Proximal Stochastic Gradient
+Method with Progressive Variance Reduction. SIAM J.
+Optim., 24(4):2057–2075, January 2014.
+
+Yuan, G.-X., Chang, K.-W., Hsieh, C.-J., and Lin, C.-J.
+A Comparison of Optimization Methods and Software
+for Large-scale L1-regularized Linear Classiﬁcation. J.
+Mach. Learn. Res., 11:3183–3234, December 2010.
+
+Zhou, Y., Wu, S., and Banerjee, A. Bypassing the ambient
+dimension: Private SGD with gradient subspace identiﬁ-
+cation. In ICLR, 2021.
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+A Lemmas on Sensitivity
+
+In this section, we let X be the universe where the data is drawn from. To upper bound the sensitivities of a function’s
+gradient, we start by recalling in Lemma A.1 that (coordinate) gradients are bounded by (coordinate-wise-)Lipschitz
+constants. We then link this upper bound with gradients’ sensitivities in Lemma A.2.
+Lemma A.1. Let (cid:96) : Rp × X → R be convex and differentiable in its ﬁrst argument, Λ > 0 and L1, . . . , Lp > 0.
+
+1. If (cid:96)(·; d) is Λ-Lipschitz for all d ∈ X , then (cid:107)∇(cid:96)(w; d)(cid:107)2 ≤ Λ for all w ∈ Rp and d ∈ X .
+2. If (cid:96)(·; d) is L-component-Lipschitz for all d ∈ X , then |∇j(cid:96)(w; d)| ≤ Lj for all w ∈ Rp, d ∈ X and j ∈ [p].
+
+Proof. Let d ∈ X . We start by proving the ﬁrst statement. First, if ∇(cid:96)(w; d) = 0, (cid:107)∇(cid:96)(w; d)(cid:107)2 = 0 ≤ Λ and the result
+holds. Second, we focus on the case where ∇(cid:96)(w; d) (cid:54)= 0. The convexity of (cid:96) gives, for w ∈ Rp, d ∈ X :
+
+(cid:96)(w + ∇(cid:96)(w; d); d) ≥ (cid:96)(w; d) + (cid:104)∇(cid:96)(w; d), ∇(cid:96)(w; d)(cid:105) = (cid:96)(w; d) + (cid:107)∇(cid:96)(w; d)(cid:107)2
+
+2 ,
+
+then, reorganizing the terms and using Λ-Lipschitzness of (cid:96) yields
+
+(cid:107)∇(cid:96)(w; d)(cid:107)2
+
+2 ≤ (cid:96)(w + ∇(cid:96)(w; d); d) − (cid:96)(w; d) ≤ |(cid:96)(w + ∇(cid:96)(w; d); d) − (cid:96)(w; d)| ≤ Λ (cid:107)∇(cid:96)(w; d)(cid:107)2 ,
+
+(7)
+
+(8)
+
+and the result follows after dividing by (cid:107)∇(cid:96)(w; d)(cid:107)2. To prove the second statement, we set j ∈ [p], and w ∈ Rp, and
+remark that if ∇j(cid:96)(w; d) = 0, then |∇j(cid:96)(w; d)| ≤ Lj. When ∇j(cid:96)(w; d) (cid:54)= 0, the convexity of (cid:96) yields
+
+(cid:96)(w + ∇j(cid:96)(w; d)ej; d) ≥ (cid:96)(w; d) + (cid:104)∇(cid:96)(w; d), ∇j(cid:96)(w; d)ej(cid:105) = (cid:96)(w; d) + ∇j(cid:96)(w; d)2 .
+
+(9)
+
+Reorganizing the terms and using L-component-Lipschitzness of (cid:96) gives
+
+∇j(cid:96)(w; d)2 ≤ (cid:96)(w + ∇j(cid:96)(w; d)ej; d) − (cid:96)(w; d) ≤ |(cid:96)(w + ∇j(cid:96)(w; d)ej; d) − (cid:96)(w; d)| ≤ Lj |∇j(cid:96)(w; d)|
+
+,
+
+(10)
+
+and we get the result after dividing by |∇j(cid:96)(w; d)|.
+
+Lemma A.2. Let (cid:96) : Rp × X → R be convex and differentiable in its 1st argument, Λ > 0 and L1, . . . , Lp > 0.
+
+1. If (cid:96)(·; d) is Λ-Lipschitz for all d ∈ X , then ∆(∇(cid:96)) ≤ 2Λ.
+
+2. If (cid:96)(·; d) is L-component-Lipschitz for all d ∈ X , then ∆(∇j(cid:96)) ≤ Lj for all j ∈ [p].
+
+Proof. We start by proving the ﬁrst statement. Let w, w(cid:48) ∈ Rp, d, d(cid:48) ∈ X . From the triangle inequality and Lemma A.1, we
+get the following upper bounds:
+
+(cid:107)∇(cid:96)(w; d) − ∇(cid:96)(w(cid:48); d(cid:48))(cid:107)2 ≤ |∇(cid:96)(w; d)| + |∇(cid:96)(w(cid:48); d(cid:48))| ≤ 2Λ ,
+
+(11)
+
+which is the claim of the ﬁrst statement. To prove the second statement, we proceed similarly: the triangle inequality and
+Lemma A.1 give the following upper bounds:
+
+|∇j(cid:96)(w; d) − ∇j(cid:96)(w(cid:48); d(cid:48))| ≤ |∇j(cid:96)(w; d)| + |∇j(cid:96)(w(cid:48); d(cid:48))| ≤ 2Lj ,
+
+(12)
+
+which is the desired result.
+
+We obtain the inequality (2) stated in Section 2 as a corollary.
+Corollary A.3. Let L1, . . . , Lp > 0. Let (cid:96)(·; d) : Rp → R be a convex, L-component-Lipschitz function for all d ∈ X .
+Then
+
+∆M −1(∇(cid:96)) =
+
+(cid:16)
+
+p
+(cid:88)
+
+j=1
+
+1
+Mj
+
+∆(∇j(cid:96))2(cid:17) 1
+
+2
+
+≤
+
+(cid:16)
+
+p
+(cid:88)
+
+j=1
+
+(cid:17) 1
+
+2
+
+L2
+j
+
+4
+Mj
+
+= 2 (cid:107)L(cid:107)M −1
+
+.
+
+(13)
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+B Proof of Theorem 3.1
+
+To track the privacy loss of an adaptive composition of K Gaussian mechanisms, we use Rényi Differential Privacy (Mironov,
+2017, RDP). We note that similar results are obtained with zero Concentrated Differential Privacy (Bun & Steinke, 2016).
+This ﬂavor of differential privacy, gives tighter privacy guarantees in that setting, as it reduces the noise variance by a
+multiplicative factor of log(K/δ) in comparison to the usual advanced composition theorem of differential privacy (Dwork
+et al., 2006). Importantly, RDP can be translated back to differential privacy.
+
+In this section, we recall the deﬁnition and main properties of zCDP. We denote by D the set of all datasets over a universe
+X and by F the set of possible outcomes of the randomized algorithms we consider.
+
+B.1 Rényi Differential Privacy
+
+We will use the Rényi divergence (Deﬁnition B.1), which gives a distribution-oriented vision of privacy.
+
+Deﬁnition B.1 (Rényi divergence, van Erven & Harremoës 2014). For two random variables Y and Z with values in the
+same domain C, the Rényi divergence is, for α > 1,
+
+Dα(Y ||Z) =
+
+1
+α − 1
+
+log
+
+(cid:90)
+
+C
+
+Pr [Y = z]α Pr [Z = z]1−α dz .
+
+(14)
+
+We now deﬁne RDP in Deﬁnition B.2. RDP provides a strong privacy guarantee that can be converted to classical differential
+privacy (Lemma B.3 and Corollary B.8).
+
+Deﬁnition B.2 (Rényi Differential Privacy, Mironov 2017). A randomized algorithm A : D → F is (α, (cid:15))-Rényi-
+differentially private (RDP) if, for all all datasets D, D(cid:48) ∈ D differing on at most one element,
+
+Dα(A(D)||A(D(cid:48))) ≤ (cid:15) .
+
+(15)
+
+Lemma B.3 (Mironov 2017, Proposition 3). If a randomized algorithm A : D → F is (α, (cid:15))-RDP, then it is ((cid:15) + log(1/δ)
+differentially private for all 0 < δ < 1.
+
+α−1 , δ)-
+
+Remark B.4. The above (α, (cid:15))-RDP guarantees hold for multiple values of α, (cid:15). As such, (cid:15) = (cid:15)(α) can be seen as a
+function of α, and Lemma B.3 ensures that the algorithm is ((cid:15)(cid:48), δ)-DP for
+
+(cid:15)(cid:48) = min
+α>1
+
+(cid:26)
+
+(cid:15)(α) +
+
+log(1/δ)
+α − 1
+
+(cid:27)
+
+.
+
+(16)
+
+We can now restate in Theorem B.5 the composition theorem of RDP, which is key in designing private iterative algorithms.
+
+Theorem B.5 (Mironov 2017, Proposition 1). Let A1, . . . , AK : D → F be K > 0 randomized algorithms, such that for
+1 ≤ k ≤ K, Ak is (α, (cid:15)k(α))-RDP, where these algorithms can be chosen adaptively (i.e., Ak can use to the output of Ak(cid:48) for
+all k(cid:48) < k). Let A : D → F K such that for D ∈ D, A(D) = (A1(D), . . . , AK(D)). Then A is
+-RDP.
+
+α, (cid:80)K
+
+(cid:16)
+
+(cid:17)
+
+k=1 (cid:15)k(α)
+
+Finally, we deﬁne the Gaussian mechanism (Deﬁnition B.6), as used in Algorithm 1, and restate in Lemma B.7 the privacy
+guarantees that it satisﬁes in terms of RDP.
+Deﬁnition B.6 (Gaussian mechanism). Let f : D → Rp, σ > 0, and D ∈ D. The Gaussian mechanism for answering the
+query f is deﬁned as:
+
+MGauss
+f
+
+(D; σ) = f (D) + N (cid:0)0, σ2Ip
+
+(cid:1) .
+
+(17)
+
+Lemma B.7 (Mironov 2017, Corollary 3). The Gaussian mechanism with noise σ2 is (α, ∆(f )2α
+supD,D(cid:48) (cid:107)f (D) − f (D(cid:48))(cid:107)2 (for neighboring D, D(cid:48)) is the sensitivity of f .
+
+2σ2
+
+)-RDP, where ∆(f ) =
+
+Proof. The function h = f
+(Mironov, 2017, Corollary 1). As f = ∆(f ) × h, we have MGauss
+thus (α, ∆(f )2α
+
+∆(f ) has sensitivity 1, thus for any s > 0, the Gaussian mechanism MGauss
+h
+(·; σ
+
+(·; σ) = ∆(f ) × MGauss
+
+)-RDP.
+
+h
+
+f
+
+(·; s) is (α, α
+
+2σ2 )-RDP
+∆(f ) ). This mechanism is
+
+2σ2
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Corollary B.8. Let 0 < (cid:15) ≤ 1, 0 < δ < 1
+
+3 . If a randomized algorithm A : D → F is (α, γα
+
+2σ2 )-RDP with γ > 0 and
+
+√
+
+σ =
+
+3γ log(1/δ)
+
+(cid:15)
+
+for all α > 1, it is also ((cid:15), δ)-DP.
+
+Proof. From Remark B.4 it holds that A is ((cid:15)(cid:48), δ)-DP with (cid:15)(cid:48) = minα>1
+
+(cid:110) γα
+
+2σ2 + log(1/δ)
+
+α−1
+
+(cid:111)
+
+2σ2 = log(1/δ)
+
+(α−1)2 , resulting in α = 1 +
+
+. This minimum is attained when
+(cid:113) 2 log(1/δ)σ2
+γ
+
+. A is thus
+
+the derivative of the objective is zero, which is the case when γ
+((cid:15)(cid:48), δ)-DP with
+
+(cid:15)(cid:48) =
+
+γ
+2σ2 +
+
+(cid:112)γ log(1/δ)
+√
+2σ
+
++
+
+(cid:112)γ log(1/δ)
+√
+2σ
+
+=
+
+γ
+2σ2 +
+
+(cid:112)2γ log(1/δ)
+σ
+
+.
+
+Choosing σ =
+
+√
+
+3γ log(1/δ)
+
+(cid:15)
+
+now gives
+
+(cid:15)(cid:48) =
+
+(cid:15)2
+6 log(1/δ)
+
++ (cid:112)2/3(cid:15) ≤ (1/6 + (cid:112)2/3)(cid:15) ≤ (cid:15) ,
+
+(18)
+
+(19)
+
+where the ﬁrst inequality comes from (cid:15) ≤ 1, thus (cid:15)2 ≤ (cid:15) and δ < 1/3 thus
+from 1/6 + (cid:112)2/3 ≈ 0.983 < 1.
+
+1
+
+log(1/δ) ≤ 1. The second inequality follows
+
+B.2 Proof of Theorem 3.1
+
+We are now ready to prove Theorem 3.1. From the privacy perspective, Algorithm 1 adaptively releases and post-processes a
+series of gradient coordinates protected by the Gaussian mechanism. We thus start by proving Lemma B.9, which gives an
+((cid:15), δ)-differential privacy guarantee for the adaptive composition of K Gaussian mechanisms.
+Lemma B.9. Let 0 < (cid:15) ≤ 1, δ < 1/3, K > 0, p > 0, and {fk : Rp → R}k=K
+composition of K Gaussian mechanisms, with the k-th mechanism releasing fk with noise scale σk =
+((cid:15), δ)-differentially private.
+
+k=1 a family of K functions. The adaptive
+is
+
+3K log(1/δ)
+
+∆(fk)
+
+√
+
+(cid:15)
+
+Proof. Let σ > 0. Lemma B.7 guarantees that the k-th Gaussian mechanism with noise scale σk = ∆(fk)σ > 0 is
+(α, α
+2σ2 )-RDP. This can be
+
+2σ2 )-RDP. Then, the composition of these K mechanisms is, according to Theorem B.5, (α, kα
+for k ∈ [K].
+
+converted to ((cid:15), δ)-DP via Corollary B.8 with γ = K, which gives σk =
+
+∆(fk)
+
+√
+
+3k log(1/δ)
+(cid:15)
+
+We now restate Theorem 3.1 and prove it.
+
+Theorem 3.1. Assume (cid:96)(·; d) is L-component-Lipschitz ∀d ∈ X . Let (cid:15) < 1 and δ < 1/3. If σ2
+j ∈ [p], then Algorithm 1 satisﬁes ((cid:15), δ)-DP.
+
+j =
+
+12L2
+
+j T K log(1/δ)
+
+n2(cid:15)2
+
+for all
+
+Proof. For j ∈ [1, p], ∇jf in Algorithm 1 is released using the Gaussian mechanism with noise variance σ2
+of ∇jf is ∆(∇jf ) = ∆(∇j (cid:96))
+
+n . Note that T K gradients are released, and
+
+n ≤ 2Lj
+
+j . The sensitivity
+
+σ2
+j =
+
+12L2
+
+j T K log(1/δ)
+
+n2(cid:15)2
+
+for j ∈ [1, p] ,
+
+thus by Lemma B.9 and the post-processing property of DP, Algorithm 1 is ((cid:15), δ)-differentially private.
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+C Proof of Utility (Theorem 3.3)
+
+C.1 Problem Statement
+
+Let D ∈ X n be a dataset of n elements drawn from a universe X . Recall that we consider the following composite empirical
+risk minimization problem:
+
+(cid:40)
+
+w∗ ∈ arg min
+
+w∈Rp
+
+F (w; D) =
+
+1
+n
+(cid:124)
+
+n
+(cid:88)
+
+(cid:41)
+
+(cid:96)(w; di)
+
++ψ(w)
+
+,
+
+i=1
+
+(cid:123)(cid:122)
+=:f (w;D)
+
+(cid:125)
+
+(20)
+
+where (cid:96)(·, d) is convex, L-component-Lipschitz, and M -component-smooth for all d ∈ X , and ψ(w) = (cid:80)p
+j=1 ψj(wj) is
+convex and separable. We denote by F the complete objective function, and by f its smooth part. For readability, we omit
+the dependence on their second argument (i.e., the data) in the rest of this section.
+
+C.2 Proof of Theorem 3.3
+
+In this section, we prove our central theorem that guarantees the utility of the DP-CD algorithm. To this end, we start by
+proving a lemma that upper bounds the expected value of F (θk+1) in Algorithm 1. Using this lemma, we prove sub-linear
+convergence for the inner loop of DP-CD. This gives the sub-linear convergence of our algorithm for convex losses. Under
+the additional hypothesis that F is strongly convex, we show that iterates of the outer loop of DP-CD converge linearly
+towards the (unique) minimum of F .
+
+(cid:80)K
+
+We recall that in Algorithm 1, iterates of the inner loop are denoted by θ1, . . . , θK, and those of the outer loop by ¯w1, . . . , ¯wT ,
+with ¯wt = 1
+k=1 θk for t > 0. Algorithm 1 is randomized in two ways: when choosing the coordinate to update and
+K
+when drawing noise. For convenience, we denote by Ej[·] the expectation w.r.t. the choice of coordinate, by Eη[·] the one
+w.r.t. the noise, and by Ej,η[·] the expectation w.r.t. both. When no subscript is used, the expectation is taken over all random
+variables. We will also use the notation Ej,η[·|θk] for the conditional expectation of a random variable, given a realization of
+θk.
+
+C.2.1 DESCENT LEMMA
+
+We begin by proving Lemma C.1, which decomposes the change of a function F when updating its argument θ ∈ Rp, in
+relation to a vector w ∈ Rp, into two parts: one that remains ﬁxed, corresponding to the unchanged entries of θ, and a
+second part corresponding to the objective decrease due to the update. At this point, the vector w is arbitrary, but we will
+later choose w to be a minimizer of F , that is a solution to (20).
+
+Lemma C.1. Let (cid:96), f, ψ, and F be deﬁned as in Section C.1. Take a random variable θ ∈ Rp and two arbitrary
+vectors w, g ∈ Rp. Let a random variable j, taking its values uniformly randomly in [p], Choose γ1, . . . , γp > 0 and
+Γ = diag(γ1, . . . , γp). It holds that
+
+Ej[F (θ − γjgjej) − F (w)|θ] −
+
+p − 1
+p
+
+(F (θ) − F (w))
+
+(cid:18)
+
+≤
+
+1
+p
+
+f (θ) − f (w) + (cid:104)∇f (θ), −Γg(cid:105) +
+
+1
+2
+
+(cid:107)Γg(cid:107)2
+
+M + ψ(θ − Γg) − ψ(w)
+
+(cid:19)
+
+.
+
+(21)
+
+Remark C.2. To avoid notational clutter, we will write γjgj instead of γjgjej throughout this section.
+
+Proof. We start the proof by ﬁnding an upper bound on Ej[F (θ − γjgjej) − F (w)|θ], using the M -component-smoothness
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+of f :
+
+Ej[F (θ − γjgjej) − F (w)|θ] =
+
+p
+(cid:88)
+
+j=1
+
+1
+p
+
+(F (θ − γjgj) − F (w))
+
+F =f +ψ
+=
+
+f smooth
+≤
+
+1
+p
+
+1
+p
+
+p
+(cid:88)
+
+f (θ − γjgj) − f (w) + ψ(θ − γjgj) − ψ(w)
+
+j=1
+p
+(cid:88)
+
+(cid:18)
+
+j=1
+
+f (θ) + (cid:104)∇f (θ), −γjgj(cid:105) +
+
+1
+2
+
+(cid:107)γjgj(cid:107)2
+
+M − f (w) + ψ(θ − γjgj) − ψ(w)
+
+(cid:19)
+
+= f (θ) − f (w) +
+
+= f (θ) − f (w) +
+
+1
+p
+
+1
+p
+
+p
+(cid:88)
+
+(cid:18)
+
+j=1
+
+(cid:104)∇f (θ), −γjgj(cid:105) +
+
+1
+2
+
+(cid:107)γjgj(cid:107)2
+
+M + (ψ(θ − γjgj) − ψ(w))
+
+(cid:19)
+
+(cid:104)∇f (θ), −Γg(cid:105) +
+
+1
+2p
+
+(cid:107)Γg(cid:107)2
+
+M +
+
+1
+p
+
+p
+(cid:88)
+
+j=1
+
+(ψ(θ − γjgj) − ψ(w)) .
+
+(22)
+
+(23)
+
+(24)
+
+(25)
+
+(26)
+
+The regularization terms can now be reorganized using the separability of ψ, as done by (Richtárik & Takáˇc, 2014). Indeed,
+we notice that
+
+p
+(cid:88)
+
+j=1
+
+(ψ(θ − γjgj) − ψ(w)) =
+
+p
+(cid:88)
+
+(cid:16)
+
+j=1
+
+ψj(θj − γjgj) − ψj(wj) +
+
+ψj(cid:48)(θj(cid:48)) − ψ(wj(cid:48))
+
+(cid:17)
+
+(cid:88)
+
+j(cid:48)(cid:54)=j
+
+= ψ(θ − Γg) − ψ(w) + (p − 1)(ψ(θ) − ψ(w)) .
+
+Plugging (28) in (26) results in the following:
+
+Ej[F (θ − γjgjej) − F (w)|θ] ≤ f (θ) − f (w) +
+
+1
+p
+
+(cid:104)∇f (θ), −Γg(cid:105) +
+
+1
+2p
+
+(cid:107)Γg(cid:107)2
+M
+
+1
+p
+
++
+
+(cid:18)
+
+=
+
+1
+p
+
+(ψ(θ − Γg) − ψ(w)) +
+
+p − 1
+p
+
+(ψ(θ) − ψ(w))
+
+f (θ) − f (w) + (cid:104)∇f (θ), −Γg(cid:105) +
+
+(cid:107)Γg(cid:107)2
+
+M + ψ(θ − Γg) − ψ(w)
+
+(cid:19)
+
+1
+2
+
+which gives the lemma since F = f + ψ.
+
++
+
+p − 1
+p
+
+(f (θ) + ψ(θ) − f (w) − ψ(w)) ,
+
+(27)
+
+(28)
+
+(29)
+
+(30)
+
+To exploit this result, we need to upper bound the right hand side of (21) for the realizations of θk in Algorithm 1. This is
+where our proof differs from classical convergence proofs for coordinate descent methods. Namely, we rewrite the right hand
+side of (21) so as to obtain telescopic terms plus a bias term resulting from the addition of noise, as shown in Lemma C.3.
+Lemma C.3. Let (cid:96), f, ψ, and F deﬁned as in Section C.1. For k > 0, let θk and θk+1 be two consecutive iterates of the
+inner loop of Algorithm 1, γ1 = 1
+> 0 the coordinate-wise step sizes (where Mj are the coordinate-
+M1
+j ). Let w ∈ Rp an arbitrary vector and σ1, . . . , σp > 0 the
+wise smoothness constants of f ), and gj = 1
+γj
+coordinate-wise noise scales given as input to Algorithm 1. It holds that
+
+, . . . , γp = 1
+Mp
+(θk+1
+j − θk
+
+Ej,η
+
+(cid:2)F (θk+1) − F (w)(cid:12)
+
+(cid:12)θk(cid:3) −
+
+≤ 1
+2
+
+(cid:13)θk − w(cid:13)
+(cid:13)
+2
+Γ−1 − 1
+(cid:13)
+
+2
+
+p − 1
+p
+(cid:104)(cid:13)
+(cid:13)θk+1 − w(cid:13)
+2
+Ej,η
+(cid:13)
+Γ−1
+
+(F (θk) − F (w))
+(cid:12)θk(cid:105)
+
+(cid:12)
+(cid:12)
+
++ 1
+
+p (cid:107)σ(cid:107)2
+
+Γ ,
+
+(31)
+
+where (cid:107)σ(cid:107)2
+realization of θk.
+
+Γ = (cid:80)p
+
+j=1 γjσ2
+
+j and the expectations are taken over the random choice of j and η, conditioned upon the
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Proof. We deﬁne g the vector (g1, . . . , gp) ∈ Rp with gj = 1
+γj
+We also denote by Γ = diag(γ1, . . . , γp) the diagonal matrix having the step sizes as its coefﬁcients.
+
+j − θk
+
+(θk+1
+
+j ) when coordinate j is chosen in Algorithm 1.
+
+From Lemma C.1 with θ = θk, w = w and g = g as deﬁned above we obtain
+
+Ej
+
+(cid:2)F (θk − γjgjej) − F (w)(cid:12)
+
+(cid:12)θk(cid:3) −
+
+p − 1
+p
+
+(F (θk) − F (w))
+
+(cid:18)
+
+≤
+
+1
+p
+
+f (θk) − f (w) + (cid:10)∇f (θk), −Γg(cid:11) +
+
+1
+2
+
+(cid:107)Γg(cid:107)2
+
+M + ψ(θk − Γg) − ψ(w)
+
+(cid:19)
+
+.
+
+(32)
+
+We can upper bound the right hand term of (32) using the convexity of f and ψ:
+
+f (θk) − f (w) + (cid:10)∇f (θk), −Γg(cid:11) +
+
+1
+2
+
+(cid:107)Γg(cid:107)2
+
+M + ψ(θk − Γg) − ψ(w)
+
+≤ (cid:10)∇f (θk), θk − w(cid:11) + (cid:10)∇f (θk), −Γg(cid:11) +
+
+1
+2
+= (cid:10)∇f (θk) + ∂ψ(θk − Γg), θk − Γg − w(cid:11) +
+
+1
+2
+
+(cid:107)Γg(cid:107)2
+
+M ,
+
+(cid:107)Γg(cid:107)2
+
+M + (cid:10)∂ψ(θk − Γg), θk − Γg − w(cid:11)
+
+(33)
+
+(34)
+
+(35)
+
+where we use the slight abuse of notation ∂ψ(θk − Γg) to denote any vector in the subdifferential of ψ at the point θk − Γg.
+We now rewrite the dot product:
+
+(cid:10)∇f (θk) + ∂ψ(θk − Γg), θk − Γg − w(cid:11) +
+
+1
+2
+
+(cid:107)Γg(cid:107)2
+M
+
+= (cid:10)g, θk − Γg − w(cid:11) +
+
+1
+2
+
+(cid:107)Γg(cid:107)2
+
+M + (cid:10)∇f (θk) + ∂ψ(θk − Γg) − g, θk − Γg − w(cid:11)
+
+= (cid:10)g, θk − w(cid:11) − (cid:107)g(cid:107)2
+
+Γ +
+
+(cid:124)
+
+(cid:123)(cid:122)
+“descent” term
+
+1
+2
+
+(cid:107)g(cid:107)2
+
+Γ2M
+(cid:125)
+
++ (cid:10)∇f (θk) + ∂ψ(θk − Γg) − g, θk − Γg − w(cid:11)
+(cid:123)(cid:122)
+(cid:125)
+“noise” term
+
+(cid:124)
+
+,
+
+(36)
+
+(37)
+
+(38)
+
+where the second equality follows from (cid:104)g, −Γg(cid:105) = − (cid:107)g(cid:107)2
+“descent” term and a “noise” term.
+
+Γ and (cid:107)Γg(cid:107)2
+
+M = (cid:107)g(cid:107)2
+
+Γ2M . We split (38) into two terms: a
+
+Rewriting the “descent” term. We ﬁrst focus on the “descent” term. As γj = 1
+Mj
+which gives − (cid:107)g(cid:107)2
+Γ + 1
+of two norms, materializing the distance to w, weighted by the inverse of the step sizes Γ−1:
+
+j Mj = γj
+Γ. We can now rewrite the “descent” term as a difference
+
+for all j ∈ [p], it holds that γ2
+
+Γ2M = − (cid:107)g(cid:107)2
+
+Γ = − 1
+
+2 (cid:107)g(cid:107)2
+
+2 (cid:107)g(cid:107)2
+
+2 (cid:107)g(cid:107)2
+
+Γ + 1
+
+“descent” term = (cid:10)g, θk − w(cid:11) −
+
+1
+2
+
+= (cid:10)Γg, θk − w(cid:11)
+
+Γ−1 −
+1
+2
+1
+2
+
+(cid:13)
+(cid:13)θk − w(cid:13)
+2
+Γ−1 −
+(cid:13)
+(cid:13)
+(cid:13)θk − w(cid:13)
+2
+Γ−1 −
+(cid:13)
+
+=
+
+=
+
+1
+2
+1
+2
+
+(cid:107)g(cid:107)2
+Γ
+1
+2
+(cid:13)
+(cid:13)θk − w(cid:13)
+2
+Γ−1 + (cid:10)Γg, θk − w(cid:11)
+(cid:13)
+
+(cid:107)Γg(cid:107)2
+
+Γ−1
+
+(cid:13)
+(cid:13)θk − Γg − w(cid:13)
+2
+(cid:13)
+Γ−1
+
+,
+
+Γ−1 −
+
+1
+2
+
+(cid:107)Γg(cid:107)2
+
+Γ−1
+
+(39)
+
+(40)
+
+(41)
+
+(42)
+
+where we factorized the norm to obtain the last inequality. We can rewrite (42) as an expectation over the random choice of
+the coordinate j (drawn uniformly in [p]), given the realizations of θk and of the noise η (which determines g):
+
+1
+2
+
+(cid:13)
+(cid:13)θk − w(cid:13)
+2
+Γ−1 −
+(cid:13)
+
+1
+2
+
+(cid:13)
+(cid:13)θk − Γg − w(cid:13)
+2
+Γ−1 =
+(cid:13)
+
+=
+
+
+
+×
+
+
+
+1
+p
+
+p
+(cid:88)
+
+j=1
+
+(cid:104)
+× Ej
+γ−1
+j
+
+p
+2
+
+p
+2
+
+γ−1
+j
+
+(cid:12)
+(cid:12)θk
+
+j − wj
+
+2
+
+(cid:12)
+(cid:12)
+
+− γ−1
+j
+
+(cid:12)
+(cid:12)θk
+
+j − γjgj − wj
+
+
+
+(cid:12)
+2
+(cid:12)
+
+
+
+(cid:12)
+(cid:12)θk
+
+j − wj
+
+2
+
+(cid:12)
+(cid:12)
+
+− γ−1
+j
+
+(cid:12)
+(cid:12)θk
+
+j − γjgj − wj
+
+(cid:105)
+
+(cid:12)
+(cid:12)
+
+2(cid:12)
+(cid:12)θk, η
+(cid:12)
+
+.
+
+(43)
+
+(44)
+
+Finally, we remark that γ−1
+
+j
+
+(cid:12)
+(cid:12)θk
+
+j − wj
+
+2
+
+(cid:12)
+(cid:12)
+
+− γ−1
+j
+
+(cid:12)
+(cid:12)θk
+
+j − γjgj − wj
+
+2
+
+(cid:12)
+(cid:12)
+
+= (cid:13)
+
+Γ−1 − (cid:13)
+(cid:13)θk − w(cid:13)
+2
+(cid:13)
+
+(cid:13)θk − γjgj − w(cid:13)
+2
+Γ−1 , as only one
+(cid:13)
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+coordinate changes between the two vectors, and the squared norm (cid:107)·(cid:107)2
+
+Γ−1 is separable. We thus obtain
+
+“descent” term = Ej
+p
+2
+
+=
+
+(cid:104) p
+2
+(cid:13)θk − w(cid:13)
+(cid:13)
+2
+Γ−1 −
+(cid:13)
+
+(cid:13)θk − w(cid:13)
+(cid:13)
+2
+Γ−1 −
+(cid:13)
+p
+2
+
+p
+(cid:13)θk − γjgj − w(cid:13)
+(cid:13)
+2
+(cid:13)
+Γ−1
+2
+(cid:12)
+(cid:104)(cid:13)
+(cid:13)θk+1 − w(cid:13)
+2
+Ej
+(cid:12)θk, η
+(cid:12)
+(cid:13)
+Γ−1
+
+(cid:12)
+(cid:12)θk, η
+(cid:12)
+(cid:105)
+.
+
+(cid:105)
+
+(45)
+
+(46)
+
+Upper bounding the “noise” term. We now upper bound the “noise” term in (38). We ﬁrst recall the deﬁnition of the noisy
+proximal update gj (line 7 of Algorithm 1), and deﬁne its non-noisy counterpart ˜gj:
+
+(cid:16)
+
+(cid:16)
+
+gj = γ−1
+
+j
+
+˜gj = γ−1
+
+j
+
+proxγj ψj (θk
+
+j − γj(∇jf (θk) + ηj)) − θk
+j
+
+proxγj ψj (θk
+
+j − γj(∇jf (θk)) − θk
+j
+
+(cid:17)
+
+.
+
+(cid:17)
+
+(47)
+
+(48)
+
+For an update of the coordinate j ∈ [p], the optimality condition of the proximal operator gives, for ηj the realization of the
+noise drawn at the current iteration when coordinate j is chosen:
+
+0 ∈ θk+1
+
+j + γj(∇jf (θk) + ηj)) +
+
+1
+Mj
+
+∂ψj(θk
+
+j − γjgj)
+
+(θk+1
+
+j − θk
+
+j ) + ∇jf (θk) + ηj + ∂ψj(θk
+
+j − γjgj)
+
+j − θk
+(cid:18) 1
+γj
+
+= γj ×
+
+(cid:19)
+
+.
+
+(49)
+
+(50)
+
+j − γjgj) such that gj = − 1
+j ) = ∇jf (θk) + ηj + vj. We denote
+As such, there exists a real number vj ∈ ∂ψj(θk
+γj
+by v ∈ Rp the vector having this vj as j-th coordinate. Recall that ψ is separable, therefore v ∈ ∂ψ(θk − Γg). The “noise”
+term of (38) can be thus be rewritten using v:
+
+j − θk
+
+(θk+1
+
+“noise” term = (cid:10)∇f (θk) + v − g, θk − Γg − w(cid:11) = (cid:10)η, θk − Γg − w(cid:11) ,
+
+(51)
+
+and we now separate this term in two using (cid:101)g:
+
+“noise” term =
+
+p
+(cid:88)
+
+j=1
+
+ηj(θk
+
+j − γjgj − wj) =
+
+p
+(cid:88)
+
+j=1
+
+ηj(θk
+
+j − γj(cid:101)gj − wj) +
+
+p
+(cid:88)
+
+j=1
+
+ηj(γj(cid:101)gj − γjgj) .
+
+(52)
+
+It is now time to consider the expectation with respect to the noise of these terms. First, as (cid:101)gj is not dependent on the noise
+anymore, it simply holds that
+
+(cid:104)
+
+p
+(cid:88)
+
+Eη
+
+j=1
+
+ηj(θk
+
+j − γj(cid:101)gj − wj) | θk(cid:105)
+
+=
+
+p
+(cid:88)
+
+j=1
+
+Eη[ηj] (θk
+
+j − γj(cid:101)gj − wj) = 0 .
+
+The last step of our proof now takes care of the following term:
+
+(cid:104)
+
+p
+(cid:88)
+
+Eη
+
+j=1
+
+ηj(γj(cid:101)gj − γjgj) | θk(cid:105)
+
+≤ Eη
+
+(cid:104)
+
+γj
+
+(cid:12)
+(cid:12)
+(cid:12)
+
+p
+(cid:88)
+
+j=1
+
+(cid:12)
+(cid:12)
+ηj((cid:101)gj − gj)
+
+(cid:12) | θk(cid:105)
+
+≤
+
+p
+(cid:88)
+
+j=1
+
+γjEη
+
+(cid:2) |ηj| |(cid:101)gj − gj| (cid:12)
+
+(cid:12) θk(cid:3) ,
+
+(53)
+
+(54)
+
+where each inequality comes from the triangle inequality. The non-expansiveness property of the proximal operator (see
+Parikh & Boyd (2014), Section 2.3) is now key to our result, as it yields
+
+|(cid:101)gj − gj| = γ−1
+
+j
+
+(cid:12)
+(cid:12)proxγj ψj (θk
+(cid:12)
+
+j − γj(∇jf (θk))) − proxγj ψj (θk
+
+j − γj(∇jf (θk) + ηj))
+
+(cid:12)
+(cid:12)
+(cid:12) ≤ |ηj|
+
+,
+
+which directly gives, as Eη
+
+(cid:2)η2
+
+j
+
+(cid:3) = σ2
+
+j (and (cid:107)σ(cid:107)2
+
+Γ = (cid:80)p
+
+j=1 γjσ2
+j ),
+
+p
+(cid:88)
+
+j=1
+
+γjEη
+
+(cid:2)|ηj| |(cid:101)gj − gj|(cid:12)
+
+(cid:12)θk(cid:3) ≤
+
+p
+(cid:88)
+
+j=1
+
+γjEη[|ηj| |ηj|] =
+
+p
+(cid:88)
+
+j=1
+
+γjEη
+
+(cid:2)η2
+
+j
+
+(cid:3) = (cid:107)σ(cid:107)2
+
+Γ .
+
+(55)
+
+(56)
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+We now have everything to prove the lemma by plugging (56) and (53) into expected value of (52), and then (52) and (42)
+back into (38) to obtain, after using the Tower property of conditional expectations:
+
+(cid:20)
+f (θk) − f (w) + (cid:10)∇f (θk), −Γg(cid:11) +
+Ej,η
+
+1
+p
+
+1
+2
+
+(cid:107)Γg(cid:107)2
+
+M + ψ(θk − Γg) − ψ(w)
+
+(cid:21)
+
+(cid:12)
+(cid:12)
+θk
+(cid:12)
+(cid:12)
+
+≤
+
+≤
+
+1
+p
+1
+2
+
+(“descent” term + “noise” term)
+
+(cid:13)θk − w(cid:13)
+(cid:13)
+2
+Γ−1 −
+(cid:13)
+
+Ej,η
+
+(cid:104)(cid:13)
+(cid:13)θk+1 − w(cid:13)
+2
+(cid:13)
+Γ−1
+
+1
+2
+
+(cid:12)
+(cid:12)
+
+(cid:12)θk(cid:105)
+
++
+
+1
+p
+
+(cid:107)σ(cid:107)2
+
+Γ ,
+
+(57)
+
+(58)
+
+(59)
+
+which is the result of the lemma.
+
+C.2.2 CONVERGENCE LEMMA
+
+Lemma C.3 allows us to prove a result on the mean of K consecutive noisy coordinate-wise gradient updates, by simply
+summing it and rewriting the terms. This gives Lemma C.4, which is the key lemma of our proof.
+Lemma C.4. Assume (cid:96)(·, d) is convex, L-component-Lipschitz and M -component-smooth for all d ∈ X , ψ is convex and
+separable, such that F = f + ψ and w∗ is a minimizer of F . For t ∈ [T ], consider the K successive iterates θ1, . . . , θK
+computed from the inner loop of Algorithm 1 starting from the point ¯wt, with step sizes γj = 1
+and noise scales σj.
+Mj
+Letting ¯wt+1 = 1
+K
+
+k=1 θk, it holds that
+
+(cid:80)K
+
+E(cid:2)F ( ¯wt+1) − F (w∗)(cid:3) ≤
+
+p((cid:107) ¯wt − w∗(cid:107)2
+
+M + 2(F ( ¯wt) − F (w∗)))
+
+2K
+
++ (cid:107)σ(cid:107)2
+
+M −1
+
+.
+
+(60)
+
+Remark C.5. The term F ( ¯wt) − F (w∗) essentially remains in the inequality due to the composite nature of F . When
+ψ = 0, M -component-smoothness of f (·; d) (for d ∈ X ) gives
+
+f ( ¯wt) ≤ f (w∗) + (cid:10)∇f (w∗), ¯wt − w∗(cid:11) +
+
+1
+2
+
+(cid:13) ¯wt − w∗(cid:13)
+(cid:13)
+2
+M = f (w∗) +
+(cid:13)
+
+1
+2
+
+(cid:13) ¯wt − w∗(cid:13)
+(cid:13)
+2
+M ,
+(cid:13)
+
+and the result of Lemma C.4 further simpliﬁes as:
+
+E(cid:2)F ( ¯wt+1) − F (w∗)(cid:3) ≤
+
+p (cid:107) ¯wt − w∗(cid:107)2
+M
+K
+
++ (cid:107)σ(cid:107)2
+
+M −1
+
+.
+
+(61)
+
+(62)
+
+Proof. Summing Lemma C.3 for k = 0 to k = K and w = w∗, taking expectation with respect to all choices of coordinate
+and random noise and using the tower property gives:
+
+K−1
+(cid:88)
+
+k=0
+
+E(cid:2)F (θk+1) − F (w∗)(cid:3) −
+
+p − 1
+p
+
+K−1
+(cid:88)
+
+k=0
+
+E(cid:2)(F (θk) − F (w∗))(cid:3)
+
+≤
+
+=
+
+K−1
+(cid:88)
+
+k=0
+1
+2
+
+(cid:104)(cid:13)
+(cid:13)θk − w∗(cid:13)
+2
+E
+(cid:13)
+Γ−1
+
+(cid:105)
+
+−
+
+1
+2
+
+1
+2
+
+(cid:104)(cid:13)
+(cid:13)θk+1 − w∗(cid:13)
+2
+E
+(cid:13)
+Γ−1
+
+(cid:105)
+
++
+
+1
+p
+
+(cid:107)σ(cid:107)2
+Γ
+
+(cid:104)(cid:13)
+(cid:13) ¯w0 − w∗(cid:13)
+2
+E
+(cid:13)
+Γ−1
+
+(cid:105)
+
+−
+
+1
+2
+
+(cid:104)(cid:13)
+(cid:13)θK − w∗(cid:13)
+2
+E
+(cid:13)
+Γ−1
+
+(cid:105)
+
++
+
+K
+p
+
+(cid:107)σ(cid:107)2
+
+Γ .
+
+(63)
+
+(64)
+
+Remark that (cid:80)K−1
+k=0
+as E(cid:2)F (θK) − F (w∗)(cid:3) ≥ 0, we obtain a lower bound on the left hand side of (64):
+
+E(cid:2)F (θk) − F (w∗)(cid:3) = (cid:80)K
+
+k=1
+
+E(cid:2)F (θk) − F (w∗)(cid:3) + (F ( ¯w0) − F (w∗)) − E(cid:2)F (θK) − F (w∗)(cid:3), then
+
+K−1
+(cid:88)
+
+k=0
+
+E(cid:2)F (θk+1) − F (w∗)(cid:3) − p−1
+
+p
+
+K−1
+(cid:88)
+
+k=0
+
+E(cid:2)(F (θk) − F (w∗))(cid:3) ≥ 1
+
+p
+
+K
+(cid:88)
+
+k=1
+
+E(cid:2)F (θk) − F (w∗)(cid:3) − (F ( ¯w0) − F (w∗)) . (65)
+
+As ¯wt+1 = 1
+K
+and combining the result with (64) gives
+
+k=1 θk, the convexity of F gives F ( ¯wt+1) ≤ 1
+K
+
+(cid:80)K
+
+(cid:80)K
+
+k=1 F (θk) − F (w∗). Plugging this inequality into (65)
+
+F ( ¯wt+1) − F (w∗) ≤
+
+p( 1
+2
+
+(cid:13) ¯w0 − w∗(cid:13)
+(cid:13)
+2
+Γ−1 + F ( ¯w0) − F (w∗))
+(cid:13)
+
+K
+
++ (cid:107)σ(cid:107)2
+
+Γ .
+
+(66)
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+We conclude the proof by using the fact that Γj = M −1
+
+j
+
+for all j ∈ [p], thus (cid:107)·(cid:107)Γ = (cid:107)·(cid:107)M −1 and (cid:107)·(cid:107)Γ−1 = (cid:107)·(cid:107)M .
+
+C.2.3 CONVEX CASE
+
+Theorem 3.3 (Convex case). Let w∗ be a minimizer of F and R2
+wpriv of DP-CD (Algorithm 1), starting from ¯w0 ∈ Rp with T = 1, K > 0 and the σj’s as in Theorem 3.1, satisﬁes:
+
+(cid:13) ¯w0 − w∗(cid:13)
+2
+M , F ( ¯w0) − F (w∗)). The output
+(cid:13)
+
+M = max((cid:13)
+
+F (wpriv) − F (w∗) ≤
+
+3pR2
+M
+2K
+
++
+
+12 (cid:107)L(cid:107)2
+
+M −1 K log(1/δ)
+
+n2(cid:15)2
+
+.
+
+Setting K =
+
+√
+√
+
+pn(cid:15)
+
+RM
+(cid:107)L(cid:107)M −1
+
+8 log(1/δ)
+
+yields:
+
+F (wpriv) − F (w∗) ≤
+
+√
+
+9
+
+p (cid:107)L(cid:107)M −1 RM
+
+(cid:112)log(1/δ)
+
+n(cid:15)
+
+(cid:18) √
+
+= (cid:101)O
+
+pRM (cid:107)L(cid:107)M −1
+n(cid:15)
+
+(cid:19)
+
+.
+
+(67)
+
+(68)
+
+Proof. In the convex case, we iterate only once in the inner loop (since T = 1). As such, wpriv = ¯w1, and applying
+Lemma C.4 with ¯wt+1 = ¯w1, wt = ¯w0 and σj chosen as in Theorem 3.1 gives the result. Taking K =
+then gives
+
+RM
+(cid:107)L(cid:107)M −1
+
+8 log(1/δ)
+
+√
+√
+
+pn(cid:15)
+
+F ( ¯wt+1
+1
+
+) − F (w∗) ≤
+
+2(cid:112)8p log(1/δ) (cid:107)L(cid:107)M −1 RM
+n(cid:15)
+
++
+
+12(cid:112)p log(1/δ) (cid:107)L(cid:107)M −1 RM
+√
+8n(cid:15)
+
+,
+
+(69)
+
+and the result follows from 2
+
+√
+
+8 + 12√
+8
+
+≈ 8.48 < 9.
+
+C.2.4 STRONGLY CONVEX CASE
+
+Theorem 3.3 (Strongly-convex case). Let F be µM -strongly convex w.r.t. (cid:107)·(cid:107)M and w∗ be the minimizer of F . The output
+wpriv of DP-CD (Algorithm 1), starting from ¯w0 ∈ Rp with T > 0, K = 2p(1 + 1/µM ) and the σj’s as in Theorem 3.1,
+satisﬁes:
+
+F (wpriv) − F (w∗) ≤
+
+F ( ¯w0) − F (w∗)
+2T
+
++
+
+24p(1 + 1/µM )T (cid:107)L(cid:107)2
+
+M −1 log(1/δ)
+
+n2(cid:15)2
+
+.
+
+(70)
+
+Setting T = log2
+
+(cid:16) 32n2(cid:15)2(F ( ¯w0)−F (w∗))
+
+(cid:17)
+
+p(1+1/µM )(cid:107)L(cid:107)2
+
+M −1 log(1/δ)
+
+yields:
+
+E(cid:2)F (wpriv) − F (w∗)(cid:3) ≤
+
+(cid:32)
+
+(cid:32)
+
+1 + log2
+
+(F ( ¯w0) − F (w∗))n2(cid:15)2
+
+24p(1 + 1/µM ) (cid:107)L(cid:107)2
+
+M −1 log(1/δ)
+
+(cid:33)(cid:33)
+
+24p(1 + 1/µM ) (cid:107)L(cid:107)2
+
+M −1 log(1/δ)
+
+n2(cid:15)2
+
+(cid:32)
+
+= O
+
+p (cid:107)L(cid:107)2
+
+M −1 log(1/δ)
+µM n2(cid:15)2
+
+log2
+
+(cid:18) (F ( ¯w0) − F (w∗))n(cid:15)µM
+p (cid:107)L(cid:107)M −1 log(1/δ)
+
+(cid:19)(cid:33)
+
+.
+
+(71)
+
+(72)
+
+Proof. As F is µM -strongly-convex with respect to norm (cid:107)·(cid:107)M , we obtain for any w ∈ Rp, that F (w) ≥ F (w∗) +
+(cid:13) ¯w0 − w∗(cid:13)
+(cid:13)
+2
+2 (cid:107)w − w∗(cid:107)2
+µM
+M and Lemma C.4 gives, for 1 ≤ t ≤ T − 1,
+(cid:13)
+
+M . Therefore, F ( ¯w0) − F (w∗) ≤ 2
+µM
+
+F ( ¯wt+1) − F (w∗) ≤
+
+(1 + 1/µM )p(F ( ¯wt) − F (w∗))
+K
+
++ (cid:107)σ(cid:107)2
+
+M .
+
+It remains to set K = 2p(1 + 1/µM ) to obtain
+
+F ( ¯wt+1) − F (w∗) ≤
+
+F ( ¯wt) − F (w∗)
+2
+
++ (cid:107)σ(cid:107)2
+
+M .
+
+(73)
+
+(74)
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Recursive application of this inequality gives
+
+E(cid:2)F ( ¯wT ) − F (w∗)(cid:3) ≤
+
+F ( ¯w0) − F (w∗)
+2T
+
++
+
+T −1
+(cid:88)
+
+t=0
+
+1
+2t (cid:107)σ(cid:107)2
+
+M ≤
+
+F ( ¯w0) − F (w∗)
+2T
+
++ 2 (cid:107)σ(cid:107)2
+
+M ,
+
+(75)
+
+where we upper bound the sum by the value of the complete series. It remains to replace (cid:107)σ(cid:107)2
+result. Taking T = log2
+
+(F ( ¯w0)−F (w∗))n2(cid:15)2
+
+then gives
+
+(cid:17)
+
+(cid:16)
+
+24p(1+1/µM )(cid:107)L(cid:107)2
+
+M −1 log(1/δ)
+
+M by its value to obtain the
+
+E(cid:2)F ( ¯wT ) − F (w∗)(cid:3) ≤
+
+(cid:32)
+
+(cid:32)
+
+1 + log2
+
+(F ( ¯w0) − F (w∗))n2(cid:15)2
+
+24p(1 + 1/µM ) (cid:107)L(cid:107)2
+
+M −1 log(1/δ)
+
+(cid:33)(cid:33)
+
+24p(1 + 1/µM ) (cid:107)L(cid:107)2
+
+M −1 log(1/δ)
+
+n2(cid:15)2
+
+(cid:32)
+
+= O
+
+p (cid:107)L(cid:107)2
+
+M −1 log(1/δ)
+µM n2(cid:15)2
+
+log2
+
+(cid:18) (F ( ¯w0) − F (w∗))n(cid:15)µM
+p (cid:107)L(cid:107)M −1 log(1/δ)
+
+(cid:19)(cid:33)
+
+,
+
+(76)
+
+(77)
+
+which is the result of our theorem.
+
+C.3 Proof of Remark 1
+
+We recall the notations of Tappenden et al. (2016). For θ ∈ Rp, t ∈ R and j ∈ [p], let Vj(θ, t) = ∇j(θ)t + Mj
+ψj(θk
+ﬁnding δj such that for any θk ∈ Rp used in the inner loop of Algorithm 1:
+
+j + t). For η ∈ R, we also deﬁne its noisy counterpart, V η
+
+j (θ, t) = (∇j(θ) + η)t + Mj
+
+2 |t|2 +
+j + t). We aim at
+
+2 |t|2 + ψj(θk
+
+Eηj
+
+(cid:2)Vj(θk, −γjgj)(cid:3) ≤ min
+(cid:101)g∈R
+
+Vj(θk, −γj(cid:101)g) + δj ,
+
+(78)
+
+where the expectation is taken over the random noise ηj, and −γjgj = proxγj ψj (θk
+in the analysis of Algorithm 1. We need to link the proximal operator we use in DP-CD with the quantity V ηj
+j
+deﬁned:
+
+j − γj(∇jf (θk) + ηj)) − θk
+
+j as deﬁned
+that we just
+
+proxγj ψj (θk
+
+j − γj(∇jf (θk) + ηj)) = arg min
+
+v∈R
+
+= arg min
+
+v∈R
+
+= arg min
+
+v∈R
+
+(cid:13)
+(cid:13)v − θk
+
+1
+2
+(cid:10)γj(∇jf (θk
+
+j + γj(∇jf (θk) + ηj)(cid:13)
+2
+(cid:13)
+2
+
+(79)
+
+j ) + ηj), v − θk
+j
+
+(cid:11) +
+
+1
+2
+
+(cid:13)
+(cid:13)v − θk
+j
+
+(cid:13)
+2
+(cid:13)
+2
+
++ γjψj(v)
+
+(80)
+
+= θk
+
+j + arg min
+
+t∈R
+
+(cid:10)∇jf (θk) + ηj, v − θk
+
+j
+
+(cid:11) +
+
+(cid:10)∇jf (θk) + ηj, t(cid:11) +
+
+Mj
+2
+Mj
+2
+j ∈ arg mint∈R V ηj
+
+(cid:13)
+(cid:13)v − θk
+j
+
+(cid:13)
+2
+(cid:13)
+2
+
++ ψj(v)
+
+(cid:107)t(cid:107)2
+
+2 + ψj(θk
+
+j + t) .
+
+(81)
+
+(82)
+
+Which means that −γjgj = proxγj ψj (θk
+γj∇j(θk)) − θk
+
+j −γj(∇jf (θk)+ηj))−θk
+j be the non-noisy counterpart of −γjgj. Since −γjgj is a minimizer of V ηj
+
+j (θk, t). Let −γjg∗
+
+j = proxγj ψj (θk
+
+j −
+
+j (θk, ·), it holds that
+
+j (θk, −γjgj) ≤ (cid:10)∇jf (θk) + ηj, −γjg∗
+V ηj
+= min
+
+(cid:11) +
+Vj(θk, t) + (cid:10)ηj, −γjg∗
+
+j
+
+j
+
+t
+
+(cid:13)
+(cid:13)−γjg∗
+j
+
+(cid:13)
+2
+(cid:13)
+2
+
++ ψj(θk
+
+j + −γjg∗
+j )
+
+Mj
+2
+(cid:11) ,
+
+which can be rewritten as Vj(θk, −γjgj) ≤ mint Vj(θk, t) + (cid:10)ηj, γj(gj − g∗
+
+j )(cid:11). Taking the expectation yields
+
+Eηj
+
+(cid:2)Vj(θk, −γjgj)(cid:3) ≤ min
+
+t
+
+Vj(θk, t) + Eηj
+
+(cid:2)(cid:10)ηj, γj(gj − g∗
+
+j )(cid:11)(cid:3) .
+
+Finally, we remark that (cid:12)
+
+(cid:12)gj − g∗
+j
+
+(cid:12)
+(cid:12) ≤ |γjηj| and the non-expansiveness of the proximal operator gives
+
+Eηj
+
+(cid:2)Vj(θk, −γjgj)(cid:3) ≤ min
+
+t
+
+Vj(θk, t) + γjσ2
+
+j ,
+
+(83)
+
+(84)
+
+(85)
+
+(86)
+
+which implies an upper bound on the expectation of δj: Ej,ηj[δj] = 1
+p
+when γj = 1/Mj. In the formalism of Tappenden et al. (2016), this amounts to setting α = 0 and β = 1
+
+Eηj[δj] ≤ 1
+p
+
+j=1 γjσ2
+
+j=1
+
+(cid:80)p
+
+(cid:80)p
+
+j = 1
+p
+
+(cid:80)p
+p (cid:107)σ(cid:107)2
+
+j=1 σ2
+M −1 .
+
+j /Mj,
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Convex functions. When the objective function F is convex, we use Lemma C.4 to obtain, since (cid:107)σ(cid:107)2
+
+M −1 = βp,
+
+F (w1) − F (w∗) ≤
+
+2pR2
+M
+K
+
++ (cid:107)σ(cid:107)2
+
+M −1 =
+
+2pR2
+M
+K
+
++ βp .
+
+(87)
+
+Therefore, when F is convex, we get F (w1) − F (w∗) ≤ ξ, for ξ > βp, as long as 2pR2
+
+M
+
+K ≤ ξ − βp, that is K ≥ 2pR2
+ξ−βp .
+2pR2
+√
+M
+2pR2
+
+M β when K ≥
+
+ξ−
+
+M
+
+In comparison, Tappenden et al. (2016, Theorem 5.1 therein) gives convergence to ξ > (cid:112)2pR2
+We thus gain a factor (cid:112)βp/2R2
+setting, whereas the one of Tappenden et al. (2016) does.
+
+M β
+M in utility. Importantly, our utility upper bound does not depend on initialization in that
+
+.
+
+Strongly-convex functions. When the objective function F is µM -strongly-convex w.r.t. to (cid:107)·(cid:107)M , then from (75) we obtain,
+as long as K ≥ 4/µM , that
+
+E(cid:2)F (wT ) − F (w∗)(cid:3) ≤
+
+F (w0) − F (w∗)
+2T
+
++ 2βp .
+
+(88)
+
+This proves that E(cid:2)F (wT ) − F (w∗)(cid:3) ≤ ξ for ξ > 2βp when F (w0)−F (w∗)
+T K ≥ 4p
+µM
+for K ≥ p
+µM
+
+. We thus gain a factor µM /2 in utility.
+
+and
+. In comparison, Tappenden et al. (2016, Theorem 5.2 therein) shows convergence to ξ > βp
+µM
+
+≤ ξ − 2βp that is T ≥ log F (w0)−F (w∗)
+
+log F (w0)−F (w∗)
+
+ξ−2βp
+
+ξ−2βp
+
+log
+
+2T
+
+F (w0)−F (w∗)− βp
+µM
+ξ− βp
+µM
+
+D Comparison with DP-SGD
+
+In this section, we provide more details on the arguments of Section 3.4, where we suppose that (cid:96) is L-component-Lipschitz
+and Λ-Lipschitz. To ease the comparison, we assume that RM = (cid:13)
+(cid:13)M , which is notably the case in the smooth
+setting with ψ = 0 (see Remark C.2).
+
+(cid:13)w0 − w∗(cid:13)
+
+Balanced. We start by the scenario where coordinate-wise smoothness constants are balanced and all equal to M = M1 =
+· · · = Mp. We observe that
+
+(cid:107)L(cid:107)M −1 =
+
+(cid:118)
+(cid:117)
+(cid:117)
+(cid:116)
+
+p
+(cid:88)
+
+j=1
+
+1
+Mj
+
+L2
+
+j =
+
+(cid:118)
+(cid:117)
+(cid:117)
+(cid:116)
+
+1
+M
+
+p
+(cid:88)
+
+j=1
+
+L2
+
+j =
+
+1
+√
+M
+
+(cid:107)L(cid:107)2 .
+
+(89)
+
+We then consider the convex and strongly-convex functions separately:
+
+• Convex functions: it holds that RM =
+M RI , which yields the equality (cid:107)L(cid:107)M −1 RM = (cid:107)L(cid:107)2 RI .
+• Strongly convex functions: if f is µM -strongly-convex with respect to (cid:107)·(cid:107)M , then for any x, y ∈ Rp,
+
+√
+
+f (y) ≥ f (x) + (cid:104)∇f (x), y − x(cid:105) +
+
+µM
+2
+
+(cid:107)y − x(cid:107)2
+
+M = f (x) + (cid:104)∇f (x), y − x(cid:105) +
+
+M µM
+2
+
+(cid:107)y − x(cid:107)2
+
+2 ,
+
+(90)
+
+which means that f is M µM -strongly-convex with respect to (cid:107)·(cid:107)2. This gives
+
+(cid:107)L(cid:107)2
+µM
+
+M −1
+
+= (cid:107)L(cid:107)2
+
+2/M
+
+µI /M = (cid:107)L(cid:107)2
+
+µI
+
+2
+
+.
+
+In light of the results summarized in Table 1, it remains to compare (cid:107)L(cid:107)2 =
+
+Λ ≤
+
+(cid:113)(cid:80)p
+
+j=1 L2
+
+j ≤
+
+√
+
+pΛ, which is our result.
+
+(cid:113)(cid:80)p
+
+j=1 L2
+
+j with Λ, for which it holds that
+
+Unbalanced. When smoothness constants are disparate, we discuss the case where
+
+• one coordinate of the gradient dominates the others: we assume without loss of generality that the dominating
+coordinate is the ﬁrst one. It holds that M1 =: Mmax (cid:29) Mmin =: Mj, for all j (cid:54)= 1 and L1 =: Lmax (cid:29) Lmin =: Lj,
+for all j (cid:54)= 1 such that L2
+. As L1 dominates the other component-Lipschitz constants, most of the
+1
+M1
+
+(cid:29) (cid:80)
+
+L2
+j
+Mj
+
+j(cid:54)=1
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+variation of the loss comes from its ﬁrst coordinate. This implies that L1 is close to the global Lipschitz constant Λ of (cid:96).
+As such, it holds that
+
+(cid:107)L(cid:107)2
+
+M −1 =
+
+p
+(cid:88)
+
+j=1
+
+L2
+j
+Mj
+
+≈
+
+L2
+1
+M1
+
+≈
+
+Λ2
+Mmax
+
+.
+
+(91)
+
+• the ﬁrst coordinate of ¯w0 is already very close to its optimal value so that M1
+
+Under this hypothesis,
+
+(cid:12)
+(cid:12) ¯w0
+
+1 − w∗
+1
+
+(cid:12)
+(cid:12) (cid:28) (cid:80)
+
+j(cid:54)=1 Mj
+
+(cid:12)
+(cid:12) ¯w0
+
+j − w∗
+j
+
+(cid:12)
+(cid:12).
+
+R2
+
+M ≈
+
+(cid:88)
+
+j(cid:54)=1
+
+Mj
+
+(cid:12)
+(cid:12)w0
+
+j − w∗
+j
+
+(cid:12)
+(cid:12)
+
+2
+
+= Mmin
+
+(cid:88)
+
+j(cid:54)=1
+
+(cid:12)
+(cid:12)w0
+
+j − w∗
+j
+
+(cid:12)
+(cid:12)
+
+2
+
+≈ MminR2
+
+I .
+
+We can now easily compare DP-CD with DP-SGD in this scenario. First, if (cid:96) is convex, then (cid:107)L(cid:107)M −1 RM ≈
+Second, when (cid:96) is strongly-convex, we observe that for x, y ∈ Rp,
+
+(92)
+
+(cid:113) Mmin
+Mmax
+
+ΛRI .
+
+f (y) ≥ f (x) + (cid:104)∇f (x), y − x(cid:105) +
+
+µM
+2
+
+(cid:107)y − x(cid:107)2
+
+M ≥ f (x) + (cid:104)∇f (x), y − x(cid:105) +
+
+MminµM
+2
+
+(cid:107)y − x(cid:107)2
+
+2 ,
+
+(93)
+
+which implies that when f is µM strongly-convex with respect to (cid:107)·(cid:107)M , it is MminµM strongly-convex with respect to (cid:107)·(cid:107)2.
+= Mmin
+This yields, under our hypotheses,
+. In both cases, DP-CD can get arbitrarily better than
+Mmax
+DP-SGD, and gets better as the ratio Mmax/Mmin increases.
+
+≈ Λ2/Mmax
+µI /Mmin
+
+(cid:107)L(cid:107)2
+µM
+
+Λ2
+µI
+
+M −1
+
+The two hypotheses we describe above are of course very restrictive. However, it gives some insight about when and why
+DP-CD can outperform DP-SGD. Our numerical experiments in Section 6 conﬁrm this analysis, even in less favorable cases.
+
+E Proof of Lower Bounds
+
+To prove lower bounds on the utility of L-component-Lipschitz functions, we extend the proof of Bassily et al. (2014) to
+our setting (that is, L-component-Lipschitz functions and unconstrained composite optimization). There are three main
+difﬁculties in adapting their proof:
+
+• First, the optimization problem (1) is not constrained. We stress that while convex constraints can be enforced using
+the regularizer ψ (using the characteristic function of a convex set), its separable nature only allows box constraints. In
+contrast, Bassily et al. (2014) rely on an (cid:96)2-norm constraint to obtain their lower bounds.
+
+• Second, Lemma 5.1 of Bassily et al. (2014) must be extended to our L-component-Lipschitz setting. To do so, we
+p}p, and carefully adapt the construction
+p (cid:107)L(cid:107)2/(cid:15))), which is essential to prove our lower bounds.
+
+consider datasets with points in (cid:81)p
+of the dataset D so that (cid:107)(cid:80)n
+
+j=1{−Lj, Lj} rather than {−1/
+
+i=1 di(cid:107)2 = Ω(min(n (cid:107)L(cid:107)2 ,
+
+p, 1/
+
+√
+
+√
+
+√
+
+• Third, the lower bounds of Bassily et al. (2014) rely on ﬁngerprinting codes, and in particular on the result of Bun et al.
+(2014) which uses such codes to prove that (when n is smaller than some n∗ we describe later) differential privacy
+is incompatible with precisely and simultaneously estimating all p counting queries deﬁned over the columns of the
+dataset D. In our construction, since all columns of D now have different scales, we need an additional hypothesis on
+the repartition of the Lj’s, (i.e., that (cid:80)
+j = Ω((cid:107)L(cid:107)2) for all J ⊆ [p] of a given size), which is not required in
+existing lower bounds (where all columns have equal scale).
+
+j∈J L2
+
+E.1 Counting Queries and Accuracy
+
+We start our proof by recalling and extending to our setting the notions of counting queries (Deﬁnition E.1) and accuracy
+(Deﬁnition E.2), as described by Bun et al. (2014). The main feature of our deﬁnitions is that we allow the set X to have
+different scales for each of its coordinates, and that we account for this scale in the deﬁnition of accuracy. We denote by
+conv(X ) the convex hull of a set X .
+Deﬁnition E.1 (Counting query). Let n > 0. A counting query on X is a function q : X n → conv(X ) deﬁned using a
+predicate q : X → X . The evaluation of the query q over a dataset D ∈ X n is deﬁned as the arithmetic mean of q on D:
+
+q(D) =
+
+1
+n
+
+n
+(cid:88)
+
+i=1
+
+q(di) .
+
+(94)
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Deﬁnition E.2 (Accuracy). Let n, p ∈ N, α, β ∈ [0, 1], L1, . . . , Lp > 0, and X = (cid:81)p
+j=1{−Lj; Lj} or X = {0, Lj}p.
+Let Q = {q1, . . . , qp} be a set of p counting queries on X and D ∈ X n a dataset of n elements. A sequence of answers
+a = (a1, . . . , ap) is said (α, β)-accurate for Q if |qj(D) − aj| ≤ Ljα for at least a 1 − β fraction of indices j ∈ [p]. A
+randomized algorithm A : X n → R|Q| is said (α, β)-accurate for Q on X if for every D ∈ X n,
+
+Pr [A(D) is (α, β)-accurate for Q] ≥ 2/3 .
+
+(95)
+
+In our proof, we will use a speciﬁc class of queries: one-way marginals (Deﬁnition E.3), that compute the arithmetic mean
+of a dataset along one of its column.
+Deﬁnition E.3 (One-way marginals). Let X = (cid:81)p
+j=1{−Lj; Lj} or X = {0, Lj}p. The family of one-way marginals
+on X is deﬁned by queries with predicates qj(x) = xj for x ∈ X . For a dataset D ∈ X n of size n, we thus have
+qj(D) = 1
+n
+
+i=1 di,j.
+
+(cid:80)n
+
+E.2 Lower Bound for One-Way Marginals
+
+We can now restate a key result from Bun et al. (2014), which shows that there exists a minimal number n∗ of records
+needed in a dataset to allow achieving both accuracy and privacy on the estimation of one-way marginals on X = ({0, 1}p)n.
+This lemma relies on the construction of re-identiﬁable distribution (see Bun et al. 2014, Deﬁnition 2.10). One can then use
+this distribution to ﬁnd a dataset on which a private algorithm can not be accurate (see Bun et al. 2014, Lemma 2.11).
+
+Lemma E.4 (Bun et al. 2014, Corollary 3.6). For (cid:15) > 0 and p > 0, there exists a number n∗ = Ω(
+n ≤ n∗, there exists no algorithm that is both (1/3, 1/75)-accurate and ((cid:15), o (cid:0) 1
+of one-way marginals on ({0, 1}p)n.
+
+n
+
+√
+p
+(cid:15) ) such that for all
+(cid:1))-differentially private for the estimation
+
+To leverage this result in our setting of private empirical risk minimization, we start by extending it to queries on X =
+(cid:81)p
+j=1{−Lj; Lj}. Before stating the main theorem of this section (Theorem E.5), we describe a procedure χL : ({0, 1}p)n →
+X 3n (with L1, . . . , Lp > 0), that takes as input a dataset D ∈ ({0, 1}p)n and outputs an augmented and rescaled version.
+This procedure is crucial to our proof and is deﬁned as follows. First, it adds 2n rows ﬁlled with 1’s to D, which ensures
+that the sum of each column of D is Θ(n) (which gives the lower bound on M in Theorem E.5). Then it rescales each of
+these columns by subtracting 1/2 to each coefﬁcient and multiplying the j-th column of D (j ∈ [p]) by 2Lj. The resulting
+dataset Daug
+j=1{−Lj, Lj}, with the property that, for all j ∈ [p],
+3nLj ≥ (cid:80)n
+Claim 1. Let n ∈ N, j ∈ [p], Lj > 0 and qj the j-th one-way marginal on datasets D with p columns such that for di ∈ D,
+qj(di) = di,j. Let Daug
+
+L = χL(D) is a set of 3n points with values in X = (cid:81)p
+i=1(Daug
+
+L )i,j ≥ nLj. For D ∈ ({0, 1}p)n, we show how to reconstruct qj(χL(D)) from qj(D) in Claim 1.
+
+L = χL(D). It holds that
+
+qj(Daug
+
+L ) =
+
+2Lj
+3
+
+qj(D) +
+
+Lj
+3
+
+,
+
+(96)
+
+where we use the slight abuse of notation by denoting the one-way marginals qj : X 3n → conv(X ) and qj : ({0, 1}p)n →
+[0, 1]p in the same way.
+
+Proof. Let D ∈ ({0, 1}p)n, and let Daug ∈ ({0, 1}p)3n constructed by adding 2n rows of 1’s at the end of D. Let
+Daug
+
+L = χL(D). We remark that
+
+qj(Daug) =
+
+1
+3n
+
+3n
+(cid:88)
+
+i=1
+
+Daug
+
+i,j =
+
+(cid:32)
+
+1
+3
+
+1
+n
+
+n
+(cid:88)
+
+i=1
+
+Daug
+i,j
+
+(cid:33)
+
++
+
+1
+3n
+
+3n
+(cid:88)
+
+i=n+1
+
+1 =
+
+1
+3
+
+qj(D) +
+
+2
+3
+
+∈ [0, 1] .
+
+(97)
+
+Then, we link qj(Daug) with qj(Daug
+
+L ):
+
+qj(Daug
+
+L ) =
+
+1
+3n
+
+3n
+(cid:88)
+
+(Daug
+
+L )i,j =
+
+i=1
+
+1
+3n
+
+3n
+(cid:88)
+
+i=1
+
+2Lj((Daug)i,j − 1/2) = 2Lj(qj(Daug) − 1/2) ∈ [−Lj, Lj] ,
+
+(98)
+
+combining (97) and (98) gives the result.
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Theorem E.5. Let n, p ∈ N, and L1, . . . , Lp > 0. Assume that for all subsets J ⊆ [p] of size at least (cid:100) p
+Ω((cid:107)L(cid:107)2). Deﬁne X = (cid:81)p
+p(cid:107)L(cid:107)2
+Take (cid:15) > 0 and δ = o( 1
+n ). There exists a number M = Ω
+(cid:15)
+private algorithm A, there exists a dataset D = {d1, . . . , dn} ∈ X n with (cid:107)(cid:80)n
+probability at least 1/3 over the randomness of A:
+
+j =
+j=1{−Lj; +Lj}, and let qj : X → {−Lj, Lj} be the predicate of the j-th one-way marginal on X .
+√
+such that for every ((cid:15), δ)-differentially
+i=1 di(cid:107)2 ∈ [M − 1, M + 1] such that, with
+
+n (cid:107)L(cid:107)2 ,
+
+j∈J L2
+
+75 (cid:101),
+
+min
+
+(cid:17)(cid:17)
+
+(cid:16)
+
+(cid:16)
+
+(cid:113)(cid:80)
+
+(cid:107)A(D) − q(D)(cid:107)2 = Ω
+
+min
+
+(cid:107)L(cid:107)2 ,
+
+(cid:18)
+
+(cid:18)
+
+√
+
+p (cid:107)L(cid:107)2
+n(cid:15)
+
+(cid:19)(cid:19)
+
+.
+
+(99)
+
+(cid:16)
+
+(cid:16)
+n (cid:107)L(cid:107)2 ,
+
+√
+
+p(cid:107)L(cid:107)2
+(cid:15)
+
+(cid:17)(cid:17)
+
+min
+
+Proof. Let M = Ω
+i=1 di,j
+for j ∈ [p]. Let A be a ((cid:15), δ)-differentially-private randomized algorithm. Let α, β ∈ [0, 1]. We will show that there exists a
+dataset D such that (cid:107)(cid:80)n
+When n ≤ n∗. Assume, for the sake of contradiction, that A : X 3n → conv(X ) is ( 1
+each dataset D(cid:48) ∈ X 3n, we have
+
+i=1 di(cid:107)2 ∈ [M − 1, M + 1] for which A(D) is not (α, β)-accurate.
+
+, and deﬁne the set of queries Q composed of p queries qj(D) = 1
+n
+
+3 α, β)-accurate for Q. Then, for
+
+(cid:80)n
+
+(cid:20)
+
+Pr
+
+∃J ⊆ [p] such that |J | ≥ (1 − β)p and ∀j ∈ J ,
+
+|Aj(D(cid:48)) − qj(D(cid:48))| <
+
+(cid:21)
+
+α
+
+≥ 2/3 .
+
+(100)
+
+2Lj
+3
+
+Importantly, for all D ∈ ({0, 1})p)n, the randomized algorithm A satisﬁes (100) for the dataset Daug
+We now construct the mechanism (cid:101)A : ({0, 1}p)n → [0, 1]p that takes a dataset D ∈ ({0, 1}p)n, constructs Daug
+and runs A on it. It then outputs (cid:101)A(D) such that, for j ∈ [p], (cid:101)Aj(D) = 3
+2Lj
+(cid:101)A and be linked to the ones of A, as
+
+L = χL(D) ∈ X 3n.
+L = χL(D)
+3 . Using Claim 1, the results of
+
+L ) − Lj
+
+Aj(Daug
+
+(cid:12)
+(cid:12)
+(cid:12) (cid:101)A(D) − qj(D)
+
+(cid:12)
+(cid:12)
+(cid:12) =
+
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+
+3
+2Lj
+
+Aj(Daug
+
+L ) −
+
+Lj
+3
+
+−
+
+3
+2Lj
+
+qj(Daug
+
+L ) +
+
+Lj
+3
+
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+
+=
+
+3
+2Lj
+
+|Aj(Daug
+
+L ) − qj(Daug
+
+L )|
+
+.
+
+(101)
+
+Therefore, if A satisﬁes (100) and (101), then (cid:101)A : ({0, 1}p)n → [0, 1]p satisﬁes, for all D ∈ ({0, 1}p)n,
+
+(cid:104)
+∃J ⊆ [p] such that |J | ≥ (1 − β)p and ∀j ∈ J ,
+
+Pr
+
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12)
+(cid:12) < α
+(cid:12) (cid:101)Aj(D) − qj(D)
+
+(cid:105)
+
+≥ 2/3 ,
+
+(102)
+
+which is exactly the deﬁnition of (α, β)-accuracy for (cid:101)A. Remark that since (cid:101)A is only a post-processing of A, without
+additional access to the dataset itself, (cid:101)A is itself ((cid:15), δ)-differentially-private. We have thus constructed an algorithm that is
+both accurate and private for n ≤ n∗, which contradicts the result of Lemma E.4 when β = 1
+75 . This proves the existence
+of a dataset D ∈ ({0, 1}p)n such that for Daug
+3 α, β)-accurate on Q, which means that with
+probability at least 1/3, there exists a subset J ⊆ [p] of cardinal |J | ≥ (cid:100)βp(cid:101) such that
+
+L = χL(D), A(Daug
+
+L ) is not ( 1
+
+(cid:107)A(Daug
+
+L ) − q(Daug
+
+L )(cid:107)2
+
+(cid:118)
+(cid:117)
+(cid:117)
+(cid:116)
+
+(100)
+≥
+
+(cid:88)
+
+j∈J
+
+4L2
+j
+9
+
+≥ Ω((cid:107)L(cid:107)2) ,
+
+(103)
+
+where the second inequality comes from the fact that |J | ≥ (cid:100)βp(cid:101) = (cid:100) p
+when L1 = · · · = Lp = 1√
+1/3 that
+
+j . Notice that
+p , we recover the result of Bassily et al. (2014), since (cid:107)L(cid:107)2 = 1 it holds with probability at least
+
+75 (cid:101) and our hypothesis on (cid:80)
+
+j∈J L2
+
+(cid:107)A(Daug
+
+L ) − q(Daug
+
+L )(cid:107)2
+
+(cid:118)
+(cid:117)
+(cid:117)
+(cid:116)
+
+(100)
+≥
+
+(cid:88)
+
+j∈J
+
+4L2
+j
+9
+
+≥
+
+(cid:114) 4
+
+9 × 75
+
+(cid:107)L(cid:107)2 ≥
+
+2
+27
+
+,
+
+(104)
+
+and in that case, since all Lj’s are equal, it indeed holds that
+each column of Daug
+n (cid:107)L(cid:107)2.
+
+i=1 di,j ≥ nLj, and as such, we have (cid:107)(cid:80)n
+
+L is (cid:80)n
+
+(cid:113)(cid:80)
+
+j∈J L2
+
+j = Ω((cid:107)L(cid:107)2). Finally, we remark that the sum of
+
+i=1 di(cid:107)2 =
+
+(cid:113)(cid:80)p
+
+j=1((cid:80)n
+
+i=1 di,j)2 ≥
+
+(cid:113)(cid:80)p
+
+j=1 n2L2
+
+j =
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+When n > n∗. We get the result in that case by augmenting the dataset D∗ that we constructed in the ﬁrst part of this proof.
+To do so, we follow the steps described by Bassily et al. (2014) in the proof of their Lemma 5.1. The construction consists in
+choosing a vector c ∈ X , and adding (cid:100) n−n∗
+(cid:99) rows with −c to the dataset D∗. This results in a
+dataset D(cid:48) such that (cid:107)(cid:80)n
+), since the contributions of rows −c and c (almost) cancel
+out. The theorem follows from observing that ( n∗
+n α, β)-accuracy on this augmented dataset implies (α, β)-accuracy on the
+original dataset. As such, if an algorithm is both private and ( n∗
+n α, β)-accurate on the dataset D(cid:48), we get a contradiction,
+which gives the theorem as n∗
+n =
+
+(cid:101) rows with c, and (cid:98) n−n∗
+p(cid:107)L(cid:107)2
+(cid:15)
+
+i=1 di(cid:107) = Ω(n∗ (cid:107)L(cid:107)2) = Ω(
+
+√
+p
+n(cid:15) .
+
+√
+
+2
+
+2
+
+Remark E.6. Without the assumption on the distribution of the Lj’s, we can still get an inequality that resembles (103):
+(cid:107)A(Daug
+j∈J
+Theorem E.5, except with an additional multiplicative factor Lmin/Lmax.
+
+(cid:107)L(cid:107)2, with probability at least 1/3, and we get a result similar to
+
+L ) − q(Daug
+
+4L2
+9 ≥ 2
+j
+
+L )(cid:107)2
+
+Lmin
+Lmax
+
+(100)
+≥
+
+(cid:80)
+
+(cid:113)
+
+27
+
+E.3 Lower Bound for Convex Functions
+
+To prove a lower bound for our problem in the convex case, we let L1, · · · , Lp > 0 and deﬁne a dataset D = {d1, . . . , dn}
+taking its values in a set X = (cid:81)p
+j=1{±Lj}. For β > 0, we consider the problem (1) with the convex, smooth and
+(cid:107)w(cid:107)2
+2:
+
+L-component-Lipschitz loss function (cid:96)(w; d) = − (cid:104)w, d(cid:105) and the convex, separable regularizer ψ(w) =
+
+i=1 di(cid:107)2
+βn
+
+(cid:107)(cid:80)n
+
+w∗ = arg min
+
+w∈Rp
+
+(cid:26)
+
+F (w; D) = −
+
+1
+n
+
+(cid:104)w, (cid:80)n
+
+i=1 di(cid:105) +
+
+(cid:107)(cid:80)n
+
+i=1 di(cid:107)2
+βn
+
+(cid:27)
+
+,
+
+(cid:107)w(cid:107)2
+2
+
+To ﬁnd the solution of (105), we look for w∗ so that the objective’s gradient is zero, that is
+
+w∗ =
+
+β
+i=1 di(cid:107)2
+
+(cid:107)(cid:80)n
+
+n
+(cid:88)
+
+i=1
+
+di ,
+
+so that (cid:107)w∗(cid:107)2 =
+
+β
+i=1 di(cid:107)2
+
+(cid:107)(cid:80)n
+
+(cid:107)(cid:80)n
+
+i=1 di(cid:107)2 = β. To prove the lower bound, we remark that
+
+F (w; D) − F (w∗; D) = −
+
+(cid:104)w − w∗, (cid:80)n
+
+(cid:28)
+
+1
+n
+1
+n
+(cid:107)(cid:80)n
+
+= −
+
+w − w∗,
+
+(cid:107)(cid:80)n
+
+i=1 di(cid:107)
+2βn
+(cid:29)
+
+(cid:107)(cid:80)n
+
+w∗
+
++
+
+i=1 di(cid:105) +
+(cid:107)(cid:80)n
+i=1 di(cid:107)
+β
+
+=
+
+=
+
+=
+
+i=1 di(cid:107)
+βn
+i=1 di(cid:107)
+βn
+i=1 di(cid:107)
+2βn
+
+(cid:107)(cid:80)n
+
+(cid:107)(cid:80)n
+
+(cid:18)
+
+(cid:104)w∗ − w, w∗(cid:105) +
+
+1
+2
+
+(cid:107)w(cid:107)2
+
+2 −
+
+(cid:107)w∗(cid:107)2
+2
+
+(cid:18)
+
+− (cid:104)w, w∗(cid:105) +
+
+1
+2
+
+(cid:107)w(cid:107)2
+
+2 +
+
+(cid:19)
+
+1
+2
+
+(cid:107)w∗(cid:107)2
+2
+
+(cid:107)w − w∗(cid:107)2
+
+2 .
+
+((cid:107)w(cid:107)2
+
+2 − (cid:107)w∗(cid:107)2
+2)
+
+((cid:107)w(cid:107)2
+
+2 − (cid:107)w∗(cid:107)2
+2)
+(cid:19)
+
+i=1 di(cid:107)
+2βn
+1
+2
+
+(105)
+
+(106)
+
+(107)
+
+(108)
+
+(109)
+
+(110)
+
+(111)
+
+At this point, we can proceed similarly to Bassily et al. (2014) to relate this quantity to private estimation of one-way
+marginals. We let M = Ω(min(n (cid:107)L(cid:107)2 , (cid:107)L(cid:107)2
+p/(cid:15))) and A be an ((cid:15), δ)-differentially private mechanism that outputs
+a private solution wpriv to (105). Suppose, for the sake of contradiction, that for every dataset D with (cid:107)(cid:80)n
+i=1 di(cid:107)2 ∈
+[M − 1; M + 1], it holds with probability at least 2/3 that
+
+√
+
+(cid:13)
+(cid:13)wpriv − w∗(cid:13)
+
+(cid:13) (cid:54)= Ω(β) .
+
+(112)
+
+We now derive from A a mechanism (cid:101)A to estimate one-way marginals. To do this, (cid:101)A runs A to obtain wpriv and outputs
+M
+nβ wpriv. We obtain that with probability at least 2/3,
+
+(cid:13)
+(cid:13)
+(cid:13)
+(cid:13)
+(cid:13) (cid:101)A(D) − q(D)
+(cid:13)2
+
+=
+
+M
+nβ
+
+(cid:13)
+(cid:13)
+wpriv −
+(cid:13)
+(cid:13)
+
+β
+M
+
+(cid:80)n
+
+i=1 di
+
+(cid:13)
+(cid:13)
+(cid:13)
+(cid:13)2
+
+(cid:54)= Ω
+
+(cid:19)
+
+(cid:18) M
+n
+
+(cid:18)
+
+(cid:18)
+
+= Ω
+
+min
+
+(cid:107)L(cid:107)2 ,
+
+(cid:19)(cid:19)
+
+p
+
+√
+
+(cid:107)L(cid:107)2
+n(cid:15)
+
+.
+
+(113)
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+(cid:80)n
+
+i=1 di. This is in contradiction with Theorem E.5. We thus proved that (cid:13)
+
+where q(D) = 1
+n
+probability at least 1/3. As a consequence, we now obtain that with probability at least 1/3,
+(cid:107)(cid:80)n
+
+(cid:18)
+
+(cid:18)
+
+i=1 di(cid:107)
+2βn
+
+(cid:13)wpriv − w∗(cid:13)
+(cid:13)
+2
+2 = Ω
+(cid:13)
+
+min
+
+(cid:107)L(cid:107)2 β,
+
+F (wpriv; D) − F (w∗; D) =
+
+(cid:13)wpriv − w∗(cid:13)
+
+(cid:13) = Ω(β), with
+
+√
+
+(cid:19)(cid:19)
+
+p
+
+β (cid:107)L(cid:107)2
+n(cid:15)
+
+,
+
+(114)
+
+which gives the desired result on the expectation of F (wpriv; D) − F (w∗; D).
+
+Finally, if we do not make any hypothesis on the Lj’s distribution, we can directly use the non-augmented dataset constructed
+by Bun et al. (2014) to prove Lemma E.4 (that is the dataset from Theorem E.5, rescaled but not augmented). The (cid:96)2-norm
+of the sum of this dataset is (cid:107)(cid:80)n
+. This
+holds since four columns of this dataset out of ﬁve have sum of ±nLj (for some j’s), but no lower bound on the sum of the
+remaining columns can be derived. Thus, assuming (112) holds, then (113) can be rewritten as
+
+i=1 dj(cid:107)2 = [M (cid:48) − 1, M (cid:48) + 1] with M (cid:48) = Ω
+
+n (cid:107)L(cid:107)2 , Lmin
+Lmax
+
+(cid:16) Lmin
+Lmax
+
+p(cid:107)L(cid:107)2
+(cid:15)
+
+min
+
+(cid:17)(cid:17)
+
+(cid:16)
+
+√
+
+(cid:13)
+(cid:13)
+(cid:13)
+(cid:13)
+(cid:13) (cid:101)A(D) − q(D)
+(cid:13)2
+
+=
+
+M (cid:48)
+nβ
+
+(cid:13)
+(cid:13)
+wpriv −
+(cid:13)
+(cid:13)
+
+β
+M
+
+(cid:80)n
+
+i=1 di
+
+(cid:13)
+(cid:13)
+(cid:13)
+(cid:13)2
+
+(cid:54)= Ω
+
+(cid:19)
+
+(cid:18) M (cid:48)
+n
+
+(cid:18)
+
+= Ω
+
+min
+
+(cid:18) Lmin
+Lmax
+
+(cid:107)L(cid:107)2 ,
+
+Lmin
+Lmax
+
+√
+
+(cid:107)L(cid:107)2
+n(cid:15)
+
+(cid:19)(cid:19)
+
+p
+
+,
+
+(115)
+
+with probability at least 1/3, which is in contradiction with Remark E.6. We thus get an additional factor of Lmin/Lmax in
+the lower bound:
+
+F (wpriv; D) − F (w∗; D) =
+
+(cid:107)(cid:80)n
+
+i=1 di(cid:107)
+2βn
+
+(cid:13)wpriv − w∗(cid:13)
+(cid:13)
+2
+2 = Ω
+(cid:13)
+
+(cid:18)
+
+min
+
+(cid:18) Lmin
+Lmax
+
+(cid:107)L(cid:107)2 β,
+
+Lmin
+Lmax
+
+β (cid:107)L(cid:107)2
+n(cid:15)
+
+√
+
+(cid:19)(cid:19)
+
+p
+
+.
+
+(116)
+
+E.4 Lower Bound for Strongly-Convex Functions
+
+To prove a lower bound for strongly-convex functions, we let µI > 0, L1, . . . , Lp > 0, W = (cid:81)p
+D = {d1, . . . , dn} ∈ (cid:81)p
+
+}. We consider the following problem, which ﬁts in our setting:
+
+j=1{± Lj
+2µI
+
+j=1[− Lj
+2µI
+
+(cid:40)
+
+w∗ = arg min
+
+w∈Rp
+
+F (w; D) =
+
+(cid:107)w − di(cid:107)2
+
+2 + iW (w)
+
+.
+
+(cid:41)
+
+µI
+2n
+
+n
+(cid:88)
+
+i=1
+
+, + Lj
+2µI
+
+] and
+
+(117)
+
+where iW is the (separable) characteristic function of the set W. Since ψ = iW is the characteristic function of a
+box-set, the proximal operator is equal to the projection on W and DP-CD iterates are thus guaranteed to remain in
+W. Therefore, regularity assumptions on f only need to hold on W, as pointed out in Remark 2.1. The loss function
+(cid:96)(w; di) = µI
+
+2 is L-component-Lipschitz on W since, for w ∈ W and j ∈ [p], the triangle inequality gives:
+(cid:18) Lj
+2µI
+
+|∇j(cid:96)(w; di)| ≤ µI (|wj| + |di,j|) ≤ µI
+
+Lj
+2µI
+
+≤ Lj .
+
+2 (cid:107)w − di(cid:107)2
+
+(118)
+
++
+
+(cid:19)
+
+This loss is also µI -strongly convex w.r.t. (cid:96)2-norm since for w, w(cid:48) ∈ W,
+
+(cid:96)(w; di) =
+
+µI
+2
+
+(cid:107)w − di(cid:107)2
+
+2 =
+
+µI
+2
+
+(cid:107)w(cid:48) − di + w − w(cid:48)(cid:107)2
+
+2 =
+
+(cid:16)
+
+µI
+2
+
+(cid:107)w(cid:48) − di(cid:107)2
+
+2 + 2 (cid:104)w(cid:48) − di, w − w(cid:48)(cid:105) + (cid:107)w − w(cid:48)(cid:107)2
+
+2
+
+(cid:17)
+
+,
+
+(119)
+
+which is exactly µI -strong convexity since (cid:96)(w(cid:48); di) = µI
+objective function in (117) is attained at w∗ = 1
+n
+
+(cid:80)n
+
+2 (cid:107)w(cid:48) − di(cid:107)2
+
+2 and ∇(cid:96)(w(cid:48); di) = µI (w − di). The minimum of the
+
+i=1 di = q(D) ∈ W. The excess risk of F is thus
+
+F (w; D) − F (w∗) =
+
+=
+
+=
+
+=
+
+µI
+2n
+
+µI
+2n
+
+µI
+2
+µI
+2
+
+n
+(cid:88)
+
+i=1
+n
+(cid:88)
+
+(cid:107)w − di(cid:107)2
+
+2 − (cid:107)w∗ − di(cid:107)2
+
+2
+
+(cid:107)w(cid:107)2 − (cid:107)w∗(cid:107)2 + 2 (cid:104)di, w∗ − w(cid:105)
+
+i=1
+(cid:107)w(cid:107)2 −
+
+1
+2
+
+(cid:107)w∗(cid:107)2 + (cid:104)w∗, w∗ − w(cid:105)
+
+(cid:107)w − q(D)(cid:107)2
+
+2 .
+
+(120)
+
+(121)
+
+(122)
+
+(123)
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+It remains to apply Theorem E.5 to obtain that, with probability at least 1/3,
+
+F (wpriv; D) − F (w∗) = Ω
+
+min
+
+(cid:32)
+
+(cid:32)
+
+(cid:107)L(cid:107)2
+2
+µI
+
+,
+
+(cid:107)L(cid:107)2
+2 p
+µI n2(cid:15)2
+
+(cid:33)(cid:33)
+
+,
+
+(124)
+
+which gives the lower bound on the expected value of F (wpriv; D) − F (w∗). Note that without the additional assumption
+on the distribution of the Lj’s, Remark E.6 directly gives the result with an additional multiplicative factor (Lmin/Lmax)2:
+(cid:32)
+
+(cid:33)(cid:33)
+
+(cid:32)
+
+L2
+L2
+
+min
+
+max
+
+(cid:107)L(cid:107)2
+2
+µI
+
+,
+
+L2
+L2
+
+min
+
+max
+
+(cid:107)L(cid:107)2
+2 p
+µI n2(cid:15)2
+
+,
+
+(125)
+
+F (wpriv; D) − F (w∗) = Ω
+
+min
+
+with probability at least 1/3.
+
+F Private Estimation of Smoothness Constants
+
+In this section, we explain how a fraction (cid:15)(cid:48) of the (cid:15) budget of DP can be used to estimate the coordinate-wise smoothness
+constants, which are essential to the good performance of DP-CD on imbalanced problems. Let f be deﬁned as the
+average loss over the dataset D as in problem (1). We denote by M (i)
+the j-th component-smoothness constant of (cid:96)(·, di),
+where di is the i-th point in D. The j-th smoothness constant of the function f is thus the average of all these constants:
+Mj = 1
+n
+
+i=1 M (i)
+
+(cid:80)n
+
+.
+
+j
+
+j
+
+Assuming that the practitioner knows an approximate upper bound bj over the M (i)
+to bj for each i ∈ [n]. The sensitivity of the average of the clipped M (i)
+j
+of M1, . . . , Mp under (cid:15)-DP using the Laplace mechanism as follows:
+
+’s, they can enforce it by clipping M (i)
+’s is thus 2bj/n. One can then compute an estimate
+
+j
+
+j
+
+M priv
+j
+
+=
+
+1
+n
+
+n
+(cid:88)
+
+i=1
+
+clip(M (i)
+
+j
+
+, bj) + Lap
+
+(cid:19)
+
+(cid:18) 2bjp
+n(cid:15)(cid:48)
+
+,
+
+for each j ∈ [p] ,
+
+(126)
+
+where the factor p in noise scale comes from using the simple composition theorem (Dwork & Roth, 2014), and Lap(λ) is
+a sample drawn in a Laplace distribution of mean zero and scale λ. The computed constant can then directly be used in
+DP-CD, allocating the remaining budget (cid:15) − (cid:15)(cid:48) to the optimization procedure.
+
+G Additional Experimental Details and Results
+
+G.1 Hyperparameter Tuning
+
+DP-SGD and DP-CD both depend on three hyperparameters: step size, clipping threshold and number of passes on data. For
+DP-CD, step sizes are adapted from a parameter as described in Section 6, and clipping thresholds as well (see Section 5.1).
+For DP-SGD, the step size is given by γ/β, where γ is the hyperparameter and β is the problem’s global smoothness
+constant (which we consider given), and the clipping threshold is used directly to clip gradients along their (cid:96)2-norm.
+
+We simultaneously tune these three hyperparameters for each algorithm across the following grid:
+
+• step size: 10 logarithmically-spaced values between 10−6 and 1 for DP-SGD, and between 10−2 and 10 for DP-CD.7
+
+• clipping threshold: 100 logarithmically-spaced values, between 10−3 and 106.
+
+• number of passes: 5 values (2, 5, 10, 20 and 50).
+
+We run each algorithm on each dataset 5 times on each combination of hyperparameter values. We then keep the set of
+hyperparameters that yield the lowest value of the objective at the last iterate, averaged across the 5 runs.
+
+In Table 2, we report the best relative error (in comparison to optimal objective value) at the last iterate, averaged over ﬁve
+runs, for each dataset, algorithm, and total number of passes on the data. As such, each cell of this table corresponds to the
+best value obtained after tuning the step size and clipping hyperparameters for a given number of passes.
+
+7Recall that step sizes for CD algorithms are coordinate-wise, and thus larger than in SGD algorithms. We empirically verify that the
+
+best step size always lies strictly inside the considered interval for both DP-CD and DP-SGD.
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+Table 2. Relative error to non-private optimal value of the objective function for different number of passes on the data. Results are
+reported for each dataset and for DP-CD and DP-SGD, after tuning step size and clipping hyperparameters. A star indicates the lowest
+error in each row.
+
+Passes on data
+
+2
+
+5
+
+10
+
+20
+
+50
+
+Electricity (imbalanced)
+(cid:15) = 1, δ = 1/n2
+
+Electricity (balanced)
+(cid:15) = 1, δ = 1/n2
+
+California (imbalanced)
+(cid:15) = 1, δ = 1/n2
+
+California (balanced)
+(cid:15) = 1, δ = 1/n2
+
+Sparse LASSO
+(cid:15) = 10, δ = 1/n2
+
+DP-CD
+DP-SGD
+
+DP-CD
+DP-SGD
+
+DP-CD
+DP-SGD
+
+DP-CD
+DP-SGD
+
+DP-CD
+DP-SGD
+
+0.1458 ± 6e-04
+0.2047 ± 2e-02
+
+0.0842 ± 1e-03
+0.1804 ± 2e-02
+
+0.0436 ± 2e-03
+0.1766 ± 2e-02
+
+0.0147 ± 2e-03
+0.1644 ± 2e-02
+
+0.0020 ± 1e-03*
+0.1484 ± 1e-02*
+
+0.0186 ± 4e-04
+0.0391 ± 1e-02
+
+0.0023 ± 4e-04
+0.0189 ± 5e-03
+
+0.0013 ± 6e-04*
+0.0123 ± 4e-03
+
+0.0013 ± 4e-04
+0.0106 ± 3e-03
+
+0.0019 ± 8e-04
+0.0040 ± 2e-03*
+
+0.1708 ± 7e-03
+0.2799 ± 9e-02
+
+0.1232 ± 1e-02
+0.1863 ± 2e-02
+
+0.0598 ± 1e-02
+0.1476 ± 2e-02
+
+0.0287 ± 5e-03
+0.1094 ± 2e-02
+
+0.0124 ± 7e-03*
+0.1068 ± 2e-02*
+
+0.0007 ± 3e-04*
+0.0351 ± 2e-02
+
+0.0011 ± 6e-04
+0.0226 ± 8e-03
+
+0.0012 ± 5e-04
+0.0125 ± 3e-03
+
+0.0010 ± 1e-04
+0.0087 ± 2e-03
+
+0.0017 ± 1e-03
+0.0042 ± 1e-03*
+
+0.2498 ± 4e-02*
+0.7551 ± 0e+00
+
+0.4702 ± 9e-02
+0.7551 ± 3e-09*
+
+0.5982 ± 4e-02
+0.7551 ± 0e+00
+
+0.7160 ± 2e-02
+0.7551 ± 0e+00
+
+0.7551 ± 0e+00
+0.7551 ± 0e+00
+
+G.2 Running Time
+
+In this section, we report the running times of DP-CD and DP-SGD. We implemented DP-CD and DP-SGD in C++, with
+Python bindings8. The design matrix and the labels are kept in memory as dense matrices of the Eigen library. No special
+code optimization nor tricks is applied to the algorithms, except for the update of residuals at each iteration of DP-CD,
+which prevents from accessing the complete dataset at each step. All experiments were run on a laptop with 16GB of RAM
+and an Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz.
+
+Figure 3 shows the same experiments as in Figure 1 and Figure 2, but as a function of the running time. In our implementation,
+DP-CD runs about 4 times as fast as DP-SGD for a given number of iterations (see Figure 3a and Figure 3b for 50 iterations).
+On the three other plots, Figure 3c, Figure 3d and Figure 3e, DP-CD yields better results in less iterations. DP-CD is thus
+particularly valuable in these scenarios: combined with its faster running time, it provides accurate results extremely fast.
+For completeness, we provide in Table 3 the full table of running time, corresponding to Table 2 and Figure 3. These results
+show that, for a given number of passes on the data, DP-CD consistently runs about 5 times faster than DP-SGD.
+
+Table 3. Time of execution (in seconds) for different number of passes on the data (averaged over 10 runs). Results are reported for each
+dataset and for DP-CD and DP-SGD, after tuning step size and clipping hyperparameters.
+
+Passes on data
+
+2
+
+5
+
+10
+
+20
+
+50
+
+Electricity (imbalanced)
+(cid:15) = 1, δ = 1/n2
+
+Electricity (balanced)
+(cid:15) = 1, δ = 1/n2
+
+California (imbalanced)
+(cid:15) = 1, δ = 1/n2
+
+California (balanced)
+(cid:15) = 1, δ = 1/n2
+
+Sparse LASSO
+(cid:15) = 10, δ = 1/n2
+
+DP-CD
+DP-SGD
+
+DP-CD
+DP-SGD
+
+DP-CD
+DP-SGD
+
+DP-CD
+DP-SGD
+
+DP-CD
+DP-SGD
+
+0.0128 ± 1e-03
+0.0663 ± 2e-03
+
+0.0274 ± 1e-03
+0.1722 ± 1e-02
+
+0.0500 ± 1e-03
+0.3321 ± 1e-02
+
+0.0980 ± 7e-04
+0.6729 ± 1e-02
+
+0.2457 ± 2e-03
+1.8588 ± 2e-01
+
+0.0121 ± 7e-04
+0.0686 ± 4e-03
+
+0.0281 ± 3e-03
+0.1768 ± 1e-02
+
+0.0529 ± 2e-03
+0.3578 ± 2e-02
+
+0.1062 ± 6e-03
+0.6787 ± 2e-02
+
+0.2577 ± 2e-03
+1.6766 ± 2e-02
+
+0.0029 ± 9e-05
+0.0269 ± 1e-03
+
+0.0065 ± 8e-05
+0.0665 ± 1e-03
+
+0.0130 ± 1e-04
+0.1318 ± 2e-03
+
+0.0258 ± 1e-04
+0.2628 ± 3e-03
+
+0.0647 ± 2e-04
+0.6476 ± 8e-03
+
+0.0031 ± 2e-04
+0.0261 ± 7e-04
+
+0.0065 ± 2e-04
+0.0641 ± 5e-04
+
+0.0132 ± 1e-04
+0.1295 ± 2e-03
+
+0.0262 ± 2e-04
+0.2592 ± 4e-03
+
+0.0649 ± 3e-04
+0.6469 ± 7e-03
+
+0.0244 ± 6e-04
+0.0718 ± 3e-03
+
+0.0760 ± 6e-04
+0.1788 ± 4e-03
+
+0.1614 ± 4e-03
+0.3654 ± 7e-03
+
+0.3213 ± 5e-04
+0.7292 ± 2e-02
+
+0.6598 ± 1e-02
+1.8110 ± 3e-02
+
+8The code is available at https://gitlab.inria.fr/pmangold1/private-coordinate-descent/.
+
+Differentially Private Coordinate Descent for Composite Empirical Risk Minimization
+
+(a) Electricity (logistic).
+Imbalanced.
+
+(b) California (LASSO).
+Imbalanced.
+
+(c) Electricity (logistic).
+Balanced.
+
+(d) California (LASSO).
+Balanced.
+
+(e) Sparse LASSO.
+Balanced.
+
+Figure 3. Relative error to non-private optimal for DP-CD (blue, round marks), DP-CD with privately estimated coordinate-wise
+smoothness constants (green, + marks) and DP-SGD (orange, triangle marks) on ﬁve problems. We report average, minimum and
+maximum values over 10 runs for each algorithm, as a function of the algorithm running time (in seconds).
+
+Relative Error toNon-Private Opt0100200Time (s)103102101DP-CDDP-SGDDP-CD-PDP-SCD0.00.20.40.6Time (s)102101100Relative Error toNon-Private Opt0100200Time (s)1031021010.00.20.40.6Time (s)1031021010.00.10.2Time (s)0.20.40.6

@@ -1,0 +1,1196 @@
+Revisiting RDF storage layouts for eﬀicient query
+answering
+Maxime Buron, François Goasdoué, Ioana Manolescu, Tayeb Merabti,
+
+Marie-Laure Mugnier
+
+To cite this version:
+
+Maxime Buron, François Goasdoué, Ioana Manolescu, Tayeb Merabti, Marie-Laure Mugnier. Revisit-
+ing RDF storage layouts for eﬀicient query answering. SSWS 2020 - 13th International Workshop on
+Scalable Semantic Web Knowledge Base Systems, Nov 2020, Athène, Greece. pp.17-32. ￿hal-02921457￿
+
+HAL Id: hal-02921457
+
+https://inria.hal.science/hal-02921457
+
+Submitted on 25 Aug 2020
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Distributed under a Creative Commons Attribution 4.0 International License
+
+Revisiting RDF storage layouts for eﬃcient
+query answering
+
+M. Buron1,2, F. Goasdou´e3, I. Manolescu1,2, T. Merabti1,2, and M.-L. Mugnier4
+
+1 Inria firstname.lastname@inria.fr
+2 Institut Polytechnique de Paris, France
+3 Univ Rennes, CNRS, IRISA, France fg@irisa.fr
+4 Univ Montpellier, LIRMM, Inria, France mugnier@lirmm.fr
+
+Abstract. The performance of query answering in an RDF database
+strongly depends on the data layout, that is, the way data is split in
+persistent data structures. We consider answering Basic Graph Pattern
+Queries (BGPQs), and in particular those with variables (also) in class
+and property positions, in the presence of RDFS ontologies, both through
+data saturation and query reformulation. We show that such demanding
+queries often lead to ineﬃcient query answering on two popular storage
+layouts, so-called T and CP. We present novel query answering algo-
+rithms on the TCP layout, which combines T and CP. In exchange to
+occupying more storage space, e.g. on an inexpensive disk, TCP avoids
+the bad or even catastrophic performance that T and/or CP sometimes
+exhibit. We also introduce summary-based pruning, a novel technique
+based on existing RDF quotient summaries, which improves query an-
+swering performance on the T, CP and the more robust TCP layouts.
+
+Introduction
+
+1
+We consider the problem of eﬃciently querying an RDF database, which stores
+RDF graphs persistently (e.g., on a disk) and allows queries and updates on the
+graphs, possibly concurrently by several users. We are interested in answering
+queries on a graph, taking into account an RDF Schema (RDFS, in short)
+ontology and associated RDFS entailment. We consider general SPARQL
+conjunctive queries (a.k.a. basic graph pattern queries, or BGPQs), which
+allow variables in any subject, property, or object position of query triples. For
+instance, in the query q(x, u) ← (x, :name, :Alice), (x, y, z), (z, rdf:type, u), where
+x, y, z, u are variables and the other terms are IRIs, the property y in the second
+triple is a variable, just like u which is the type of z. Such queries allow to fully
+take advantage of the freedom RDF provides: one does not need to know the
+relation between x and z, nor the exact type of z, to query the graph.
+Answering a BGPQ in an RDF database requires translating it into a description
+of work that the execution engine must perform; without loss of generality, we
+call this work description a query plan, as is common in the database literature.
+Speciﬁcally, we distinguish a logical plan specifying the operations to use to
+answer the query, from a physical (executable) plan, derived from the logical one
+with the help of statistics and cost parameters characterizing the data (size,
+value frequencies etc.) and the execution environment (hardware etc.)
+
+2
+
+M. Buron, F. Goasdou´e , I. Manolescu, T. Merabti, and M.-L. Mugnier
+
+Both plans start by accessing some data from the store and continue with various
+other processing steps (e.g., ﬁltering, combining multiple inputs etc.). The set of
+persistent data structures that hold the data of an RDF graph in the database
+are called storage layout. When a set of frequent BGPQs are known in advance,
+they can be used to design a workload-aware layout, which optimizes data access
+for these queries, e.g., [7,15,20]. Lacking a known query set, a workload-unaware
+layout is used, with the two most popular being: T (triple), e.g., [8,25,19],
+which stores all triples together as a single (s, p, o) (subject, predicate, object)
+collection; and CP (class and property) [4], which separates the data for each
+property and class, i.e., as (i) a collection of (s, o) pairs for every property p,
+and (ii) a collection of all the resources s that have a given type c in the graph.
+Indexes can be added to both the T and CP layouts.
+In this work, we focus on translating BGPQs, including general ones, for
+query answering under RDFS ontologies and entailment, into logical plans,
+on workload-unaware layouts. We target logical plans for generality, since
+physical plans strongly depend on the RDF database implementation, the pres-
+ence of indexes etc.; these decisions are best left to the optimization and ex-
+ecution layer, and we do not study them here. However, as we will show, the
+choice of the logical plan can massively impact the space of alternatives (physical
+plans) considered for the query, and thus the query answering performance. In
+particular, we translate our plans in SQL (if the RDF database has a relational
+back-end) or SPARQL (if a native RDF engine evaluates them), which enables
+to retain all beneﬁts of system-speciﬁc optimization. We study translation for
+the two classical ways of taking the ontology into account for query
+answering: by materializing entailed triples in the RDF graph (graph satura-
+tion) or by compiling relevant parts of the ontology in the query, which yields a
+union of BGPQs (query reformulation). Our contributions are the following:
+1. We introduce the novel workload-unaware TCP layout, which combines the
+data structures of both T and CP, and an associated algebraic translation
+of BGPQs into logical plans over TCP.
+
+2. We introduce summary-based pruning, an optimization technique of inde-
+pendent interest, that reduces query answering costs on the T, CP and TCP
+layouts, both when using graph saturation and query reformulation.
+
+3. We experimentally validate the performance beneﬁts of the TCP layout and
+translation, and of summary-based pruning, on a relational and a native
+RDF database. Our experiments are detailed online5 with the code and data
+necessary in order to reproduce them.
+
+Below, after the preliminaries, Section 3 recalls algebraic query translations for
+the T and CP layouts. We explain why na¨ıve algebraic translation on CP leads
+to poor performance, not only for general BGPQs (as noted since [21]), but also
+for reformulated ones (whether general or not). This is due to interleaved joins
+and unions, which limit the optimization opportunities in the RDF database.
+At the same time, the T layout entails repeated self-joins of the whole triple
+set, degrading performance on large graphs and complex queries (this motivated
+
+5https://gitlab.inria.fr/mburon/graph-layout-experiments
+
+Revisiting RDF storage layouts for eﬃcient query answering
+
+3
+
+RDFS constraint Schema triple notation RDFS constraint Schema triple notation
+Subclass
+Domain typing
+
+Subproperty
+Range typing
+
+(s, ≺sp, o)
+(s, (cid:44)→r, o)
+
+(s, ≺sc, o)
+(s, ←(cid:45)d, o)
+
+RDF assertion Data triple notation
+Class assertion
+Property assertion (s, p, o) with p (cid:54)∈ {τ, ≺sc, ≺sp, ←(cid:45)d, (cid:44)→r}
+
+(s, τ, o)
+
+Table 1. RDF statements.
+
+Gex =
+
+(:OpenArt, ≺sc, :Article), (:GOpenArt, ≺sc, :OpenArt), (:Prof, ≺sc, :Person),
+(:teaches, ←(cid:45)d, :Prof), (:author, (cid:44)→r, :Person), (:ﬁrstAuth, ≺sp, :author),
+(:art1, :title, “RDF storage”), (:Alice, :name, “Alice”)(:art1, :ﬁrstAuth, :Alice),
+(:Alice, :teaches, :algo101), (:art1, :author, :Bob), (:Bob, :name, “Bob”),
+(:art1, rdf:type, :GOpenArt)
+
+Fig. 1. Sample RDF graph Gex (schema triples on top and data triples below).
+
+introducing the CP layout [4]). Section 4 presents our technical contributions
+and Section 5 our experiments. We then discuss related works and conclude.
+
+2 Preliminaries
+We rely on three pairwise disjoint sets of values: the sets I of IRIs (resource
+identiﬁers), L of literals (constants) and B of blank nodes modeling unknown
+IRIs or literals. A triple (s, p, o) ∈ (I ∪ B) × I × (L ∪ I ∪ B) states that its
+subject s has the property p with the object value o [1]. We denote by Val(G) the
+set of all values (IRIs, blank nodes and literals) occurring in an RDF graph G.
+In triples, we use :b (possibly with indices) to denote blank nodes, and strings
+between quotes to denote literals.
+We distinguish schema triples from data ones. The former state RDF Schema
+(RDFS) constraints on classes and properties: subclass (specialization relation
+between classes), subproperty (specialization relation between properties), do-
+main (typing of the ﬁrst attribute of a property), and range (typing of the sec-
+ond attribute of a property). An RDFS ontology (or ontology, in short) is a set of
+schema triples. The ontology of an RDF graph G is the set of schema triples of G.
+The other triples, i.e., data triples, describe data by typing resources with classes
+or stating how resources are related through properties. Table 1 introduces our
+short notations for schema and data triples.
+
+Example 1 (Running example). Figure 1 shows a sample graph Gex, describing
+articles and their authors; some articles are Open Access (:OpenArt), a subclass
+of which are Green Open Access ones (:GOpenArt).
+
+An entailment rule (or simply rule) r has the form body(r) → head(r), where
+body(r) and head(r) are RDF graphs, respectively called body and head of the
+rule r. In this work, we consider the set of RDFS entailment rules R shown
+in Table 2, which allow reasoning with an RDFS ontology; in the table, all values
+except RDF reserved IRIs are blank nodes. These rules either combine schema
+triples to entail schema triples (rdfs5, rdfs11, ext1 to ext4), or combine schema
+triples together with data triples to entail data triples (rdfs2, rdfs3, rdfs7 and
+
+4
+
+M. Buron, F. Goasdou´e , I. Manolescu, T. Merabti, and M.-L. Mugnier
+
+Name [2] Entailment rule
+rdfs5
+rdfs11
+ext1
+ext2
+ext3
+
+(p1, ≺sp, p2), (p2, ≺sp, p3) → (p1, ≺sp, p3) ext4
+(s, ≺sc, o), (o, ≺sc, o1) → (s, ≺sc, o1)
+(p, ←(cid:45)d, o), (o, ≺sc, o1) → (p, ←(cid:45)d, o1)
+(p, (cid:44)→r, o), (o, ≺sc, o1) → (p, (cid:44)→r, o1)
+(p, ≺sp, p1), (p1, ←(cid:45)d, o) → (p, ←(cid:45)d, o)
+
+(p, ≺sp, p1), (p1, (cid:44)→r, o) → (p, (cid:44)→r, o)
+
+rdfs2 (p, ←(cid:45)d, o), (s1, p, o1) → (s1, τ, o)
+rdfs3 (p, (cid:44)→r, o), (s1, p, o1) → (o1, τ, o)
+rdfs7 (p1, ≺sp, p2), (s, p1, o) → (s, p2, o)
+rdfs9 (s, ≺sc, o), (s1, τ, s) → (s1, τ, o)
+
+Name Entailment rule
+
+Table 2. Sample set R of RDFS entailment rules.
+
+rdfs9). The saturation of a graph G with the rule set R, denoted GR, allows
+materializing its semantics, by iteratively augmenting it with the triples it entails
+using R, until reaching a ﬁxpoint; this process is ﬁnite [2].
+
+Example 2. The saturation of Gex with R (Table 2) is: (Gex)R = Gex ∪
+{(:GOpenArt, ≺sc, :Article), (:teaches, ←(cid:45)d, :Person), (:ﬁrstAuth, (cid:44)→r, :Person),
+(:Alice, τ, :Prof), (:Bob, τ, :Person), (:art1, :author, :Alice), (:art1, τ, :OpenArt),
+(:Alice, τ, :Person), (:art1, τ, :Article)}
+Given a set of variables V disjoint from I ∪ B ∪ L , a basic graph pat-
+tern (BGP in short) is a set of triple patterns (or triples in short, when non-
+ambiguous) belonging to (I ∪ B ∪ V ) × (I ∪ V ) × (I ∪ B ∪ L ∪ V ). The set of
+variables (resp. values: IRIs, blank nodes, literals and variables) occurring in a
+BGP P is denoted by Var(P) (resp. Val(P )). Note that a variable may occur
+in any position of a triple pattern. In particular, we say that a variable x
+occurs in property position for a triple of the form (−, x, −) and in class position
+for a triple of the form (−, τ, x).
+Deﬁnition 1 (BGPQ). A BGPQ q is of the form q(¯x) ← P , where P is a
+BGP (also denoted body(q)) and ¯x ⊆ Var(P) are the answer variables of q.
+For simplicity, below, we will assume that BGPQs have no blank nodes, as
+it is well-known that these can be replaced by non-answer variables [3]. We
+also consider a slight generalization of BGPQs, namely partially instantiated
+BGPQs: such queries are obtained from BGPQs by substituting some variables
+with values from I ∪L ∪B. For simplicity again, we will not distinguish between
+a standard and a partially instantiated BGPQ. The semantics of a BGPQ on a
+graph is deﬁned through homomorphisms from the query body to the graph:
+Deﬁnition 2 (BGP-to-RDF homomorphism). A homomorphism from a
+BGP P to an RDF graph G is a function ϕ from Val(P ) to Val(G) such that for
+any triple (s, p, o) ∈ P , the triple (ϕ(s), ϕ(p), ϕ(o)) is in G, with ϕ the identity
+on IRIs and literals.
+We distinguish query evaluation, whose result is just based on the explicit
+graph triples, from query answering that also accounts for its implicit triples.
+Deﬁnition 3 (Evaluation and answering). Let q be a (partially instantiated)
+BGPQ. The answer set to q on a graph G w.r.t. rule set R is: q(G, R) = {(cid:104)ϕ(¯x)(cid:105) |
+ϕ homomorphism from body(q) to GR}. If ¯x = ∅, i.e., q is a Boolean query, q
+is true iﬀ q(G, R) = {(cid:104)(cid:105)}. The evaluation of q on G, denoted q(G, ∅), or q(G)
+in short, is obtained through homomorphisms from body(q) to G only.
+These notions and notations naturally extend to unions of (partially instanti-
+ated) BGPQs, or UBGPQs in short.
+
+Revisiting RDF storage layouts for eﬃcient query answering
+
+5
+
+Example 3 (Example query). Consider the BGPQ asking who is writing which
+kind of articles: q(x, y) ← (z, :author, x), (z, τ, y), (y, ≺sc, :Article). Its evaluation
+on Gex is empty. However, the answer set of q on Gex w.r.t. R is q(Gex, R) =
+{(cid:104):Alice, :GOpenArt(cid:105), (cid:104):Alice, :OpenArt(cid:105), (cid:104):Bob, :GOpenArt(cid:105), (cid:104):Bob, :OpenArt(cid:105)}.
+
+Many RDF data management systems use saturation-based query answering,
+i.e., query evaluation on the previously saturated graph; clearly, from the above
+deﬁnition, q(G, R) = q(GR) holds. An alternative technique is reformulation-
+based query answering, e.g., [6,18,9], which injects the ontological knowledge
+into a reformulated query, whose simple evaluation on G yields the complete
+answer set of the original query. More precisely, given a BGPQ q asked on a graph
+G, the reformulation of q w.r.t. to R and the ontology of G, denoted QR, is such
+that q(G, R) = QR(G). A property of the technique proposed in [9], on which we
+rely in this paper, is that the reformulated query does not contain schema triples
+anymore; intuitively, such triples are evaluated on the ontology of the queried
+graph during the query reformulation. Further, from now on, we assume that
+(U)BGPQs, in particular those produced through reformulation, are minimal:
+non-minimality incurs redundancy of triples in BGPQs, or of BGPQs within
+UBGPQs. Well-known query minimization techniques exist for this purpose.
+Example 4. The reformulation of the example query q (Example 3) is:
+
+QR =
+
+q(x, :OpenArt) ← (z, :author, x), (z, τ, :OpenArt)
+∪ q(x, :OpenArt) ← (z, :ﬁrstAuth, x), (z, τ, :OpenArt)
+∪ q(x, :OpenArt) ← (z, :author, x), (z, τ, :GOpenArt)
+∪ q(x, :OpenArt) ← (z, :ﬁrstAuth, x), (z, τ, :GOpenArt)
+∪ q(x, :GOpenArt) ← (z, :author, x), (z, τ, :GOpenArt)
+∪ q(x, :GOpenArt) ← (z, :ﬁrstAuth, x), (z, τ, :GOpenArt)
+
+It can be checked that QR(Gex) = q(Gex, R).
+
+3 BGPQ answering through translation on T and CP
+We now detail how (saturation- or reformulation-based) query answering can be
+performed on the T and the CP storage layouts (Sections 3.1 and 3.2).
+
+3.1 BGPQ answering on the T layout
+Let t(S, P, O) be the table storing the triples of a graph G for the T layout.
+Saturation-based query answering. The saturation GR of G is stored in the table
+t. The algebraic translation of a BGPQ q(¯x) ← t1, . . . , tn on the T layout is:
+
+T (q) = πq((cid:46)(cid:47)jcond (αT (t1), . . . , αT (tn))
+
+where αT , the query triple translation for the T layout, translates the i-th query
+triple ti(si, pi, oi) into an algebraic expression of the form σscond(t), where t is the
+triple table, and scond is a (possibly empty) set of selections over the attributes
+of t; speciﬁcally, if si (respectively, pi, oi) is an IRI or a literal, scond contains a
+predicate of the form S = si (and similarly for pi, oi); jcond is a conjunction of
+join predicates containing, for every variable appearing in several positions (in
+one or several triples) in q, an equality between the respective attributes in the
+
+6
+
+M. Buron, F. Goasdou´e , I. Manolescu, T. Merabti, and M.-L. Mugnier
+
+αT (ti) triple translations; ﬁnally πq is a projection on the attributes from the
+α(ti)’s corresponding to the answer variables of q, or the values to which such
+variables are bound in case of a partially instantiated query.
+
+Example 5. The example query translates on the T layout as:
+
+πt1.O,t2.O((cid:46)(cid:47)t1.S=t2.S,t2.O=t3.S (σP =:author(t), σP =τ (t), σP =≺sc∧O=:Article(t)))
+
+In the above, the selection σP =:author(t) restricts the triples from the t table
+to those having the attribute P equal to :author. Similarly, σP =τ (t) corre-
+sponds to the selection P = τ . On the atom t3, αT applies a double selec-
+tion σP =≺sc∧O=:Article(t), since t3 has only one variable in position S. Further,
+(cid:46)(cid:47)jcond=(cid:46)(cid:47)t1.S=t2.S,t2.O=t3.S joins the three previous selections, where t1.S =
+t2.S and t2.O = t3.S respectively reﬂect the co-occurrences of variables z and y.
+The ﬁnal projection πt1.O,t2.O returns the pairs of values obtained for (x, y).
+Reformulation-based query answering. Here, the graph G is stored in t (but not
+its saturation), and every incoming BGPQ q is reformulated into a (partially
+instantiated) UBGPQ QR = (cid:83)n
+i=1 qi, whose algebraic translation on the T layout
+is the union of the algebraic translations of its (partially instantiated) BGPQs:
+
+T (QR) =
+
+n
+(cid:91)
+
+i=1
+
+T (qi)
+
+Example 6. Consider again the example query q and its reformulation QR shown
+in Example 4. The algebraic translation T (QR) is:
+πt1.O,:OpenArt((cid:46)(cid:47)t1.S=t2.S (σP =:author(t), σP =τ ∧O=:OpenArt(t))
+∪ πt1.O,:OpenArt((cid:46)(cid:47)t1.S=t2.S (σP =:ﬁrstAuth(t), σP =τ ∧O=:OpenArt(t))
+∪ πt1.O,:OpenArt((cid:46)(cid:47)t1.S=t2.S (σP =:author(t), σP =τ ∧O=:GOpenArt(t))
+∪ πt1.O,:OpenArt((cid:46)(cid:47)t1.S=t2.S (σP =:ﬁrstAuth(t), σP =τ ∧O=:GOpenArt(t))
+∪ πt1.O,:GOpenArt((cid:46)(cid:47)t1.S=t2.S (σP =:author(t)), σP =τ ∧O=:GOpenArt(t))
+∪ πt1.O,:GOpenArt((cid:46)(cid:47)t1.S=t2.S (σP =:ﬁrstAuth(t), σP =τ ∧O=:GOpenArt(t))
+
+3.2 BGPQ answering on the CP layout
+With the CP layout, an RDF graph is stored as a set of tables corresponding
+to classes and properties: for each class c, there is a table tc(S) that stores all
+subjects s of triples (s, τ, c), and for each data or schema property p (cid:54)= τ , there
+is a table tp(S, O) that stores all subject-object pairs (s, o) for triples (s, p, o).
+We call any such tc a class table, and tp a property table. The CP layout speeds
+up data access for queries which specify the class in every triple whose property
+is τ and specify the property in every triple. However, as noted e.g., in [21], it
+may render the evaluation of general queries, with variables in class or property
+position, ineﬃcient, as the triples they refer to may be in any tc or tp tables,
+respectively.
+Saturation-based query answering. Assume that GR is stored using the CP
+layout. To obtain the answers to a BGPQ q(¯x) ← t1, . . . , tn, a ﬁrst simple na¨ıve
+translation, which can be traced back to [4,21], is:
+
+CP (q) = πq((cid:46)(cid:47)jcond (αCP (t1), · · · , αCP (tn)))
+
+Revisiting RDF storage layouts for eﬃcient query answering
+
+7
+
+where πq and jcond are deﬁned as for the T layout, and αCP , the query triple
+translation for the CP layout, is:
+
+αCP (t) =
+
+
+
+
+
+
+πS,τ,c(σscond(tc)) if t = (s, τ, c) with c (cid:54)∈ V
+πS,p,O(σscond(tp)) if t = (s, p, o) with p (cid:54)∈ V ∪ {τ }
+(cid:83)
+c∈C αCP ((s, τ, c)) if t = (s, τ, x) with x ∈ V
+αCP ((s, τ, o)) ∪ (cid:83)
+
+(1)
+(2)
+(3)
+p∈P αCP ((s, p, o)) if t = (s, x, o) with x ∈ V (4)
+
+where C and P are, respectively, the set of classes and of properties other than τ
+in the queried graph, and scond is a (possibly empty) conjunction of selections,
+just as we deﬁned it for αT , but over the class and property tables instead of
+the triple table t.
+
+Example 7. The naive translation of the example query q on the CP layout is:
+πt1.O,t2.O((cid:46)(cid:47)t1.S=t2.S,t2.O=t3.S (πS,:author,O(t:author),
+
+πs,τ,:GOpenArt(t:GOpenArt) ∪ πs,τ,:OpenArt(t:OpenArt) ∪ πs,τ,:Article(t:Article)
+∪ πs,τ,:Prof (t:Prof ) ∪ πs,τ,:Person(t:Person) ∪ πS,≺sc,O(σO=:Article(t≺sc)))
+
+Note that in cases (3) and (4) above, αCP introduces unions under joins, as il-
+lustrated by the previous example. This leads to suboptimal evaluation per-
+formance in many data management engines, which may optimize and execute
+eﬃciently a join over several data collections, but do not attempt to reorder (com-
+mute) joins with unions. For instance, the query (x, :a, :a1), (x, y, z), (z, τ, u),
+(z, :b, :b1) translates into a plan that joins (among others) the union of all the
+tables (for (x, y, z)) with the union of all class tables (for (z, τ, u)). Most sys-
+tems execute this “literally”, i.e., they build and materialize these two very large
+unions, which is very costly, before joining them with the ﬁrst and last triple6.
+To avoid such unions under joins, we rely on the notion of instantiation, which
+has been used in various query answering techniques e.g., [15,18]:
+Query instantiation. The instantiation of a BGPQ q consists in instantiating the
+variables in q that must be bound to classes and properties of the queried graph,
+in all possible ways, which yields a (partially instantiated) UBGPQ. Given a
+BGPQ q and a graph G, we denote by qp,G (resp. qc,G) its property instantiation
+(resp. class instantiation), which is the UBGPQ obtained by instantiating all
+its variables in property position (resp. in class position), by all combinations of
+properties (resp. classes) of G.
+
+Example 8. The class instantiation qc,Gex of the example query q, where the only
+instantiated variable is y, is:
+
+q(x, :GOpenArt) ← (z, :author, x), (z, τ, :GOpenArt), (:GOpenArt, ≺sc, :Article)
+∪ q(x, :OpenArt) ← (z, :author, x), (z, τ, :OpenArt), (:OpenArt, ≺sc, :Article)
+∪ q(x, :Article) ← (z, :author, x), (z, τ, :Article), (:Article, ≺sc, :Article)
+∪ q(x, :Prof) ← (z, :author, x), (z, τ, :Prof), (:Prof, ≺sc, :Article)
+∪ q(x, :Person) ← (z, :author, x), (z, τ, :Person), (:Person, ≺sc, :Article)
+
+6We checked this on systems that disclose their query execution strategy; experi-
+
+ments with others who do not, conﬁrm the same hypothesis (see Section 5).
+
+8
+
+M. Buron, F. Goasdou´e , I. Manolescu, T. Merabti, and M.-L. Mugnier
+
+Class and property instantiations extend from BGPQs to UBGPQs in the natural
+way. Given a UBGPQ of the form Q = q1 ∪ q2 · · · ∪ qn, we set:
+
+Qp,G = qp,G
+
+1 ∪ qp,G
+
+2
+
+· · · ∪ qp,G
+
+n
+
+and Qc,G = qc,G
+
+1 ∪ qc,G
+
+2
+
+· · · ∪ qc,G
+
+n
+
+Then, the instantiation of Q w.r.t. a graph G is the following:
+
+QG = (Qc,G)p,G ∪ (Qp,G)c,G
+
+We need both terms of the above union, exactly in the case when some variable
+of Q appears both in a property and in a class position. These cases are rare
+and easy to detect, thus in practice we only use one of the unions as soon as
+we detect both are not needed. Crucially, (U)BGPQ instantiation is correct for
+saturation- and reformulation-based query answering. Intuitively, this is because
+instantiation enumerates all possible combinations of classes and properties that
+query reformulation or evaluation may ﬁnd in G.
+We can now deﬁne the instantiation-based query translation. A BGPQ q is ﬁrst
+instantiated into qG = (cid:83)n
+
+i=1 qi, then translated on the CP layout as:
+
+CP (qG) =
+
+n
+(cid:91)
+
+i=1
+
+CP (qi)
+
+Importantly, because qG does not contain any variable in class or property po-
+sition, every na¨ıve translation CP (qi) within CP (qG) avoids both (3) or (4) in
+the αCP triple transformation function. Hence, the translation avoids the intro-
+duction of unions under joins, with their potential bad impact on performance.
+Example 9. Consider the query q and its instantiation qGex = qc,Gex in Exam-
+ple 8. The instantiation-based translation of q corresponds to the na¨ıve transla-
+tion of qGex :
+
+(cid:91)
+
+πt1.O,u((cid:46)(cid:47)t1.S=t2.S,t2.O=t3.S (πS,:author,O(t:author),
+
+u∈{:GOpenArt,:OpenArt,:Article,:Prof,:Person}
+
+πS,τ,u(tu),
+πS,≺sc,O(σS=u,O=:Article(t≺sc))
+
+Reformulation-based query answering. The graph G is again stored using the
+CP layout (but not saturated). In this case, answering a BGPQ q starts by
+computing its reformulation QR w.r.t. the ontology of G. Then, we obtain the
+answers q(G, R) either through CP (QR), the na¨ıve translation of QR, or through
+CP (QG
+R), the instantiation-based translation of QR, i.e., the na¨ıve translation
+of its instantiation QG
+R; as in the previous section, the algebraic translation of
+a UBGPQ is deﬁned as the union of the algebraic translations of its BGPQs.
+Instantiating QR generally increases its size, but, by removing variables in class
+and property positions, it avoids the unions under joins introduced in cases (3)
+and (4) by the αCP triple translation function.
+
+Example 10. Consider the query q and its reformulation QR from Example 4.
+Here, since no variable of QR occurs in class or property position, CP (QR) and
+CP (QG
+
+R) lead to the same algebraic expression:
+
+Revisiting RDF storage layouts for eﬃcient query answering
+
+9
+
+πt1.O,:OpenArt((cid:46)(cid:47)t1.S=t2.S (πS,:author,O(t:author), πS,τ,:OpenArt(t:OpenArt))
+∪ πt1.O,:OpenArt((cid:46)(cid:47)t1.S=t2.S (πS,:ﬁrstAuth,O(t:ﬁrstAuth), πS,τ,:OpenArt(t:OpenArt))
+∪ πt1.O,:OpenArt((cid:46)(cid:47)t1.S=t2.S (πS,:author,O(t:author), πS,τ,:GOpenArt(t:GOpenArt))
+∪ πt1.O,:OpenArt((cid:46)(cid:47)t1.S=t2.S (πS,:ﬁrstAuth,O(t:ﬁrstAuth), πS,τ,:GOpenArt(t:GOpenArt))
+∪ πt1.O,:GOpenArt((cid:46)(cid:47)t1.S=t2.S (πS,:author,O(t:author), πS,τ,:GOpenArt(t:GOpenArt))
+∪ πt1.O,:GOpenArt((cid:46)(cid:47)t1.S=t2.S (πS,:ﬁrstAuth,O(t:ﬁrstAuth), πS,τ,:GOpenArt(t:GOpenArt))
+
+4 Taming general BGP answering performance
+
+Below, we present our technical contributions: the TCP layout and its algebraic
+translation (Section 4.1), and summary-based pruning (Section 4.2).
+
+4.1 BGPQ answering based on the TCP layout
+The TCP layout combines T and CP with the aim of getting the best of both,
+while avoiding the performance problems they respectively entail (Sections 3.1
+and 3.2). Here, an RDF graph is stored both in the triple table t of the T layout
+and in the tc class and tp property tables of the CP layout. The rationale behind
+this is that CP is eﬃcient to access triples when the data structures holding the
+triples we need to access are immediately clear from the query, and small ; this
+is the case with query triples of the form (s, τ, c) or (s, p, o) for a known class
+c or property p. However, with query triples of the form (s, τ, x) and (s, x, o),
+the CP translation introduces unions, typically executed before joins, degrading
+performance. Interestingly, direct access to a potentially large share of a graph’s
+triples is exactly what the T layout supports well - thus our idea to combine them.
+As we show in the next section, this allows to signiﬁcantly improve performance,
+at expense of some extra storage space, typically inexpensive since it is on disk.
+Saturation-based query answering. Let us assume that the saturation GR of a
+graph G is stored in the TCP layout. The answers to a BGPQ q ← t1, . . . , tn
+are obtained through its algebraic transformation for the TCP layout:
+
+T CP (q) = πq((cid:46)(cid:47)jcond (αT CP (t1), · · · , αT CP (tn)))
+
+where πq and jcond are deﬁned as for the T and CP layouts, and αT CP , the
+query triple translation for the TCP layout, is:
+
+αT CP (t) =
+
+(cid:26) αCP (t) if t = (s, τ, c) or t = (s, p, o) with c (cid:54)∈ V , p (cid:54)∈ V ∪ {τ }
+αT (t) otherwise, i.e., if t = (s, τ, x) or t = (s, x, o) with x ∈ V
+
+Importantly, αT CP translates the triples that penalize the CP layout into t
+atoms, and never into a union: hence, αT CP avoids the cases (3) and (4) of αCP .
+Example 11. The translation of the example query for the TCP layout combines
+the T layout for the second triple and the CP layout for the others:
+πt1.O,t2.O((cid:46)(cid:47)t1.S=t2.S,t2.O=t3.S (πS,:author,O(t:author), σP =τ (t), πS,≺sc,O(σO=:Article(t≺sc))))
+
+Reformulation-based query answering. Again, the answers to a query q are com-
+puted by evaluating the algebraic translation of its reformulation QR = (cid:83)n
+i=1 qi,
+but now for the TCP layout:
+
+T CP (QR) =
+
+T CP (qi)
+
+n
+(cid:91)
+
+i=1
+
+10
+
+M. Buron, F. Goasdou´e , I. Manolescu, T. Merabti, and M.-L. Mugnier
+
+Example 12. Consider the query q(x, y, z) → (x, τ, z), (x, :ﬁrstAuth, y) asking
+for all resources with their type and ﬁrst author. Its reformulation w.r.t. Gex’s
+ontology is shown below (the last four union terms are omitted for space reasons):
+
+QR =
+
+q(x, y, z) ← (x, τ, z), (x, :ﬁrstAuth, y)
+∪ q(x, y, :Article) ← (x, τ, :OpenArt), (x, :ﬁrstAuth, y)
+∪ q(x, y, :Article) ← (x, τ, :GOpenArt), (x, :ﬁrstAuth, y)
+∪ q(x, y, :OpenArt) ← (x, τ, :GOpenArt), (x, :ﬁrstAuth, y)
+∪ q(x, y, :Person) ← (x, τ, :Prof), (x, :ﬁrstAuth, y) . . .
+
+Its algebraic translation on the TCP layout (similarly abridged) is:
+πt1.S,t2.O,t1.O((cid:46)(cid:47)t1.S=t2.S (σP =τ (t), πS,:ﬁrstAuth,O(t:ﬁrstAuth)))
+∪ πt1.S,t2.O,:Article((cid:46)(cid:47)t1.S=t2.S (πS,τ,:OpenArt(t:OpenArt), πS,:ﬁrstAuth,O(t:ﬁrstAuth)))
+∪ πt1.S,t2.O,:Article((cid:46)(cid:47)t1.S=t2.S (πS,τ,:GOpenArt(t:GOpenArt), πS,:ﬁrstAuth,O(t:ﬁrstAuth)))
+∪ πt1.S,t2.O,:OpenArt((cid:46)(cid:47)t1.S=t2.S (πS,τ,:GOpenArt(t:GOpenArt), πS,:ﬁrstAuth,O(t:ﬁrstAuth)))
+∪ πt1.S,t2.O,:Person((cid:46)(cid:47)t1.S=t2.S (πS,τ,:Prof (t:Prof ), πS,:ﬁrstAuth,O(t:ﬁrstAuth))) . . .
+
+Above, the ﬁrst union term refers to the triple table t, while the others do not.
+
+4.2 Summary-based query pruning
+We now introduce an optimization technique, which can be applied on any stor-
+age layout to reduce (U)BGPQ answering time. It allows detecting some BGPQs
+with an empty answer set on a graph, without evaluating them, by using a (typ-
+ically much smaller) structural summary of this graph.
+Given an RDF graph G and an equivalence relation ≡ among the nodes in G, i.e.,
+the subjects and objects of triples, an RDF quotient summary [12] is an RDF
+graph G/≡ built as follows. A node is created in G/≡ for each equivalence class
+among G’s nodes; further, for any triple (n1, p, n2) ∈ G, the triple (m1, p, m2)
+appears in G/≡, where m1 and m2 represent the equivalence class of n1 and n2
+respectively. If there are large equivalence classes in G, summarization is a form of
+compression. Several types of RDF quotient summaries have been proposed [12];
+in our experiments, we used the RDFQuotient summary construction tool [14],
+due to its online availability and low summary construction cost (linear in the
+number of triples of G). An RDFQuotient summary represents each class and
+property node by itself, and consider they are not equivalent to any other G
+node; thus, G and any quotient summary G/≡ have the same schema triples.
+Crucially, it holds that if q(G/≡) = ∅ then q(G) = ∅, for q a structural (U)BGPQ,
+i.e., in which the subjects and objects of query triples are either class and prop-
+erty IRIs, or variables. Intuitively, this result holds because structural queries
+only allow selecting subject, property and object values that are preserved through
+summarization (class and property IRIs). Note however that the opposite does
+not hold in general, i.e., q(G/≡) may have results while q(G) does not. We
+exploit this result by deﬁning the structural version of a BGPQ q, denoted
+qstr, which is obtained by replacing in q the literals and the IRIs that are
+not class or property IRIs, by fresh variables. For example, the structural ver-
+sion of the query q(x) ← (x, τ, :OpenArt), (x, :ﬁrstAuth, :Alice) is: qstr(x) ←
+(x, τ, :OpenArt), (x, :ﬁrstAuth, y), with :Alice replaced by y. Hence, when a sum-
+mary G/≡ is available, we can use it to prune a UBGPQ Q = (cid:83)
+i qi by removing
+
+Revisiting RDF storage layouts for eﬃcient query answering
+
+11
+
+from the union all the qi terms for which qstr
+i (G/≡) = ∅. As explained above, this
+may fail to prune some qi with no results on G, but it preserves query results:
+
+Q(G) = Qpruned(G)
+
+where Qpruned is the result of pruning Q. As our experiments will show, this
+generally leads to a signiﬁcant reduction of query answering time.
+5 Experimental evaluation
+We now describe experiments comparing the query answering methods presented
+in the previous sections, on the T, CP and TCP layouts.
+
+5.1 Experimental settings
+We implemented the T, CP and TCP layouts in OntoSQL (https://ontosql.
+inria.fr), a Java platform providing eﬃcient RDF storage and saturation- and
+reformulation-based query answering on top of an RDBMS [9,10,16] (Postgres
+9.6 in these experiments). OntoSQL encodes IRIs and literals as integers, and
+a dictionary table allows going from one to the other; each table (t, tp or tc)
+is indexed on all the subsets of its attributes. To use OntoSQL, we express our
+algebraic translations in SQL. We checked that in Postgres query plans, the
+relative positions of unions and joins in the query plans chosen by the RDBMS
+are those from our translations; [10,11] showed that this holds for two other
+major RDBMSs. However, the RDBMS takes all optimization decisions, based
+on its cost model and statistics. To put this into perspective also with respect
+to native RDF engines, we ran the same experiments also on Virtuoso Open
+Source Edition 7.2, to whom we provided SPARQL queries, which correspond
+exactly to our algebraic translation on the T layout. Virtuoso also controls its
+optimization decisions, and has full control over its store.
+For summary-based pruning, we used the RDFQuotient (https://rdfquotient.
+inria.fr) tool to build the “typed strong” summary [14] of a graph G; this
+summary is denoted G/TS. The summary groups typed nodes according to their
+types, and untyped nodes by exploiting the similarity of their incoming/outgo-
+ing properties (see [14] for details). In general, any quotient summary could be
+used; a large (more detailed) summary makes pruning more accurate, but also
+slower since it needs to query the summary.
+Hardware We used a server with 2,7 GHz Intel Core i7 processors and 160 GB
+of RAM, running CentOs Linux 7.5.
+
+|G| |G/TS|
+
+|GR| |(GR)/TS|
+
+Graph
+LUBM 100M 340 131M
+DBLP 88M 290 147M
+
+439 28.95 11.95
+708 26.07 16.35
+Table 3. Graph and summary sizes (number of triples), OntoSQL database sizes (in
+GB), including all indexes, for the T, CP and TCP layouts.
+
+|G|T |G|CP |G|TCP |GR|T |GR|CP |GR|TCP
+39.31
+52.72
+
+37.89 32.52
+35.89 38.39
+
+13.52
+22.91
+
+RDF graphs We used two benchmark graphs: a LUBM [17] graph of 100M
+triples, as well as a graph of DBLP bibliographic data endowed with an ontology
+of 14 classes and 44 schema triples. Table 3 shows, for these graphs and their
+saturation, the graph and summary sizes, and the sizes of the OntoSQL databases
+
+12
+
+M. Buron, F. Goasdou´e , I. Manolescu, T. Merabti, and M.-L. Mugnier
+
+45
+45
+318
+120
+447
+206
+
+45
+45
+106
+56
+149
+99
+
+45
+45
+146
+59
+226
+135
+
+82 3690
+88
+36
+2
+36
+2
+
+82 2025
+67 1806
+216
+68
+108
+48
+216
+68
+108
+48
+
+Q01 Q02 Q03 Q04 Q05 Q06 Q07 Q08 Q09 Q10 Q11 Q12 Q13 Q14
+Query
+2.78M 0.59M 2.15M 1.72M 0.47M 2.77M 25K 3696 2003 17.35M 187 518K 857 9.85M
+|q(G, R)|
+|qG|
+82
+45
+45
+37 1369
+|(qG)pruned|
+43
+23
+44
+51
+44
+|QR|
+39 1152
+27
+80 318
+|(QR)pruned|
+21
+34 173
+889
+21
+|QG
+63 1797 1188
+121 447
+R|
+R)pruned|
+|(QG
+892
+50
+42
+73 299
+Q01 Q02 Q03 Q04 Q05 Q06 Q07 Q08 Q09 Q10 Q11 Q12 Q13 Q14 Q15
+Query
+72K 24K 96.3M 361K 4K 10 138 42K 1.52M 3.09M 957K 414K 409K 16.3K 460K
+|q(G, R)|
+|qG|
+1
+18
+|(qG)pruned|
+1
+18
+|QR|
+243
+117 297
+|(QR)pruned|
+3
+56 205
+|QG
+243
+252 440
+R|
+|(QG
+R)pruned| 161 331
+3
+Table 4. Statistics of our queries on LUBM (top) and DBLP (bottom); M stands for
+millions and K for thousands.
+
+50 900 900
+3 136 136
+117 873 4257 3163
+56 616 3089 2166
+252 1529 5927 3345
+161 1224 3275 2189
+
+900
+900
+18
+17
+85
+85
+36 1500 3652
+32 1184 2620
+324
+1
+72
+64
+1
+37
+
+324
+18
+324
+18
+381
+39
+24
+174
+84 2088
+69 1497
+
+82
+68
+88
+78
+169
+144
+
+50
+3
+129
+114
+270
+117
+
+1
+1
+243
+36
+3
+3
+
+18
+18
+265
+151
+408
+277
+
+82
+59
+9
+7
+9
+7
+
+3
+9
+7
+9
+7
+
+18
+18
+
+18
+18
+
+storing them in the T, CP and TCP layout. As expected, TCP takes most space,
+approx. 90% of the sum of the T and CP database sizes. However, this is stable
+storage (e.g., disk) space; the selective data access enabled by the class and
+property tables, and by indexes, as well as cost-based optimization, ensure that
+the data loaded in memory to process a query is much smaller.
+Queries We used two diverse sets of queries, having from 1 to 11 triples (4
+on average) on LUBM, and from 2 to 9 triples (5.9 on average) on DBLP. Each
+query has 1 or 2 triple(s) of the form (s, τ, x) and/or (s, x, o), except Q11 and
+Q15 on DBLP which do not contain any. Table 4 shows their number of answers,
+and the number of BGPQs in: their instantiation (qG), reformulation (QR),
+and instantiation of their reformulation (QG
+R), before and after summary-based
+pruning. The impact of pruning ranges from none (in particular for qG, on LUBM
+Q01 to Q03 and on 8 DBLP queries) to very signiﬁcant (97.8% of the qG BGPs
+are pruned on LUBM Q09). Details on our experiments, and code which can be
+used to reproduce them, are online5.
+
+5.2 Experiment results: query answering times
+For each query, we report the average of the last ﬁve (“hot”) runs out of six.
+Through saturation Figure 2 shows the query answering times through sat-
+uration, for LUBM (top) and DBLP (bottom), with a timeout of 10 minutes;
+in all our graphs, executions that reached the timeout have been interrupted.
+Below the graphs, we show the label used in the plot for each query answer-
+ing strategy, e.g., T SAT stands for T (q)(GR). For readability, some very fast
+queries are repeated in a “zoom” plot (the LUBM one has a logarithmic y axis).
+On LUBM (top), we notice some very high running times for VIRTUOSO SAT,
+e.g., on Q03, Q06, and a time-out on Q14. Among the SQL-based strategies, the
+na¨ıve translation on CP (green bars) is slowest in 10 out of 14 queries, with large
+performance penalties for Q04, Q07, Q08, Q11-13. Instantiation (CP SAT INS,
+red bars) is generally faster than na¨ıve CP. It strongly speeds up Q04, Q07,
+Q08, Q10-Q14; it brings a modest improvement to Q01 and Q05, but also a
+modest overhead for Q02, Q03, Q06. However, on the complex Q09, which has
+
+Revisiting RDF storage layouts for eﬃcient query answering
+
+13
+
+T SAT CP SAT NAIVE CP SAT INS CP SAT INS PRUN TCP SAT VIRTUOSO SAT
+
+T (q)(GR) CP (q)(GR) CP (qG)(GR) CP ((qG)pruned)(GR) T CP (q)(GR)
+Fig. 2. Query answering times (milliseconds) on LUBM (top) and DBLP (bottom),
+through saturation.
+
+T (q)(GR)
+
+the largest qG size, namely 3690, instantiating each of these more than doubles
+the answering time w.r.t. na¨ıve CP translation (and ran until the timeout);
+pruning (yellow bars) brings it back below the timeout. T SAT is generally
+faster than all executions on the CP layout, because all queries contain triples
+of the form (s, τ, x) and/or (s, x, o), which, as explained in Section 3.2, challenge
+CP execution. TCP SAT avoids the (sometimes drastic) performance problems
+of all CP variants, and is the fastest (by up to several orders of magnitude) on
+all queries but Q14, where the CP variant with pruning is a bit faster. Virtuoso
+is also always slower than TCP (by up to 95×, almost two orders of magnitude).
+On DBLP (bottom), poor performance is exhibited by Virtuoso (Q03, Q07,
+Q09, Q10), and on even more queries by the na¨ıve CP strategy (green bars, Q05-
+Q07, Q09-Q10, Q14). T SAT performs very badly on Q09, Q10, Q14 and Q15.
+These are rather large (6 to 9-triples) queries; an analysis of their plans shows
+signiﬁcant errors in the RDBMS’ estimation of join cardinality. As is well-known,
+join cardinality estimation errors multiply along subsequent joins; when all joins
+carry over a single, very large table, the negative impact of such cumulated
+errors can be quite strong. Historically, this observation actually motivated the
+introduction of the CP layout, on which join estimation errors still multiply, but
+usually much smaller tables are involved. Indeed, as expected, for the queries
+Q11 and Q15, exactly those where no triple has a variable in class and property
+position, na¨ıve CP largely outperforms T SAT (by very far for Q15). Again, we
+observe the robust behavior of TCP SAT. We conclude that through saturation,
+
+14
+
+M. Buron, F. Goasdou´e , I. Manolescu, T. Merabti, and M.-L. Mugnier
+
+T and CP execution each underperform on some queries, but TCP avoids all
+these pitfalls and is consistently very eﬃcient.
+Through reformulation Figure 3 shows reformulation-based query answering
+times (note the logarithmic y axis in the zoom), again with the correspondences
+between the bar labels and the strategy names previously used in the paper.
+On LUBM, among the evaluation strategies without pruning, TCP REF is
+generally the fastest (or very close to it), with the exception of Q14, where
+CP REF INS is 1.4× faster. This query with the most results (9.85M) and a
+large reformulation (Table 4) has two atoms of the form (x, p, z), (y, p, z). On
+CP, this leads to a large number of self-joins of the form tp (cid:46)(cid:47)o tp, executed
+very fast because loading tp in memory once ensures the join runs completely
+in-memory. While the rather unusual Q14 shows a case when CP may still out-
+perform TCP, the diﬀerence is not dramatic. On the three layouts, pruning gen-
+erally helps: it saves, e.g., more than half of the CP answering time for Q01,
+Q02. In the zoomed view (shortest-running queries), pruning brings an overhead
+(takes more time that the query evaluation time it saves) of a few milliseconds.
+Among the strategies with pruning, TCP REF PRUN is the fastest, except for
+Q14 discussed above. As Virtuoso did not support reasoning with our rule set R
+(details online5), we gave it reformulations expressed in SPARQL; for Q07 and
+Q14, they failed to run, with the error “union nesting is too deep”. The impact
+of instantiation for Virtuoso is unclear; it helped for Q04, Q08 but not for Q02,
+Q06 etc. All missing Virtuoso bars in Figure 3 are execution failures, mostly due
+to large unions.
+On DBLP, VIRTUOSO REF failed for Q06, Q07, Q09, Q10, Q13; VIRTU-
+OSO REF INS was consistently worse, and we omitted it from the plot. The
+rest of the analysis is similar to the one above, except that T REF performs
+very badly in a few cases (Q07, Q11). Overall, in Figure 3, TCP query answer-
+ing with pruning is the fastest, or very close to it, on all queries, while all other
+strategies’s weaknesses are exposed by one or more queries.
+
+5.3 Experiment conclusion
+
+We studied the performance of query answering in RDF databases through sat-
+uration and reformulation, on challenging queries that remain poorly supported:
+those with variables in class or property position. We have exhibited queries
+that lead to poor to catastrophic performance of query answering on the T lay-
+out (mainly due to many self-joins on a large table) and/or on the CP layout
+(mainly due to large unions, brought by variables in class and property positions,
+and/or by reformulation). Query answering on the TCP layout is extremely ro-
+bust; it avoids all these pitfalls by taking the best of both T and CP, at the
+expense of more storage space. As disks are getting ever cheaper7, TCP appears
+to be a robust, practical layout, compatible with well-established large-scale RDF
+storage and query engines. For the challenging queries we study, summary-based
+pruning helps improve performance, in particular for the TCP layout.
+
+7E.g., https://www.backblaze.com/blog/hard-drive-cost-per-gigabyte/
+
+Revisiting RDF storage layouts for eﬃcient query answering
+
+15
+
+T REF
+
+T REF PRUN CP REF INS CP REF INS PRUN
+R)pruned)(G)
+
+R)(G) CP ((QG
+
+T (QR)(G) T ((QR)pruned)(G) CP (QG
+TCP REF
+
+TCP REF PRUN VIRTUOSO REF VIRTUOSO REF INS
+
+T CP (QR)(G) T CP ((QR)pruned)(G)
+
+T (QR)(G)
+
+T (QG
+
+R)(G)
+
+Fig. 3. LUBM (top) and DBLP (bottom) query answering times (ms) through refor-
+mulation.
+6 Related work and conclusion
+
+Our work studies the impact of RDF graph storage on query answering in
+the presence of RDFS ontologies, both through graph saturation (SatQA) and
+query reformulation (RefQA). Prior works such as [4,7,19,20,21] only considered
+SatQA. While [4] advocated the CP layout, [21] nuanced the analysis: in a row
+store, they show that proper indexing (such as we used here) can signiﬁcantly
+improve performance using T, while many distinct properties may hurt CP per-
+formance. It is not fully clear if [4,21] used the na¨ıve or instantiation-based CP
+translation; as our experiments show, TCP outperforms both, in particular with
+summary pruning. The optimized T layout of [24], indexed on all (s, p, o) permu-
+tations, has been used for RefQA in [15,16,10]; in our experiments, TCP avoids
+all its bad-performance scenarios. Storage was optimized based on a known work-
+load by creating materialized views in [15]. Query reformulation has also been
+used with the CP layout in [9,11]. Both [10] for T and [11] for CP explored how
+to express a reformulated query as a join of several subqueries, so as to mini-
+mize the evaluation cost through the RDBMS. Applying this technique to the
+TCP layout could presumably also improve its performance. A simpliﬁed ver-
+sion of TCP is brieﬂy mentioned in [13], which studies generic SPARQL-to-SQL
+translation functions, as an example of possible relational layout. However, [13]
+
+16
+
+M. Buron, F. Goasdou´e , I. Manolescu, T. Merabti, and M.-L. Mugnier
+
+does not consider the performance impact of this layout; nor do they consider
+[22,5] have
+RDFS entailment. Optimized storage layouts [7,20,25] or indexes
+been investigated to limit joins by storing e.g., the values of several properties
+for a given subject together. They allow translating several BGPQ triples into a
+single table (or index) access; they could also be applied on the TCP layout to
+further improve it. Finally, in [23], the storage layout based on binary tables is
+adapted to the graph topology, in order to speed up query evaluation.
+TCP is a robust layout, which does not require query workload knowledge, and
+allows to signiﬁcantly reduce BGPQ answering times. On queries well supported
+by the T, respectively, CP layout, TCP matches that performance; but most
+importantly, it avoids all the performance (or plain unfeasibility) issues they en-
+counter, in saturation- or reformulation-based query answering. Summary-based
+pruning also importantly improves performance. We believe the TCP layout,
+and pruning, can be adopted with little eﬀort, and can strongly consolidate and
+improve query answering performance in many RDF databases.
+
+References
+
+1. RDF 1.1 Concepts, https://www.w3.org/TR/rdf11-concepts/
+2. RDF 1.1 Semantics, https://www.w3.org/TR/rdf11-mt/#rdfs-entailment
+3. SPARQL 1.1 Query Language, https://www.w3.org/TR/sparql11-query/
+4. Abadi, D.J., Marcus, A., Madden, S.R., Hollenbach, K.: Scalable Semantic Web
+
+Data Management Using Vertical Partitioning. PVLDB (2007)
+
+5. Atre, M., Chaoji, V., Zaki, M.J., Hendler, J.A.: Matrix ”bit” loaded: a scalable
+
+lightweight join query processor for RDF data. In: WWW (2010)
+
+6. Bischof, S., Kr¨otzsch, M., Polleres, A., Rudolph, S.: Schema-agnostic query rewrit-
+
+ing in SPARQL 1.1. In: ISWC (2014)
+
+7. Bornea, M.A., Dolby, J., Kementsietsidis, A., Srinivas, K., Dantressangle, P.,
+Udrea, O., Bhattacharjee, B.: Building an eﬃcient RDF store over a relational
+database. In: SIGMOD (2013)
+
+8. Broekstra, J., Kampman, A., van Harmelen, F.: Sesame: A generic architecture for
+
+storing and querying RDF and RDF schema. In: ISWC (2002)
+
+9. Buron, M., Goasdou´e, F., Manolescu, I., Mugnier, M.: Reformulation-based query
+
+answering for RDF graphs with RDFS ontologies. In: ESWC (2019)
+
+10. Bursztyn, D., Goasdou´e, F., Manolescu, I.: Optimizing reformulation-based query
+
+answering in RDF. In: EDBT (2015)
+
+11. Bursztyn, D., Goasdou´e, F., Manolescu, I.: Teaching an RDBMS about ontological
+
+constraints. PVLDB 9(12) (2016)
+
+12. Cebiric, S., Goasdou´e, F., Kondylakis, H., Kotzinos, D., Manolescu, I., Troullinou,
+G., Zneika, M.: Summarizing Semantic Graphs: A Survey. VLDB Journal (2018)
+13. Chebotko, A., Lu, S., Fotouhi, F.: Semantics preserving SPARQL-to-SQL transla-
+
+tion. Data Knowl. Eng. 68(10) (2009)
+
+14. Goasdou´e, F., Guzewicz, P., Manolescu, I.: RDF Graph Summarization for First-
+
+sight Structure Discovery. The VLDB Journal (Apr 2020)
+
+15. Goasdou´e, F., Karanasos, K., Leblay, J., Manolescu, I.: View selection in semantic
+
+web databases. PVLDB 5(2) (2011)
+
+16. Goasdou´e, F., Manolescu, I., Roatis, A.: Eﬃcient query answering against dynamic
+
+RDF databases. In: EDBT (2013)
+
+Revisiting RDF storage layouts for eﬃcient query answering
+
+17
+
+17. Guo, Y., Pan, Z., Heﬂin, J.: LUBM: A benchmark for OWL knowledge base sys-
+
+tems. J. Web Sem. 3(2-3) (2005)
+
+18. Kontchakov, R., Rezk, M., Rodriguez-Muro, M., Xiao, G., Zakharyaschev, M.:
+Answering SPARQL queries over databases under OWL 2 QL entailment regime.
+In: ISWC (2014)
+
+19. Neumann, T., Weikum, G.: The RDF-3X engine for scalable management of RDF
+
+data. VLDB J. (2010)
+
+20. Pham, M., Passing, L., Erling, O., Boncz, P.A.: Deriving an emergent relational
+
+schema from RDF data. In: WWW (2015)
+
+21. Sidirourgos, L., Goncalves, R., Kersten, M., Nes, N., Manegold, S.: Column-store
+support for RDF data management: not all swans are white. PVLDB 1(2) (2008)
+22. Udrea, O., Pugliese, A., Subrahmanian, V.S.: GRIN: A graph based RDF index.
+
+In: AAAI (2007)
+
+23. Urbani, J., Jacobs, C.J.H.: Adaptive low-level storage of very large knowledge
+
+graphs. In: WWW (2020)
+
+24. Weiss, C., Karras, P., Bernstein, A.: Hexastore: Sextuple indexing for Semantic
+
+Web data management. PVLDB (2008)
+
+25. Wilkinson, K., Sayers, C., Kuno, H., Reynolds, D.: Eﬃcient RDF storage and
+
+retrieval in Jena2. In: SWDB (2003)
+
+

@@ -1,0 +1,7281 @@
+Optimal Tensor Transport
+Tanguy Kerdoncuff, Michaël Perrot, Rémi Emonet, Marc Sebban
+
+To cite this version:
+
+Tanguy Kerdoncuff, Michaël Perrot, Rémi Emonet, Marc Sebban. Optimal Tensor Transport. AAAI,
+Feb 2022, Vancouver, Canada. ￿hal-03479241￿
+
+HAL Id: hal-03479241
+
+https://hal.science/hal-03479241
+
+Submitted on 14 Dec 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Optimal Tensor Transport
+
+Tanguy Kerdoncuff 1, Micha¨el Perrot 2, R´emi Emonet 1, Marc Sebban 1
+1 Univ Lyon, UJM-Saint-Etienne, CNRS, Institut d Optique Graduate School, Laboratoire Hubert Curien UMR 5516, F-42023,
+Saint-Etienne, France
+2 Univ. Lille, Inria, CNRS, Centrale Lille, UMR 9189 - CRIStAL, F-59000 Lille, France
+{tanguy.kerdoncuff, remi.emonet, marc.sebban}@univ-st-etienne.fr
+michael.perrot@inria.fr
+
+Abstract
+
+Optimal Transport (OT) has become a popular tool in machine
+learning to align ﬁnite datasets typically lying in the same
+vector space. To expand the range of possible applications,
+Co-Optimal Transport (Co-OT) jointly estimates two distinct
+transport plans, one for the rows (points) and one for the
+columns (features), to match two data matrices that might use
+different features. On the other hand, Gromov Wasserstein
+(GW) looks for a single transport plan from two pairwise
+intra-domain distance matrices. Both Co-OT and GW can be
+seen as speciﬁc extensions of OT to more complex data. In
+this paper, we propose a uniﬁed framework, called Optimal
+Tensor Transport (OTT), which takes the form of a generic
+formulation that encompasses OT, GW and Co-OT and can
+handle tensors of any order by learning possibly multiple
+transport plans. We derive theoretical results for the resulting
+new distance and present an efﬁcient way for computing it. We
+further illustrate the interest of such a formulation in Domain
+Adaptation and Comparison-based Clustering.
+
+1
+
+Introduction
+
+Comparing two probability measures in the form of empir-
+ical distributions is at the core of many machine learning
+tasks. Optimal Transport (OT) (Villani 2008; Peyr´e, Cuturi
+et al. 2019) is a popular tool that allows such comparisons for
+datasets typically lying in a common vector space. Given two
+point clouds and a metric allowing to evaluate the transporta-
+tion cost between two samples, the goal of OT is to learn
+the transport plan that minimizes the alignment cost between
+the two sets, resulting in the so-called Wasserstein distance.
+OT has been shown to be of great interest when dealing with
+machine learning tasks. For example, unsupervised Domain
+Adaptation (DA) aims at beneﬁting from labeled data of a
+source domain to classify examples drawn from a different
+but related target domain. The DA theory prompts us to re-
+duce the shift between the source and the target distributions,
+a task that can be addressed by aligning the two datasets using
+OT (Courty et al. 2016, 2017; Shen et al. 2018; Damodaran
+et al. 2018). OT has also been successfully used in genera-
+tive adversarial networks (GAN) (Goodfellow et al. 2014)
+
+Copyright © 2022, Association for the Advancement of Artiﬁcial
+Intelligence (www.aaai.org). All rights reserved.
+
+to minimize the divergence between training data and sam-
+ples drawn from a generative model, leading to the WGAN
+(Arjovsky, Chintala, and Bottou 2017; Gulrajani et al. 2017).
+In order to expand the range of possible applications, differ-
+ent variants have been proposed in the OT literature to tackle
+more complex settings. While the standard OT scenario as-
+sumes that the two datasets lie in the same feature space,
+Gromov Wasserstein (GW) (Memoli 2007; M´emoli 2011;
+Peyr´e, Cuturi, and Solomon 2016) extends the framework
+to incomparable spaces by allowing the alignment of two
+distributions when only the within-dataset pairwise distances
+are available. This approach is particularly well suited to deal
+with graphs described by their adjacency matrices (Xu et al.
+2019; Xu, Luo, and Carin 2019; Chowdhury and M´emoli
+2019). The GW discrepancy has been used efﬁciently in
+various applications such as heterogeneous DA (Yan et al.
+2018), word translation (Alvarez-Melis and Jaakkola 2018)
+or GAN (Vayer et al. 2019; Bunne et al. 2019). Recently,
+Co-Optimal Transport (Co-OT) (Redko et al. 2020) extended
+the OT theory to datasets lying in different vector spaces.
+The idea is to jointly learn two transport plans. The ﬁrst one
+aligns the examples as in standard OT while the second one
+aligns the most similar features. This has been shown to be
+of particular interest in heterogeneous DA and co-clustering.
+Motivation and Contribution. While GW and Co-OT
+already cover a wide range of problems, we claim that many
+other scenarios are not covered by these two extensions. Let
+us suppose that both the source and target distributions are
+represented by a collection of graphs of the same size (in
+terms of nodes) but of different structure (in terms of edges).
+This is typically the case of two graphs evolving over time.
+In this case, the goal of OT would be to jointly align both
+the two collections of graphs and the nodes. It turns out that
+GW would be only able to handle the special case where
+there exist a known one-to-one correspondence between the
+graphs of the two collections. Another application is inspired
+from comparison-based learning. Let us consider a source
+and a target distribution represented by a set of users who
+watched movies, users providing a list of triplet comparisons
+of the form “movie xi is closer to xj than to xk”. In this case,
+neither GW nor Co-OT is able to align the two distributions
+because of the nature of this triplet-based representation. A
+last example comes from computer vision, where one may
+want to align two collections of images while preserving
+
+T2
+
+T1
+
+T3
+
+Figure 1: (Left) Transport plan T 1 between 400 images (only
+digits 0 and 1) of MNIST and USPS datasets; (Right) (top
+left) An example from MNIST and (bottom right) an example
+from USPS with a 90° right rotation; (top right) the OT plan
+T 2 between the rows of MNIST and USPS; (bottom left)
+the OT plan T 3 between the columns of MNIST and USPS;
+the arrows explain how to match the pixels between the two
+datasets using T 2 and T 3 obtained with OTT.
+
+some inner structural information in rows and columns. It is
+worth noting that these three applications share a common
+characteristic: they can be represented in the form of third-
+order tensors. To solve OT tasks on such complex structures,
+it is necessary to design a framework generalizing the OT
+theory. This is the main contribution of this paper.
+
+We propose Optimal Tensor Transport (OTT), a new OT
+formulation that can handle datasets represented as tensors of
+any order by potentially learning multiple transport plans.
+The underlying idea is to jointly match the different di-
+mensions of each tensor with respect to their weights. Fig-
+ure 1 illustrates this on a transportation problem between
+images from the MNIST (LeCun et al. 1998) to the USPS
+dataset (Friedman et al. 2001). Three transport plans are op-
+timized in this scenario. T 1 is used to match the points (on
+the left), T 2 and T 3 preserve the structure by respectively
+mapping the pixel rows and pixel columns jointly (ﬁgure on
+the right). OTT effectively matches digits of the same class
+while only using supervision from the MNIST dataset. Note
+that the pixel-level transport plans are both close to the iden-
+tity meaning that the structure of the images is automatically
+retrieved. We further illustrate this behaviour by extending
+this experiment in the supplementary material. From a the-
+oretical perspective, we show that OTT encompasses both
+Co-OT and GW as well as standard OT. We also show that
+OTT can be seen as a distance between tensors of any order
+and thus it can be used to compute tensor barycenters. From
+an algorithmic point of view, we propose an efﬁcient opti-
+mization scheme based on a stochastic mirror descent that
+allows a drastic reduction of the computational complexity.
+The rest of this paper is organized as follows: Section 2
+recalls some preliminary knowledge on OT, Co-OT and GW.
+Section 3 is dedicated to the introduction of our optimal
+tensor transport (OTT) setting. Section 4 proposes an efﬁcient
+algorithm for solving OTT. We derive theoretical properties
+in Section 5 before presenting experimental results on DA
+and Comparison-based Clustering tasks in Section 6 .
+
+2 Preliminary Knowledge
+In this section, we recall the standard OT (Villani 2008;
+Peyr´e, Cuturi et al. 2019), the GW (Memoli 2007; Peyr´e, Cu-
+turi, and Solomon 2016), and the Co-OT (Redko et al. 2020)
+formulations. Let p and q be two histograms of respective
+dimensions I and K. The set of coupling transport plans
++ |T 1K = p, T (cid:62)1I = q}
+is deﬁned as Upq = {T ∈ RI×K
+where 1R is a vector of ones of dimension R. The goal in
+discrete OT is to learn one (in standard OT and GW) or
+two (in Co-OT) transport plans. Note that for the sake of
+clarity, we only consider the discrete case here. Nevertheless,
+all the formulations presented in this section, as well as
+OTT, can be straightforwardly extended to the continuous
+case by replacing the sums by integrals over the compared
+distributions. In this case, the transport plans take the form of
+joint continuous measures. To prepare for our generalization,
+we unify the formulations below. In particular, we introduce
+subscripts and superscripts that are usually not used in
+the standard formulations. We denote the (R − 1)-simplex
++| (cid:80)R
+∆R = {(xr)r∈
+(cid:74)
+
+r=1 xr = 1}.
+
+∈ RR
+
+1,R
+
+(cid:75)
+
+Optimal Transport (Villani 2008). Let X and Y be two
+datasets deﬁned over the same feature space X (e.g. X =
+RF ), with respectively I1 ∈ N and K1 ∈ N points with
+weights p1 ∈ ∆I1 and q1 ∈ ∆K1 . The optimal transport plan
+between X and Y is obtained by solving:
+
+I1(cid:88)
+
+K1(cid:88)
+
+L(Xi1, Yk1)T 1
+
+i1k1
+
+(1)
+
+min
+T 1∈Up1 q1
+
+i1=1
+
+k1=1
+where Xi1 is example i1 in dataset X. Here, L is a loss func-
+tion which measures the cost of aligning two examples Xi
+and Yk. An extension of OT which is conceptually different
+from what is covered in this article is the multi-marginal
+OT (Carlier 2003; Moameni 2014; Pass 2015; Friedland
+2020) that aligns R ≥ 3 datasets simultaneously: L becomes
+a function of R parameters and T 1 an R-order tensor.
+
+Co-Optimal Transport (Redko et al. 2020). Co-Optimal
+Transport also aims at transporting points from two datasets
+X and Y . However, contrary to standard OT, these datasets
+may have different feature spaces X ⊆ RI2 and Y ⊆ RK2 of
+respective dimensions I2 and K2 and equipped with weights
+p2 ∈ ∆I2 and q2 ∈ ∆K2 . The goal is to jointly match the
+points with a ﬁrst transport plan T 1 and the features with a
+second one T 2. The Co-OT formulation is as follows:
+
+I1,I2
+(cid:88)
+
+K1,K2
+(cid:88)
+
+i1,i2=1
+
+k1,k2=1
+
+min
+T 1∈Up1q1
+T 2∈Up2q2
+
+L(Xi1i2, Yk1k2)T 1
+
+i1k1
+
+T 2
+i2k2
+
+(2)
+
+where Xi1i2 is the value of feature i2 for example i1.
+
+Gromov Wasserstein (Memoli 2007). Instead of having
+features describing the examples, let us consider that we
+only have access to within-dataset pairwise similarities or
+dissimilarities, that is X and Y are now square matrices of
+dimensions I1 × I1 and K1 × K1. It means that the two
+datasets may have different feature spaces, as in Co-OT, but
+
+0MNIST10USPS1010051015202501020051015Figure 2: Various formulations of OTT with, each time, the two datasets and the different transport plans (best viewed in color).
+The subscripts of OTT correspond to the indices of the transport plans used in each dimension.
+
+since these feature spaces are implicit, it is sufﬁcient to learn
+a single transport plan T 1. The GW formulation is:
+
+min
+T 1∈Up1q1
+
+I1,I1
+(cid:88)
+
+K1,K1
+(cid:88)
+
+i1,i2=1
+
+k1,k2=1
+
+L(Xi1i2, Yk1k2)T 1
+
+i1k1
+
+T 1
+i2k2
+
+(3)
+
+where Xi1i2 is the (dis)similarity between examples i1 and
+i2. It is typical, for both Co-OT and GW, to use a compar-
+ison/loss function L (often the squared difference) that op-
+erates on two numbers. In Co-OT, L compares the value of
+a feature from one point in X with one feature from a point
+in Y. In GW, it compares an entry of the pairwise matrix X
+to one in Y . Both formulations can be extended by allowing
+L to compare more complex entries such as F -dimensional
+vectors in RF . As illustrated in the top row of Figure 2, cor-
+responding to the formulations of Equations (1), (2), and
+(3), although OT, Co-OT and GW solve different problems,
+they still share common principles. Below, we propose a new
+generalized OT formulation that encompasses all of them.
+
+3 Optimal Tensor Transport (OTT)
+Given the notational complexity involved in our generic for-
+mulation, let us ﬁrst explain the intuition behind the sub-
+scripts associated with OTT as illustrated in Figure 2. Both
+Co-OT and GW work on matrices (that is tensors of order
+D = 2) and thus will be represented with 2 digits. Since
+Co-OT uses A = 2 different transport plans T 1 and T 2,
+computing Co-OT boils down to solving OTT12 as deﬁned
+below. On the other hand, GW uses the same plan T 1 for
+both dimensions, thus corresponding to OTT11. Note that
+dimensions that share a transport plan must have the same
+sizes. Thus, GW (OTT11) deals with square matrices.
+
+Starting to generalize, when working with tensors of or-
+der D, a given OT extension considers A ≤ D transport
+plans and associates a transport plan (index) to each di-
+mension. This is done by specifying an affectation function
+or equivalently, a D-tuple of transport
+f :
+(cid:75) (cid:1) (cid:74)
+D. For instance, Co-OT uses
+plan indices, that is f ∈
+1, A
+(cid:75)
+f = (1, 2) which corresponds to the subscript in OTT12.
+
+1, A
+(cid:75)
+
+1, D
+
+(cid:74)
+
+(cid:74)
+
+(cid:74)
+
+1, A
+(cid:75)
+
+For a given f ∈
+
+D, we can now detail our OTTf
+formulation (denoted OTT when no ambiguity arises) that
+deﬁnes a distance between two datasets X and Y , represented
+as order D+1 tensors of respective size (If (1)...If (D), F ) and
+(Kf (1)...Kf (D), F ). The ﬁrst D dimensions will be matched
+between the two datasets using the transport plans, while the
+last dimension (F ) is the feature dimension used to compare
+2 points with the loss L. To simplify the rest of the paper, we
+will suppose that F = 1, as done in Co-OT and GW above.
+The OTT distance between X and Y relies on ﬁnding a
+list of optimal transport plans (T a)a∈
+under constraints
+on the marginals deﬁned respectively by the weight vectors
+(pa)a∈
+(cid:74)
+OTTf (X, Y, (pa)a, (qa)a) = min
+(cid:0)X, Y, (T a)a∈
+
+1,A
+(cid:74)
+. OTT is deﬁned as:
+
+∀a T a∈Upa qa
+(cid:1) =
+
+Ef (X, Y, (T a)a)
+
+and (qa)a∈
+
+1,A
+(cid:74)
+
+1,A
+(cid:75)
+
+(4)
+
+(cid:75)
+
+(cid:75)
+
+where E f
+If (1),...,If (D)
+(cid:88)
+
+1,A
+(cid:74)
+
+(cid:75)
+
+Kf (1),...,Kf (D)
+(cid:88)
+
+i1,...,iD=1
+
+k1,...,kD=1
+
+L(Xi1...iD , Yk1...kD )
+
+D
+(cid:89)
+
+d=1
+
+T f (d)
+idkd
+
+where Xi1...iD is the entry at position i1...iD in the tensor X.
+From this general formulation and looking at Equations 1,
+2 and 3 with the support of Figure 2, one can check that
+OT corresponds to OTT1 (with F possibly > 1), Co-OT is
+equivalent to OTT12 and GW corresponds to OTT11. Our
+OTT formulation makes it possible to handle new forms of
+datasets as illustrated in the second row of Figure 2. In the
+experiments (see Section 6), we will speciﬁcally consider
+two versions of OTT, each with order 3 tensors: (i) OTT111
+corresponds to datasets of triplets (like GW but with triplets
+instead of pairs); (ii) OTT112 works with datasets that are col-
+lections of adjacency matrices. Figure 1 gives an illustration
+of a third kind of datasets, where OTT123 has been applied to
+collections of images, like Co-OT but with three dimensions.
+It is worth mentioning that the question that we tackle here
+is reminiscing of another problem in the literature: the D-
+regular hypergraphs (Berge 1984) matching. Such a problem
+is indeed equivalent to OTT in the particular case where all
+the transport plans are identical. But it uses either a different
+
+c) OTT11 (GW)b) OTT12 (Co-OT)d) OTT111 (triplets)f) OTT112 (GW collections)e) OTT123 (triCo-OT)T1T1T2T1T1T1T1T1T1T2compactrepresentationT1T1fullrepresentationa) OTT1 (OT) (F=5 features)T1T3T2formulation or different constraints on the matching. Zass
+and Shashua (2008) proposes to ﬁnd a soft matching between
+D-regular hypergraphs, with uniform inequality constraints,
+using a Kullback-Leibler objective function. Duchenne et al.
+(2011) also matches hypergraphs, with a formulation similar
+to OTT but uses only row constraints on the matching matrix.
+Finally, (Peyr´e et al. 2016) and (Ning and Georgiou 2014)
+propose to represent examples as PSD matrices and to align
+those matrices using a single transport plan where each entry
+is also a PSD matrix instead of a real value.
+
+4 Algorithm to Solve OTT
+In this section, we detail how to efﬁciently solve the main op-
+timization problem behind Equation 4. The most used method
+for solving GW is called EGW (Peyr´e, Cuturi, and Solomon
+2016). It can be seen as a Mirror Descent scheme (Beck and
+Teboulle 2003) with the Kullback-Leibler divergence on a reg-
+ularized version of GW: minT ∈Up1q1 E(T ) + KL(T, p1q1(cid:62)).
+The idea of the Mirror Descent algorithm is to interpret the
+usual gradient descent, at a point x, as a minimization of the
+sum of a linearization of the desired function h: (cid:104)∇xh, • (cid:105)
+plus a regularization term (cid:15)(cid:107)x − • (cid:107)2
+2. Instead of using the
+Euclidean distance, Peyr´e, Cuturi, and Solomon (2016) use
+the KL divergence. Thus, at a point T 1, Peyr´e, Cuturi, and
+Solomon (2016) show that the minimization becomes equiva-
+lent to the entropy regularized OT problem (Cuturi 2013):
+
+min
+T ∈Up1q1
+
+(cid:104)∇T 1E, T (cid:105) + (cid:15)KL(T, p1q1(cid:62)).
+
+(5)
+
+Xu et al. (2019) based on the work of Xie et al. (2020) change
+the uniform distribution p1q1(cid:62) in Equation (5) to the previ-
+ous transport plan T 1. In fact, this is equivalent to applying
+a Mirror Descent algorithm on the original GW problem
+(see Equation (3)) instead of the regularized one (see supple-
+mentary material for more details). Thus, to solve the OTT
+problem, we use a Mirror Descent algorithm with the KL
+divergence. When the goal is to ﬁnd multiple transport plans,
+we propose to use an alternating approach, similar to the
+Co-OT solver, where each transport plan is optimized in turn
+while the others remain ﬁxed. In summary, we combine the
+ideas of existing solvers for Co-OT and GW and apply an
+alternate Mirror Descent algorithm with the KL divergence
+for OTT, with the main bottleneck being the computation
+of the gradient of E. The pseudo-code of our approach is
+presented in Algorithm 1. The main steps are the following:
+
+Algorithm 1: OTT
+Require: datasets X, Y , weights (pa)a∈
+
+1,A
+
+, (qa)a∈
+(cid:74)
+
+(cid:75)
+
+1,A
+
+, loss
+
+(cid:75)
+
+function L, nb. of samples M , regularization (cid:15)
+
+(cid:74)
+
+, T a = paqa(cid:62)
+(cid:75)
+for a= 1 to A do
+
+1: ∀a ∈
+1, A
+(cid:74)
+2: for s= 0 to S-1 do
+3:
+4: (cid:92)∇T a E = M samples of the gradient using Equation (7).
+5:
+6:
+7: end for
+
+T a = minT ∈Upaqa
+
+(cid:68)(cid:92)∇T a E, T
+
++ (cid:15)KL(T, T a)
+
+end for
+
+(cid:69)
+
+Step 1: We initialize the transport plans (line 1) with the
+marginal product.
+
+Step 2: We compute the gradient of E. For the sake of clarity,
+we assume that the aligned tensors are “cubic”, that is all
+their dimensions are of the same size N . In this case, the
+overall gradient with respect to T a is a N 2 matrix:
+
+∇T a E =
+
+(cid:88)
+
+If (1),...,If (d(cid:48)−1)
+If (d(cid:48)+1),...,If (D)
+(cid:88)
+
+Kf (1),...,Kf (d(cid:48)−1)
+Kf (d(cid:48)+1),...,Kf (D)
+(cid:88)
+
+{d(cid:48)|f (d(cid:48))=a}
+
+i1,...,id(cid:48)−1=1
+id(cid:48)+1,...,iD=1
+(cid:18)Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD ,
+Yk1...kd(cid:48)−1, • ,kd(cid:48)+1...kD
+
+L
+
+k1,...,kd(cid:48)−1=1
+kd(cid:48)+1,...,kD=1
+
+(cid:19)
+
+D
+(cid:89)
+
+d=1|d(cid:54)=d(cid:48)
+
+T f (d)
+idkd
+
+.
+
+(6)
+
+Note that computing the overall gradient exactly would be
+too expensive. Indeed, a naive approach leads to O(N 2D)
+operations which is prohibitively high. To simplify the com-
+putation, a ﬁrst idea would be to generalize the approach
+used for GW by Peyr´e, Cuturi, and Solomon (2016) to our
+problem. This would reduce the complexity to O(N D+1)
+for a particular class of functions L, notably the square loss.
+We provide a proof of this approach in the supplementary
+material. Nevertheless, this remains too expensive as soon as
+D = 3. Thus, instead, we propose to use a stochastic Mirror
+Descent (Zhou et al. 2017; Zhang and He 2018; Hanzely
+and Richt´arik 2021). This idea was used for the GW prob-
+lem by Kerdoncuff, Emonet, and Sebban (2021) and we
+generalize it to our OTT problem. The main idea is to no-
+tice that the gradient of E with respect to T a can be seen
+as a sum of expectations over matrices of size N 2, denoted
+(Cd(cid:48)
+
+){d(cid:48)|f (d(cid:48))=a}, such that:
+
+(cid:18)
+
+Cd(cid:48)
+
+P
+
+= L
+
+(cid:18)Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD ,
+Yk1...kd(cid:48)−1, • ,kd(cid:48)+1...kD
+
+(cid:19)(cid:19)
+
+=
+
+D
+(cid:89)
+
+T f (d)
+idkd
+
+d=1|d(cid:54)=d(cid:48)
+
+If (1),...,If (d(cid:48)−1)
+If (d(cid:48)+1),...,If (D)
+(cid:88)
+
+Kf (1),...,Kf (d(cid:48)−1)
+Kf (d(cid:48)+1),...,Kf (D)
+(cid:88)
+
+D
+(cid:89)
+
+with
+
+i1,...,id(cid:48)−1=1
+id(cid:48)+1,...,iD=1
+
+k1,...,kd(cid:48)−1=1
+kd(cid:48)+1,...,kD=1
+
+d=1
+d(cid:54)=d(cid:48)
+
+T f (d)
+idkd
+
+= 1
+
+since ∀a ∈
+be reformulated as:
+
+1, A
+(cid:75)
+
+(cid:74)
+
+, (cid:80)Ia,Ka
+
+i,k=1 T a
+
+ik = 1. The gradient can then
+
+∇T a E =
+
+(cid:88)
+
+(cid:16)
+
+Cd(cid:48)(cid:17)
+
+.
+
+E
+
+(7)
+
+{d(cid:48)|f (d(cid:48))=a}
+
+It means that one may obtain an unbiased estimate of the
+gradient in O(M N 2) operations where M is the number of
+samples to estimate the expectations.
+Step 3: The last step (line 5) requires to solve a regularized
+OT problem, that can be efﬁciently solved using a Sinkhorn
+solver (Xu et al. 2019; Cuturi 2013).
+
+We refer the interested reader to Peyr´e, Cuturi, and
+Solomon (2016) and Xu et al. (2019) for an analysis of the
+efﬁciency of the Mirror Descent algorithm, and to Kerdon-
+cuff, Emonet, and Sebban (2021) for investigations on the
+precision of the stochastic approximation of the gradient. We
+also provide in the supplementary material an experiment
+speciﬁc to our new formulation to show how well the gradient
+is approximated with an increasing order D of the tensors.
+
+5 Theoretical Results
+In this section, we derive two main theoretical results. The-
+orem 1 shows that as long as the cost function is a proper
+distance, then OTT is a distance between D-order tensors.
+Thus, we can naturally deﬁne an OTT barycenter between
+tensors. Theorem 2 states that the optimal barycenter can be
+found in closed form for particular loss functions.
+Theorem 1. OTT is a distance between weighted tensors (X,
+(pa)a∈
+) represented in canonical
+1,A
+(cid:74)
+(cid:74)
+form (Deﬁnition 1 in the supplementary material), for any
+affectation function f , as long as L is a proper distance.
+
+) and (Y , (qa)a∈
+
+1,A
+(cid:75)
+
+(cid:75)
+
+The proof is provided in the supplementary material. This
+result notably extends the distance proof of Co-OT (Redko
+et al. 2020) to matrices of different sizes and to non-uniform
+weights. Even though their comparison with OTT is out of
+the scope of this paper, notice that other distances exist be-
+tween higher-order tensors (De Lathauwer, De Moor, and
+Vandewalle 2000; Liu, Liu, and Chan 2010; Lai et al. 2013).
+Since OTT is a distance, we can deﬁne an OTT barycenter
+
+between several tensors with any affectation function f .
+Deﬁnition 1. (OTT barycenter) Assume that we are given
+B ≥ 1 weighted tensors of sizes ((K b
+de-
+
+a)a∈
+f (D), (qa,b ∈ ∆Kb
+
+a
+
+)b∈
+1,B
+(cid:17)
+(cid:74)
+
+(cid:75)
+
+1,A
+(cid:75)
+(cid:74)
+)a∈
+1,A
+(cid:75)
+(cid:74)
+
+.
+
+1,B
+(cid:74)
+(cid:75)
+Let λ ∈ ∆B be the weights quantifying the importance of
+and weights (pa ∈
+each tensor. For ﬁxed size (Ia)a∈
+∆Ia )a∈
+
+, the OTT barycenter is deﬁned as
+
+1,A
+(cid:74)
+
+b∈
+
+(cid:75)
+
+(cid:16)
+
+noted
+
+X b ∈ RKb
+
+f (1)...Kb
+
+1,A
+(cid:74)
+
+(cid:75)
+
+min
+X∈RIf (1)...If (D)
+
+B
+(cid:88)
+
+b=1
+
+λbOTT(X, X b, (pa)a, (qa,b)a).
+
+(8)
+
+1,A
+(cid:74)
+
+(cid:75)
+
+Note that the barycenter could also be deﬁned in a similar
+
+manner with the marginals (pa)a∈
+
+not ﬁxed.
+
+(cid:75)
+
+(cid:75)
+
+1, B
+
+1,A
+(cid:74)
+
+To solve Problem (8), we propose to minimize alterna-
+tively the objective function w.r.t. X and (T a,b)a∈
+, the
+transport plans between X and X b. The latters can be found
+independently for each b ∈
+using Algorithm 1. In-
+(cid:74)
+terestingly, X can be obtained in closed form for particular
+loss functions, which generalizes, in particular to Co-OT, a
+known result for OT and GW (Peyr´e, Cuturi, and Solomon
+2016). This is summarized in the next theorem.
+Theorem 2. Assume that the loss L is continuous and
+can be written as L(x, y) = f1(x) + f2(y) − h1(x)h2(y)
+with four functions (f1, f2, h1, h2) such that f (cid:48)
+is invert-
+1
+h(cid:48)
+1
+ible. Further assume that L(x, y) −→
++∞. For ﬁxed
+((T a,b)a∈
+1,A
+1,B
+optimal solution X ∗
+(cid:74)
+(cid:74)
+(cid:19)−1
+
+
+(cid:74)
+of Problem (8) is equal to
+
+f (1),...,Kb
+(cid:88)
+
+, for all (id ∈
+
+(cid:75)
+i1,...,iD
+
+h2(X b
+
+1, If (d)
+
+B
+(cid:88)
+
+x→±∞
+
+D
+(cid:89)
+
+, the
+
+ .
+
+)d∈
+
+)b∈
+
+λb
+
+1,D
+
+
+
+Kb
+
+f (D)
+
+k1...kD
+
+(cid:74)
+
+(cid:75)
+
+)
+
+(cid:75)
+
+(cid:75)
+
+(cid:18) f (cid:48)
+1
+h(cid:48)
+1
+
+b=1
+
+k1,...,kD=1
+
+d=1
+
+T f (d),b
+idkd
+pf (d)
+id
+
+In particular, when L is the squared euclidean distance,
+
+X ∗
+
+i1,...,iD
+
+=
+
+B
+(cid:88)
+
+λb
+
+Kb
+
+f (1),...,Kb
+(cid:88)
+
+f (D)
+
+X b
+
+k1...kD
+
+b=1
+
+k1,...,kD=1
+
+D
+(cid:89)
+
+d=1
+
+T f (d),b
+idkd
+pf (d)
+id
+
+.
+
+Note that to obtain a barycenter using loss functions that
+are not covered by Theorem 2, for example the absolute loss,
+one can resort to a gradient based optimization scheme.
+
+In the next section, we present experiments focused on
+3D-tensors alignments. Nevertheless, it is worth noticing that
+our theoretical results and Algorithm 1 hold for any tensor
+order and thus might be used with D = 4, for example in
+comparison based learning tasks (Ghoshdastidar, Perrot, and
+von Luxburg 2019) or to match hypergraphs (Berge 1984).
+
+6 Experiments
+In this section, we illustrate the interest of OTT on two dif-
+ferent tasks1. First, following the success of OT in Domain
+Adaptation (Courty et al. 2016), we propose to predict the
+genres of recent movies based on labeled older movies by
+relying only on users preferences. We advantageously use
+a 3D-tensor formulation to take into account the particular-
+ity of each user. In a second experiment, we use the OTT
+barycenter in a Comparison-Based Clustering task.
+
+6.1 Domain Adaptation (DA)
+
+We consider a DA task on the Movielens dataset (Harper and
+Konstan 2015). The goal is to adapt a model learned on old
+movies (source) to predict the genres of new movies (target).
+Datasets. We build two 3-orders tensor X s (source) and
+X t (target) based on the ratings of the users. The entry
+(i, j, k) in X s (and similarly for X t) is 1 if the user i pre-
+ferred the movie j over the movie k, −1 if the movie k is
+preferred over the movie j and 0 if the user i cannot choose.
+As the users did not rate every movie, we use the 0.33 per-
+centile of their personal rates as a default rating. For both the
+new and old movies, we identify 4 different groups of movies:
+Thriller/Crime/Drama (T ), Fantasy/Sci-Fi (F ), War/Western
+(W ), and Children’s/Animation (C). We then create 6 pair-
+wise binary classiﬁcation datasets of 200 movies each by
+selecting 2 classes among the four aforementioned ones. We
+assume that we have access to all the labels for the old movies
+(source) but only to a single random label per class for the
+new movies (target). The goal is to learn a model that is as
+accurate as possible on the target. Since many movies have
+a small number of ratings and many users only rated a few
+movies, we focus on the 100 users with the highest number
+of ratings and the 200 most rated ﬁlms for those users.
+
+Baselines. Even though OTT122 is, to the best of our
+knowledge, the ﬁrst algorithm that allows direct DA on such
+tensor-based datasets, we still propose various baselines by
+reducing the X s and X t tensors into matrices by averag-
+ing along one dimension. Rdm is a ﬁrst naive baseline that
+simply outputs random labels. For the next three baselines,
+we average over the user dimension. Then, SVM applies a
+SVM (Cortes and Vapnik 1995) classiﬁer only on the tar-
+get domain, using the columns of the matrix as features.
+S-GWL (Xu, Luo, and Carin 2019) interprets the obtained
+matrices as adjacency matrices of graphs and matches the
+nodes of the two graphs. GW (Peyr´e, Cuturi, and Solomon
+
+1The code to reproduce all the experiments is available online:
+
+https://github.com/Hv0nnus/Optimal Tensor Transport
+
+Table 1: Accuracy on 6 DA tasks with the hyperparameters
+found using the unsupervised proposed method. To evaluate
+the best possible performance reachable by each method,
+AVGbest displays the accuracy with the best hyperparameters
+using the ground truth of the target domain.
+
+Datasets
+
+SVM S-GWL GW Co-OT OTT
+
+T,F
+T,C
+T,W
+F,C
+F,W
+C,W
+
+AVG
+
+AVGbest
+
+62.5
+69.0
+32.5
+74.5
+53.0
+60.0
+
+58.6
+
+58.6
+
+Time (s)
+
+0.1
+
+63.0
+77.0
+61.0
+72.0
+53.0
+57.0
+
+63.8
+
+66.3
+
+94
+
+62.0
+78.0
+63.0
+74.0
+60.5
+52.0
+
+64.9
+
+72.0
+83.0
+65.5
+74.0
+47.0
+67.5
+
+68.2
+
+71.0
+
+70.7
+
+673
+
+4
+
+80.8±1
+97.0±0
+71.3±5
+70.2±4
+67.9±2
+76.8±6
+
+77.3±3
+
+78.9±3
+
+5940
+
+2016) solves the GW problem directly on the obtained ma-
+trices. The last baseline, Co-OT, uses a matrix obtained by
+averaging over one movie dimension, which leads to a ma-
+trix (users, movies). The two axes are then mapped jointly
+between the new and old movies. For all the methods that
+provide a transport plan T between the movies, the class of
+a target movie yt
+j is predicted via label propagation (Redko
+et al. 2019a) of the source label ys, that is yt
+k = ysT • k.
+The stochastic methods are run 10 times and the mean and
+standard deviation are reported.
+
+Experimental setup and hyperparameter tuning. As
+the initialization is key to avoid local minima, we take advan-
+tage of both the labels and our stochastic algorithm by sam-
+pling only the labelled points in the source and target for the
+ﬁrst gradient estimation. The squared euclidean loss is used
+for L and we estimate the gradient of OTT using M = 1000
+samples. S is set to 1000 iterations in Algorithm 1. For each
+method that uses the OT Sinkhorn solver, notably OTT, we re-
+place it with the semi-supervised algorithm OTDA proposed
+by Courty et al. (2016) which adds a lp − l1 regularization to
+take advantage of the available source labels. In DA, tuning
+the hyperparameters is often key as there is not enough target
+labeled movies. As the goal of DA is to reduce the divergence
+between the two datasets (Ben-David et al. 2007; Redko et al.
+2019b), we can use the distance between the source and
+the target as a criterion to choose the hyperparameters for
+each method. To compute the OTT distance, we resort to
+the sampling scheme already used to approximate the GW
+distance in Kerdoncuff, Emonet, and Sebban (2021). The
+Kullback-Leibler regularization parameter (cid:15) of the Sinkhorn
+method (Cuturi 2013) is selected in the range [10−5, 102]
+and the class regularization η of OTDA (Courty et al. 2016)
+in [10−4, 101]. The hyperparameters selection is limited to
+24 hours for each method and dataset.
+
+Results. The accuracy of each method is reported in Ta-
+ble 1. OTT achieves better performances than the other base-
+lines on 5 out of 6 datasets. This result was expected as OTT
+is the only method which takes full advantage of the 3D struc-
+ture of the data. Interestingly, OTT still behaves better than
+
+the baselines even when one uses the ground truth over the
+target domain to tune their hyperparameters (that would be
+cheating) as shown in the line AVGbest of Table 1.
+
+We now analyze the impact of the different hyperparame-
+ters on the accuracy. We report the results on each dataset in
+the supplementary material and only consider the global av-
+erage in Figure 3. The leftmost plot displays the accuracy for
+increasing values of the KL regularization parameter (cid:15). The
+black markers correspond to the lowest achieved distance for
+each method. It is worth noting that this usually corresponds
+to a reasonable accuracy, which supports our hyperparameter
+tuning procedure. We notice a similar behaviour for the η
+parameter of OTDA as reported in the supplementary mate-
+rial. In Figure 3 (middle), we report the target accuracy with
+respect to the number of target labels available. We can notice
+that OTT is always better, even in the completely unsuper-
+vised scenario. Lastly, in the experiments reported in Table 1,
+we never use the fact that the users comparing the movies are
+the same for both old and new movies. Here, we study the im-
+pact of making this information available. To this end, we ﬁx
+the transport plan for an increasing number of users. Figure 3
+(right) shows that this information greatly improves the target
+accuracy of the methods that can handle it, especially OTT.
+Interestingly, as indicated with the black marker, the smallest
+distance is achieved with the highest number of known pair-
+ings, which corresponds to the highest number of constraints
+on the users transport plan. This supports the key assumption
+of this experiment: a good matching between users leads to
+a better matching of similar movies. This also highlights a
+limit of a mirror descent-based solver as it struggles to ﬁnd
+the global minimum without this additional information.
+
+6.2 Comparison Based Clustering
+In this second series of experiments, we show that OTT
+barycenters can be used competitively to address an unbal-
+anced comparison-based clustering task.
+
+Comparison-based learning deals with the problem of
+learning from examples when neither an explicit represen-
+tation nor a pairwise distance matrix is available (Vikram
+and Dasgupta 2016; Ukkonen 2017; Emamjomeh-Zadeh and
+Kempe 2018; Perrot, Esser, and Ghoshdastidar 2020). In-
+stead, it is assumed that only triplet comparisons of the form
+“example xi is closer to xj than to xk” are available. This
+ﬁeld stems from the fact that relative judgments are usually
+easier than absolute ones for human observers (Shepard 1962;
+Young 1987; Stewart, Brown, and Chater 2005). For example,
+triplet-based queries are easier to answer than exact distance
+estimations. Given a set of examples and a given number of
+triplet comparisons, a dataset can be represented as a third
+order tensor where the entry (i, j, k) contains 1 if example xi
+is closer to xj than to xk and −1 otherwise. In comparison
+based clustering, the goal is to identify relevant groups in
+the examples, using only the information contained in the
+aforementioned tensor. As the three dimensions of the cubic
+tensor correspond to the same points we will use the same
+tranport plan for all the dimensions, that is OT T111.
+
+Setting. To show the interest of our method for clustering
+unbalanced triplet datasets, we take inspiration from the ex-
+perimental setup of Perrot, Esser, and Ghoshdastidar (2020).
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+10−5
+
+10−3
+
+10−1
+
+101 102
+
+Kullback Leibler regularization (cid:15)
+
+90
+
+80
+
+70
+
+60
+
+50
+
+90
+
+80
+
+70
+
+60
+
+50
+
+OTT
+Co-OT
+GW
+S-GWL
+SVM
+Rdm
+
+10
+
+20
+
+0
+50
+Number of labels in target
+
+40
+
+30
+
+0
+
+20
+
+40
+
+60
+
+80 100
+
+Number of similar users known
+
+Figure 3: Target accuracy averaged over all the datasets. The shadow area represents the standard deviation for the stochastic
+methods. When relevant, the black symbols correspond to the parameter values achieving, for each method, the lowest distances
+between the datasets on average. (Left) Target accuracy for various values of (cid:15). (Middle) Target accuracy for an increasing target
+supervision. (Right) Target accuracy for an increasing number of similar known users who rated both old and new movies.
+
+Table 2: ARI (in percentage) for unbalanced comparison-
+based clustering on MNIST. Each line corresponds to the
+average over 10 combinations of classes, each run 10 times.
+
+nb. points
+per class
+
+200,20,20
+30,3,1
+30,3,3
+300,30,10
+
+AddS3 AddS3s
+
+t-STE
+
+t-STEs OTT
+
+43±12
+28±9
+37±13
+28±4
+
+80±17
+82±17
+78±23
+83±07
+
+56±7
+49±14
+52±09
+48±10
+
+91±4
+91±14
+93±19
+89±4
+
+AVG 34±9
+
+81±16
+
+51±10
+
+91±8
+
+91±4
+89±14
+87±19
+89±04
+
+89±10
+
+For a given dataset, we ﬁnd the OTT111 barycenter (b = 1) of
+size (I1, I1, I1) where I1 is the number of clusters that we are
+looking for. The intuition is that similar examples should be
+sent by the transport plan to the same point in the barycenter
+since the latter summarizes the initial points.
+
+Datasets. We consider some 3-class unbalanced subsam-
+ples of the MNIST dataset (LeCun et al. 1998). For a given
+number of examples per class (for example, 200,20,20), we
+consider 10 random draws for the 3 classes and, for each
+of these, we further consider 10 random draws for the ac-
+tual images. Given N points in each unbalanced dataset, we
+randomly select N log(N )3 triplets of the form d(xi, xj) >
+d(xi, xk) as suggested by Perrot, Esser, and Ghoshdastidar
+(2020). The distance between two digits is the euclidean dis-
+tance after an UMAP projection in 2 dimensions. To simulate
+a real dataset, some noise is added by randomly ﬂipping
+d(xi, xj) > d(xi, xk) to d(xi, xj) < d(xi, xk) with proba-
+bility 0.1 for each triplet selected.
+
+Baselines. We use two main triplet clustering baselines:
+(i) t-STE (Van Der Maaten and Weinberger 2012) which
+projects the triplets into a vector space followed by k-
+means (Lloyd 1982), and (ii) AddS3 (Perrot, Esser, and
+Ghoshdastidar 2020) which estimates a pairwise similarity
+matrix also followed by k-means. Moreover, as the OT for-
+mulation requires the marginal as a prior, we assume that the
+proportions of the clusters are known. To stay fair, we pro-
+pose two variants (AddS3s, t-STEs) of the previous baselines
+
+where we replace the k-means step by an OT barycenter step
+which takes the marginal information into account.
+
+Hyperparameters. We use default hyperparameters, re-
+ported in the supplementary material, for t-STE, AddS3, and
+OTT with the KL regularization parameter set to (cid:15) = 0.1.
+To ensure convergence, we also set the number of samples
+M = 100 and the number of iteration S = 500 between each
+of the 20 barycenter updates. Finally, to take advantage of
+the closed form derived in Theorem 2, we use the squared
+euclidean loss for OTT.
+
+Results. The Adjusted Rand Index (ARI) (Hubert and Ara-
+bie 1985) between the predicted clusters and the ground truth
+is displayed in Table 2. Overall, OTT has better performances
+than AddS3s on average on all datasets while being slightly
+worse than t-STEs. Furthermore, for both AddS3 and t-STE,
+using the unbalancedness information improves the perfor-
+mances. The closeness between our approach and t-STEs
+is further investigated in the supplementary material, where
+we show a theoretical connection between t-STE and the
+OTT barycenter. The choice of the unbalanced setting is mo-
+tivated by the fact that the two other baselines do not take
+into account this information during their ﬁrst step, while
+OTT directly uses it in its unique step.
+
+7 Conclusion
+We presented OTT, a new OT formulation that can be used to
+align high dimensional tensors using potentially several trans-
+port plans. OTT generalizes various existing OT problems,
+such as GW and Co-OT, by deﬁning a new tensor distance.
+We proposed an efﬁcient algorithm to solve the underlying
+problem and demonstrated the competitiveness of OTT in DA
+and Comparison-based clustering. While our new approach
+unlocks new applications, this comes with a cost. First, de-
+spite having access to a solver that drastically reduces the
+computational complexity of the formulation, it still does not
+scale well on large datasets with high order tensors. Finally,
+we leave for future work a natural extension, Fused-OTT,
+inspired by Vayer et al. (2020), that would combine several
+OTT problems together. This approach could allow us to
+align datasets that are independently represented by multiple
+tensors of potentially different orders.
+
+Acknowledgements
+This paper is part of the TADALoT Project funded by the
+region Auvergne-Rhˆone-Alpes (France) with the Pack Ambi-
+tion Recherche (2017, 17 011047 01).
+
+References
+
+Gromov-
+Alvarez-Melis, D.; and Jaakkola, T. 2018.
+Wasserstein Alignment of Word Embedding Spaces. In Pro-
+ceedings of the 2018 Conference on Empirical Methods in
+Natural Language Processing.
+Arjovsky, M.; Chintala, S.; and Bottou, L. 2017. Wasserstein
+generative adversarial networks. In Proceedings of the 34th
+International Conference on Machine Learning-Volume 70.
+Beck, A.; and Teboulle, M. 2003. Mirror descent and nonlin-
+ear projected subgradient methods for convex optimization.
+Operations Research Letters.
+Ben-David, S.; Blitzer, J.; Crammer, K.; Pereira, F.; et al.
+2007. Analysis of representations for domain adaptation.
+Advances in Neural Information Processing Systems.
+Berge, C. 1984. Hypergraphs: combinatorics of ﬁnite sets.
+Elsevier.
+Bunne, C.; Alvarez-Melis, D.; Krause, A.; and Jegelka, S.
+2019. Learning Generative Models across Incomparable
+Spaces. In International Conference on Machine Learning.
+Carlier, G. 2003. On a class of multidimensional optimal
+transportation problems. Journal of convex analysis.
+Chowdhury, S.; and M´emoli, F. 2019.
+The Gromov–
+Wasserstein distance between networks and stable network
+invariants. Information and Inference: A Journal of the IMA.
+Cortes, C.; and Vapnik, V. 1995. Support-vector networks.
+Machine learning.
+Courty, N.; Flamary, R.; Habrard, A.; and Rakotomamonjy,
+A. 2017. Joint distribution optimal transportation for domain
+adaptation. In Advances in Neural Information Processing
+Systems.
+Courty, N.; Flamary, R.; Tuia, D.; and Rakotomamonjy, A.
+2016. Optimal transport for domain adaptation. IEEE trans-
+actions on pattern analysis and machine intelligence, 39(9):
+1853–1865.
+Cuturi, M. 2013. Sinkhorn distances: Lightspeed computa-
+tion of optimal transport. In Advances in Neural Information
+Processing Systems.
+Damodaran, B. B.; Kellenberger, B.; Flamary, R.; Tuia, D.;
+and Courty, N. 2018. DeepJDOT: Deep Joint Distribution
+Optimal Transport for Unsupervised Domain Adaptation. In
+European Conference on Computer Vision. Springer.
+De Lathauwer, L.; De Moor, B.; and Vandewalle, J. 2000. A
+multilinear singular value decomposition. SIAM journal on
+Matrix Analysis and Applications.
+Duchenne, O.; Bach, F.; Kweon, I.-S.; and Ponce, J. 2011. A
+tensor-based algorithm for high-order graph matching. IEEE
+transactions on pattern analysis and machine intelligence.
+Emamjomeh-Zadeh, E.; and Kempe, D. 2018. Adaptive Hi-
+erarchical Clustering Using Ordinal Queries. In Symposium
+on Discrete Algorithms.
+
+Friedland, S. 2020. Tensor optimal transport, distance be-
+tween sets of measures and tensor scaling. arXiv preprint
+arXiv:2005.00945.
+Friedman, J.; Hastie, T.; Tibshirani, R.; et al. 2001. The
+elements of statistical learning. Springer series in statistics
+New York.
+Ghoshdastidar, D.; Perrot, M.; and von Luxburg, U. 2019.
+Foundations of Comparison-Based Hierarchical Clustering.
+In Advances in Neural Information Processing Systems.
+Goodfellow, I.; Pouget-Abadie, J.; Mirza, M.; Xu, B.; Warde-
+Farley, D.; Ozair, S.; Courville, A.; and Bengio, Y. 2014.
+Generative adversarial nets. Advances in Neural Information
+Processing Systems.
+Gulrajani, I.; Ahmed, F.; Arjovsky, M.; Dumoulin, V.; and
+Courville, A. C. 2017. Improved Training of Wasserstein
+GANs. In Advances in Neural Information Processing Sys-
+tems.
+Hanzely, F.; and Richt´arik, P. 2021. Fastest rates for stochas-
+tic mirror descent methods. Computational Optimization and
+Applications.
+Harper, F. M.; and Konstan, J. A. 2015. The movielens
+datasets: History and context. Acm transactions on interac-
+tive intelligent systems.
+Hubert, L.; and Arabie, P. 1985. Comparing partitions. Jour-
+nal of classiﬁcation.
+Kerdoncuff, T.; Emonet, R.; and Sebban, M. 2021. Sampled
+Gromov Wasserstein. Machine Learning.
+Lai, Z.; Xu, Y.; Yang, J.; Tang, J.; and Zhang, D. 2013. Sparse
+tensor discriminant analysis. IEEE transactions on Image
+processing.
+LeCun, Y.; Bottou, L.; Bengio, Y.; and Haffner, P. 1998.
+Gradient-based learning applied to document recognition.
+Proceedings of the IEEE.
+Liu, Y.; Liu, Y.; and Chan, K. C. 2010. Tensor distance
+based multilinear locality-preserved maximum information
+embedding. IEEE Transactions on neural networks.
+Lloyd, S. 1982. Least squares quantization in PCM. IEEE
+transactions on information theory.
+Memoli, F. 2007. On the use of Gromov-Hausdorff Distances
+for Shape Comparison. In Eurographics Symposium on Point-
+Based Graphics. The Eurographics Association.
+M´emoli, F. 2011. Gromov–Wasserstein distances and the
+metric approach to object matching. Foundations of compu-
+tational mathematics.
+Moameni, A. 2014. Multi-marginal Monge–Kantorovich
+transport problems: A characterization of solutions. Comptes
+Rendus Mathematique.
+Ning, L.; and Georgiou, T. T. 2014. Metrics for matrix-valued
+measures via test functions. In 53rd IEEE Conference on
+Decision and Control, 2642–2647. IEEE.
+Pass, B. 2015. Multi-marginal optimal transport: theory and
+applications. ESAIM: Mathematical Modelling and Numeri-
+cal Analysis.
+Perrot, M.; Esser, P. M.; and Ghoshdastidar, D. 2020.
+Near-optimal comparison based clustering. arXiv preprint
+arXiv:2010.03918.
+
+Young, F. W. 1987. Multidimensional scaling: History, theory,
+and applications. Lawrence Erlbaum Associates.
+Zass, R.; and Shashua, A. 2008. Probabilistic graph and hy-
+pergraph matching. In 2008 IEEE Conference on Computer
+Vision and Pattern Recognition. IEEE.
+Zhang, S.; and He, N. 2018. On the convergence rate of
+stochastic mirror descent for nonsmooth nonconvex opti-
+mization. arXiv preprint arXiv:1806.04781.
+Zhou, Z.; Mertikopoulos, P.; Bambos, N.; Boyd, S.; and
+Glynn, P. W. 2017. Stochastic mirror descent in variation-
+ally coherent optimization problems. Advances in Neural
+Information Processing Systems.
+
+Peyr´e, G.; Chizat, L.; Vialard, F.-X.; and Solomon, J. 2016.
+Quantum optimal transport for tensor ﬁeld processing. arXiv
+preprint arXiv:1612.08731.
+Peyr´e, G.; Cuturi, M.; and Solomon, J. 2016. Gromov-
+wasserstein averaging of kernel and distance matrices. In
+International Conference on Machine Learning.
+Peyr´e, G.; Cuturi, M.; et al. 2019. Computational optimal
+transport. Foundations and Trends® in Machine Learning.
+Redko, I.; Courty, N.; Flamary, R.; and Tuia, D. 2019a. Opti-
+mal transport for multi-source domain adaptation under target
+shift. In The 22nd International Conference on Artiﬁcial In-
+telligence and Statistics. PMLR.
+Redko, I.; Morvant, E.; Habrard, A.; Sebban, M.; and Ben-
+nani, Y. 2019b. Advances in domain adaptation theory. Else-
+vier.
+Redko, I.; Vayer, T.; Flamary, R.; and Courty, N. 2020. CO-
+Optimal Transport. In Advances in Neural Information Pro-
+cessing Systems.
+Shen, J.; Qu, Y.; Zhang, W.; and Yu, Y. 2018. Wasserstein dis-
+tance guided representation learning for domain adaptation.
+In Thirty-Second AAAI Conference on Artiﬁcial Intelligence.
+Shepard, R. N. 1962. The analysis of proximities: Multi-
+dimensional scaling with an unknown distance function. I.
+Psychometrika.
+Stewart, N.; Brown, G. D. A.; and Chater, N. 2005. Absolute
+identiﬁcation by relative judgment. Psychological review.
+Ukkonen, A. 2017. Crowdsourced correlation cluster-
+arXiv preprint
+ing with relative distance comparisons.
+arXiv:1709.08459.
+Van Der Maaten, L.; and Weinberger, K. 2012. Stochastic
+triplet embedding. In 2012 IEEE International Workshop on
+Machine Learning for Signal Processing. IEEE.
+Vayer, T.; Chapel, L.; Flamary, R.; Tavenard, R.; and Courty,
+N. 2020. Fused Gromov-Wasserstein distance for structured
+objects. Algorithms.
+Vayer, T.; Flamary, R.; Tavenard, R.; Chapel, L.; and Courty,
+N. 2019. Sliced Gromov-Wasserstein. In Advances in Neural
+Information Processing Systems.
+Vikram, S.; and Dasgupta, S. 2016. Interactive bayesian hier-
+archical clustering. In International Conference on Machine
+Learning.
+Villani, C. 2008. Optimal transport: old and new. Springer
+Science & Business Media.
+Xie, Y.; Wang, X.; Wang, R.; and Zha, H. 2020. A fast proxi-
+mal point method for computing exact wasserstein distance.
+In Uncertainty in Artiﬁcial Intelligence.
+Xu, H.; Luo, D.; and Carin, L. 2019. Scalable gromov-
+Wasserstein learning for graph partitioning and matching. In
+Advances in Neural Information Processing Systems.
+Xu, H.; Luo, D.; Zha, H.; and Duke, L. C. 2019. Gromov-
+Wasserstein Learning for Graph Matching and Node Embed-
+ding. In International Conference on Machine Learning.
+Yan, Y.; Li, W.; Wu, H.; Min, H.; Tan, M.; and Wu, Q. 2018.
+Semi-Supervised Optimal Transport for Heterogeneous Do-
+main Adaptation. In International Joint Conference on Artiﬁ-
+cial Intelligence.
+
+Supplementary Material: Optimal Tensor Transport
+
+In this supplementary material, we provide details on the various results presented in the main paper as well as complementary
+experiments. It is organised as follows. First, in Section 1 we illustrate the interest of our method compared to Co-OT. Then, in
+Section 2, we formally show that the approach of Xu et al. (2019) used for GW is a Mirror Descent algorithm. In Section 3, we
+formally investigate the computational complexity of the sampling approach for the gradient approximation with D ≤ 2. In
+Section 4 we provide the proofs of the different theoretical results. Finally, in Section 5, we provide details on the hyperparameters
+used in the experiments as well as additional results.
+
+To simplify the notations, we will use the following shortcuts:
+
+Notations
+
+(cid:88)
+
+=
+
+If (1),...,If (D)
+(cid:88)
+
+,
+
+(cid:88)
+
+=
+
+∀d id
+
+i1,...,iD=1
+
+∀d(cid:54)=d(cid:48) id
+
+If (1),...,If (d(cid:48)−1)
+If (d(cid:48)+1),...,If (D)
+(cid:88)
+
+i1,...,id(cid:48)−1=1
+id(cid:48)+1,...,iD=1
+
+and
+
+(cid:89)
+
+d(cid:54)=d(cid:48)
+
+D
+(cid:89)
+
+.
+
+=
+
+d=1
+d(cid:54)=d(cid:48)
+
+1
+
+Illustration of the difference between OTT and Co-OT
+
+(1)
+
+In this section, we provide the same pixel transportation image as the one provided in (Redko et al. 2020) for Co-OT, but for
+both Co-OT and OTT123. The idea is to create an image of size 28 by 28 (the same size as the MNIST images) with a different
+color in each pixel and then to use the transport plans learned to map MNIST onto USPS to transform this image. It gives us new
+images (one for Co-OT and one for OTT) of the same size as the USPS images that illustrate how both methods alter the pictures
+when performing transportation. This is illustrated Figure 1. Note that the transport plans used for OTT are the ones used in
+Figure 1 in the main paper.
+
+For Co-OT, many pixels carry no information as we use only 0 and 1 labels, thus the colored USPS image has some coherence
+only in the middle of the image. On the other hand, with OTT123 we force columns to be mapped on (whole) columns and rows
+to be mapped on (whole) rows. By doing so, OTT can extrapolate using the row/column structure inherent to images and the
+color visualisation is much smoother than for Co-OT.
+
+2 Mirror Descent
+In this section, we prove that the method proposed by (Xu et al. 2019) is a Mirror Descent algorithm on the original GW
+problem. More speciﬁcally, we prove that Equation (7) in their Section 3.1 is the same step as the step used in a Mirror Descent
+algorithm (Beck and Teboulle 2003) with Kullback-Leibler divergence. The Mirror Descent method, at a given point Ts at the
+iteration s, searches for the next minimum Ts+1 with,
+
+Which is equivalent to,
+
+Ts+1 = argmin
+T ∈Uµν
+
+(cid:104)∇Ts E, T (cid:105) + (cid:15)KL(T, Ts).
+
+Ts+1 = argmin
+T ∈Uµν
+
+(cid:104)∇TsE − (cid:15)log(Ts), T (cid:105) + (cid:15) (cid:104)T, log(T )(cid:105) .
+
+(2)
+
+(3)
+
+The only difference is the missing factor 2 in (Peyr´e, Cuturi, and Solomon 2016) that should be here due to the derivative, but
+both problems are equivalent with a re-scaling of (cid:15) by a factor 2.
+
+3 Complexity of the gradient computation of OTT
+We prove in this section that the gradient of OTT, which is necessary for the Mirror Descent algorithm (Beck and Teboulle 2003),
+can be computed in a time complexity of O(N D+1) for particular loss functions. This generalizes a known result for GW (Peyr´e,
+Cuturi, and Solomon 2016). Note that, in the main paper, we propose a more efﬁcient approach based on sampling. We only
+mention this result for the sake of comparison with state of the art approaches.
+
+Here, we assume that the feature dimension F is small and that every other dimension of the tensor is N to simplify the
+notations. We also assume that the order of the tensor D is ﬁxed and small and we analyze the time complexity only with respect
+to N . First, we recall the gradient of E using the notations introduced at the start of this supplementary material:
+T f (d)
+idkd
+
+L(Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD , Yk1...kd(cid:48)−1, • ,kd(cid:48)+1...kD )
+
+∇T a E =
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+
+(cid:89)
+
+(4)
+
+.
+
+{d(cid:48)|f (d(cid:48))=a}
+
+∀d(cid:54)=d(cid:48) id
+
+∀d(cid:54)=d(cid:48) kd
+
+d(cid:54)=d(cid:48)
+
+Figure 1: (Left) MNIST image with a color associated with each pixel. (Middle and Right) USPS image colored by the
+transportation of the left image by the transport plans found with Co-OT and OTT123 respectively. Few rows and columns are
+deleted in this representation as they have no mass.
+
+R) and (h1, h2 : RF
+
+We suppose that the loss L is continuous and can be written as L(x, y) = f1(x) + f2(y) − h1(x)h2(y) with four functions
+(f1, f2 : RF
+RF ). This is notably the case for the squared Euclidean distance or the Kullback-Leibler
+(cid:1)
+divergence. As each element of the ﬁrst sum in Equation (4) will be computed independently, we can ﬁx d(cid:48). We thus have to
+compute the following term,
+(cid:88)
+
+(cid:88)
+
+(cid:89)
+
+(cid:1)
+
+f1(Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD )
+
+T f (d)
+idkd
+
++
+
++
+
+∀d(cid:54)=d(cid:48) id
+(cid:88)
+
+∀d(cid:54)=d(cid:48) kd
+(cid:88)
+
+∀d(cid:54)=d(cid:48) id
+(cid:88)
+
+∀d(cid:54)=d(cid:48) kd
+(cid:88)
+
+∀d(cid:54)=d(cid:48) id
+
+∀d(cid:54)=d(cid:48) kd
+
+f2(Yk1...kd(cid:48)−1, • ,kd(cid:48)+1...kD )
+
+d(cid:54)=d(cid:48)
+(cid:89)
+
+T f (d)
+idkd
+
+d(cid:54)=d(cid:48)
+
+h1(Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD )h2(Yk1...kd(cid:48)−1, • ,kd(cid:48)+1...kD )
+
+(cid:89)
+
+d(cid:54)=d(cid:48)
+
+T f (d)
+idkd
+
+.
+
+(5)
+
+Note that Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD is a vector of size (N, 1, F ) and as f1 is applied only on the features dimension,
+f1(Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD ) is a vector of size (N, 1). Similarly, f2(Yk1...kd(cid:48)−1, • ,kd(cid:48)+1...kD ) is a vector of size (1, N ). As the
+gradient is a (N × N ) matrix, the sum between the ﬁrst two terms should be understood as a broadcasting sum. The same holds
+for h1(Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD ) and h2(Yk1...kd(cid:48)−1, • ,kd(cid:48)+1...kD ) of size (N × F ) and (F × N ), the product is a matrix of size
+(N × N ). The ﬁrst two double sums can be computed as,
+
+(cid:88)
+
+∀d(cid:54)=d(cid:48) id
+
+f1(Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD )
+
+(cid:89)
+
+d(cid:54)=d(cid:48)
+
+pf (d)
+id
+
++
+
+(cid:88)
+
+∀d(cid:54)=d(cid:48) kd
+
+f2(Yk1...kd(cid:48)−1, • ,kd(cid:48)+1...kD )
+
+(cid:89)
+
+d(cid:54)=d(cid:48)
+
+qf (d)
+kd
+
+.
+
+(6)
+
+There is D − 1 sums, each of them operating over N indices. Hence, the complexity of each sum is O(N D−1N ). As a
+consequence, the overall complexity of Equation (6) is O(N D).
+
+The last term requires several tensor/matrix multiplications as it can be reformulated as,
+
+(cid:88)
+
+∀d(cid:54)=d(cid:48) id
+
+h1(Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD )
+
+
+
+
+
+(cid:88)
+
+∀d(cid:54)=d(cid:48) kd
+
+h2(Yk1...kd(cid:48)−1, • ,kd(cid:48)+1...kD )
+
+
+
+T f (d)
+idkd
+
+ .
+
+(cid:89)
+
+d(cid:54)=d(cid:48)
+
+(7)
+
+The D − 1 internal sums can be seen as D − 1 tensor/matrices multiplications, each between the index d of the tensor and the
+second index of the matrix T f (d). Each of these multiplications have a time complexity of O(N D+1). We provide an example
+after the proof, for D = 3. If we call this new tensor H, we can reformulate the problem as,
+
+(cid:88)
+
+∀d(cid:54)=d(cid:48) id
+
+h1(Xi1...id(cid:48)−1, • ,id(cid:48)+1...iD )Hi1...id(cid:48)−1, • ,id(cid:48)+1...iD .
+
+(8)
+
+This can be seen as a standard multiplication of two tensors on every dimension except on the dimension d(cid:48) for both tensors.
+This is equivalent to the multiplication of two matrices of size (N, N D−1) and (N D−1, N ). The time complexity is again
+O(N × N D−1 × N ) = O(N D+1).
+
+Finally, the entire time complexity is O(N D+1), which is better than the naive O(N 2D).
+
+Example for D = 3. We explain how to compute Equation (7) with D = 3 with a O(N 3+1) time complexity. We will suppose,
+without loss of generality, that d(cid:48) = 3 in this example. We are interested in the tensor H of Equation (8) or equivalently of the
+inner sum of Equation (7) for all (i1, i2) ∈
+(cid:74)
+N
+(cid:88)
+
+2,
+
+1, N
+(cid:75)
+N
+(cid:88)
+h2(Yk1,k2, • )T f (1)
+i1,k1
+
+T f (2)
+i2,k2
+
+= Hi1,i2, • .
+
+(9)
+
+We rearrange the terms to make the multiplication between a 3-order tensor and a transport plan appear,
+
+k1=1
+
+k2=1
+
+∀(i1, i2) ∈
+
+1, N
+
+N
+(cid:88)
+
+(cid:32) N
+(cid:88)
+
+2
+
+h2(Yk1,k2, • )T f (2)
+i2,k2
+
+(cid:33)
+
+T f (1)
+i1,k1
+
+.
+
+(10)
+
+(cid:75)
+(cid:74)
+k1,i2, • = (cid:80)N
+k2=1 h2(Yk1,k2, • )T f (2)
+
+k1=1
+
+k2=1
+
+. H (cid:48) can be computed with N 2 × N × N operations
+For all (k1, i2) ∈
+as a multiplication between a tensor (N, N, N, F ) and a matrix (N, N ) along the second dimension on both sides. We now have
+a similar formulation as in Equation (10) but with only one transport plan left,
+
+2 we note H (cid:48)
+
+1, N
+
+i2,k2
+
+(cid:74)
+
+(cid:75)
+
+∀(i1, i2) ∈
+
+1, N
+
+(cid:74)
+
+2
+
+(cid:75)
+
+N
+(cid:88)
+
+H (cid:48)
+
+k1,i2, • T f (1)
+
+i1,k1
+
+.
+
+(11)
+
+k1=1
+2, Hi1,i2, • = (cid:80)N
+
+We apply the same process, and deﬁne for all (i1, i2) ∈
+(cid:75)
+computed with N 2 × N × N operations. The difference is that the dimension of the sum is the ﬁrst one for the tensor H (cid:48).
+
+. This new tensor H can be
+
+1, N
+
+i1,k1
+
+(cid:74)
+
+k1=1 H (cid:48)
+
+k1,i2, • T f (1)
+
+We ﬁnally have to compute,
+
+N
+(cid:88)
+
+N
+(cid:88)
+
+i1=1
+
+i2=1
+
+h1(Xi1,i2, • )Hi1,i2, • ,
+
+(12)
+
+which is equivalent to Equation (7). We can see it as a multiplication between two tensors of size (N, N, N, F ) along the ﬁrst
+two dimensions as well as the last dimension. Thus the time complexity is O(N × N 2 × N ), that is O(N 4).
+
+We now prove that OTT is a distance for weighted tensors.
+Theorem 1. OTT is a distance between weighted tensors represented in canonical form (X, (pa)a∈
+for any affectation function f , as long as L is a proper distance.
+
+1,A
+(cid:74)
+
+(cid:75)
+
+) and (Y , (qa)a∈
+
+)
+
+1,A
+(cid:75)
+(cid:74)
+
+4 Theoretical results
+
+First we properly deﬁne the canonical form of a tensor. Note that, here, we will assume that two tensors are equal if, and only
+if, they are equal in canonical form. This is quite natural in an OT context where the goal is to align datasets. Nevertheless, if we
+now consider that two tensors are equal if, and only if, they are equal in their original forms then OTT is only a pseudo-distance
+(as is GW (Chowdhury and M´emoli 2019)) since the identity of indiscernibles would not hold anymore.
+Deﬁnition 1 (Inspired by the work of Chowdhury and M´emoli (2019) ). A weighted tensor (X, (pa)a∈
+affectation function f :
+(cid:75) (cid:1) (cid:74)
+• All the weights should be strictly positive. If there is a a ∈
+
+, is in canonical form if it respects the three following rules.
+1, A
+(cid:75)
+such that pa
+
+i = 0 this weight is deleted
+(cid:74)
+along all the corresponding values in the tensor X. This is a natural reduction as if the weight is equal to 0 this is equivalent
+to not having a point.
+
+) associated with an
+
+1, A
+(cid:75)
+
+and i ∈
+
+1,A
+(cid:74)
+
+1, I a
+
+1, D
+
+(cid:75)
+
+(cid:74)
+
+(cid:74)
+
+(cid:75)
+
+• There is no duplicated points. If two points are equal, they should be merged together. Two points (ia, i(cid:48)
+
+a) ∈
+
+1, Ia
+
+(cid:74)
+
+(cid:75)
+
+2 for a
+
+|f (d(cid:48)) = a, X • 1,..., • d(cid:48)−1,ia, • d(cid:48)+1,..., • D = X • 1,..., • d(cid:48)−1,i(cid:48)
+1, d
+(13)
+(cid:75)
+Those extracted (D − 1)-order tensors deﬁne entirely each of those points. If two points are equal, then we delete one of them
+and add the two probabilities pa
+. Notice that we look at every dimension of the tensor associated with the weight pa
+ia
+and delete simultaneously the points in every dimensions. This result is quite logical in a vector space, if two points are in the
+same location, they should be merged.
+
+a, • d(cid:48)+1,..., • D .
+
+and pa
+i(cid:48)
+a
+
+(cid:74)
+
+• Note that, for a given dataset, one may, in each dimension a ∈
+
+, permute the objects without changing the nature
+1, A
+(cid:75)
+(cid:74)
+of the dataset. The tensor Y is a permutation of X if there exist a permutation function σa for all a ∈
+such that
+Yσf (1)(i1),..,σf (D)(iD) = Xi1,..,iD . Then, assuming that we have access to a strict total order on tensors, a weighted dataset is
+in canonical form if it is the smallest permutation with respect to the given order. An example of strict total order that can be
+used for this purpose is the lexicographic order.
+Note that, none of those three modiﬁcations of the tensor X will change the transport plan nor the OTT distance that depends
+on X. It means that we never need to explicitly transform a tensor into its canonical form. Instead, it is a theoretical construction
+that simpliﬁes the proof of Theorem 1.
+
+1, A
+(cid:75)
+
+(cid:74)
+
+Proof. We will now prove that OTT is a distance.
+
+ﬁxed a ∈
+
+1, A
+(cid:75)
+
+(cid:74)
+
+are equal if,
+∀d(cid:48) ∈
+
+Symmetry As L is symmetric, OTT is also symmetric.
+
+Positiveness As L and T are always positive, OTT is always positive.
+
+Identity of indiscernibles To prove that OT T (X, X, (pa)a∈
+) = 0, we set every transport plan T a to the
+1,A
+(cid:74)
+identity matrix. As ∀x L(x, x) = 0, the entire sum is 0. But because the minimum is smaller than this particular case and also
+always positive, we have the desired result OT T (X, X, (pa)a∈
+
+1,A
+(cid:74)
+We will now prove the opposite, let (X, Y ) be D-order tensors datasets of sizes (If (1)×...×If (D)×F, Kf (1)×...×Kf (D)×F )
+with weights (pa ∈ ∆Ia , qa ∈ ∆Ka )a∈
+in a canonical form (Deﬁnition 1). The canonical form is inspired from the proof
+that GW is a distance for graphs (Chowdhury and M´emoli 2019). We suppose that OT T (X, Y ) = 0, we will show that X = Y
+and for all a ∈
+
+the optimal transport plans.
+
+, pa = qa. We will note (T a)a∈
+
+(cid:75)
+, (pa)a∈
+
+, (pa)a∈
+
+) = 0.
+
+1,A
+(cid:74)
+
+1,A
+(cid:74)
+
+1,A
+(cid:74)
+
+(cid:75)
+
+(cid:75)
+
+(cid:75)
+
+(cid:75)
+
+i,k > 0 and T a
+
+We will proceed by contradiction and suppose that there exist two strictly positive values in the same row of
+2
+
+, i ∈
+1, A
+1, Ia
+a transport plan, more precisely we suppose that
+(cid:75)
+(cid:74)
+(cid:74)
+|f (d(cid:48)) = a} and all
+such that T a
+1, D
+(cid:75)
+(cid:74)
+1, Kf (D)
+(k1...kd(cid:48)−1, kd(cid:48)+1...kD) ∈ (
+1, Kf (1)
+(cid:75)
+(cid:74)
+1, If (D)
+...
+there exist (i1...id(cid:48)−1, id(cid:48)+1...iD) ∈ (
+(cid:74)
+(cid:74)
+(cid:75)
+with d (cid:54)= d(cid:48). As the transport plans are strictly positive on those indices and T a
+i,k > 0 and T a
+is strictly positive, thus the loss should be equal to 0,
+
+there exist a ∈
+i,k(cid:48) > 0. We ﬁx d(cid:48) ∈ {d(cid:48) ∈
+,
+(cid:75)
+(cid:74)
+1, If (d(cid:48)−1)
+
+1, Ka
+(cid:75)
+(cid:74)
+the indices
+). As all the marginals are strictly positive,
+
+1, D
+(cid:75)
+i,k(cid:48) > 0, the transport plans product
+
+1, Kf (d(cid:48)−1)
+...
+(cid:74)
+
+1, Kf (d(cid:48)+1)
+,
+(cid:75)
+
+...
+(cid:75)
+(cid:74)
+1, If (d(cid:48)+1)
+
+) such that T f (d)
+id,kd
+
+...
+(cid:75)
+(cid:74)
+1, If (1)
+
+> 0 for all d ∈
+
+, (k, k(cid:48)) ∈
+
+(cid:75)
+
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+
+(cid:74)
+
+1, A
+(cid:75)
+
+(cid:74)
+
+1,A
+(cid:74)
+
+(cid:75)
+
+(cid:16)
+Xi1...id(cid:48)−1,i,id(cid:48)+1...iD , Yk1...kd(cid:48)−1,k,kd(cid:48)+1...kD
+
+Xi1...id(cid:48)−1,i,id(cid:48)+1...iD , Yk1...kd(cid:48)−1,k(cid:48),kd(cid:48)+1...kD
+
+L
+(cid:16)
+
+L
+
+(cid:17)
+
+(cid:17)
+
+= 0,
+
+= 0.
+
+(14)
+
+(15)
+
+As the loss is a distance, we have Yk1...kd(cid:48)−1,k,kd(cid:48)+1...kD = Yk1...kd(cid:48)−1,k(cid:48),kd(cid:48)+1...kD . This is true for all d(cid:48) ∈ {d(cid:48) ∈
+|f (d(cid:48)) =
+1, D
+(cid:75)
+(cid:74)
+), thus those two points
+1, Kf (d(cid:48)−1)
+...
+1, Kf (1)
+a} and all the indices (k1...kd(cid:48)−1, kd(cid:48)+1...kD) ∈ (
+(cid:74)
+(cid:74)
+should have been merged, this is in contradiction with the canonical form assumption. We can do the same for the columns of the
+transport plans instead of the rows.
+
+1, Kf (d(cid:48)+1)
+
+1, Kf (D)
+
+...
+(cid:74)
+
+(cid:75)
+
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+
+(cid:75)
+
+,
+
+We know that a transport plan has only one element in each of its rows and columns, thus it is necessarily a square matrix as
+all the marginals are strictly positive. Let α be the smallest strictly positive value of the transport plan (T a)a∈
+. We also
+deﬁne the permutation matrices P a associated to each T a by replacing each strictly positive value in T a to 1 in P a. We have
+αIf (a) P a ≤ T a elements-wise, thus
+
+1,A
+(cid:74)
+
+(cid:75)
+
+(cid:88)
+
+(cid:88)
+
+0 ≤
+
+∀d id
+
+∀d kd
+
+(cid:88)
+
+(cid:88)
+
+≤
+
+∀d id
+
+∀d kd
+
+=0.
+
+L(Xi1,...,iD , Yk1,...,kD )
+
+L(Xi1,...,iD , Yk1,...,kD )
+
+D
+(cid:89)
+
+d=1
+
+D
+(cid:89)
+
+d=1
+
+αIf (d) P f (d)
+id,kd
+
+T f (d)
+id,kd
+
+If we note σa the permutation function associated with P a, we have,
+
+0 =
+
+(cid:88)
+
+∀d id
+
+L(Xi1,...,iD , Yσf (1)(i1),...,σf (D)(iD)).
+
+(16)
+
+(17)
+
+(18)
+
+(19)
+
+Since datasets are invariant to points permutations, if both X and Y are in canonical form, they are equal. Thus the transport
+plans (T a)a∈
+
+are diagonal matrices. Therefore, the weights pa and qa are also equal for all a ∈
+) = (Y, (qa)a∈
+
+) = 0 ⇐⇒ (X, (pa)a∈
+
+1, A
+.
+(cid:75)
+).
+
+, (qa)a∈
+
+1,A
+(cid:74)
+
+(cid:75)
+
+Thus, we have OT T (X, Y, (pa)a∈
+(cid:74)
+
+1,A
+(cid:75)
+
+(cid:74)
+1,A
+(cid:75)
+
+(cid:74)
+
+1,A
+(cid:75)
+(cid:74)
+
+1,A
+(cid:75)
+(cid:74)
+
+Triangle inequality We now prove the triangle inequality. Let (X, Y , Z) be D-order tensors datasets of sizes (If (1) × ... ×
+If (D) × F, Kf (1) × ... × Kf (D) × F, Jf (1) × ... × Jf (D) × F ) with weights (pa ∈ ∆Ia , qa ∈ ∆Ka , ra ∈ ∆Ja )a∈
+. We
+rf (d) > 0 as we can delete the corresponding (D − 1)-order tensor in the tensor Z if one term is 0 and
+suppose ∀d ∈
+it won’t change the transport plan nor the distance. We note (T a
+the optimal transport plans between X and Y and
+xy)a∈
+(cid:74)
+(T a
+the optimal transport plans between Y and Z. Similarly to Redko et al. (2020) we will use the gluing lemma (Villani
+2008) to construct a coupling between X and Z,
+
+yz)a∈
+(cid:74)
+
+1,A
+(cid:74)
+
+1,A
+(cid:75)
+
+1,A
+(cid:75)
+
+1, D
+
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+
+∀a ∈
+
+1, A
+(cid:75)
+
+(cid:74)
+
+(T a
+
+xz) = (T a
+
+xy) diag
+
+(cid:19)
+
+(cid:18) 1
+qa
+
+(T a
+
+yz).
+
+(20)
+
+Let a ∈
+
+1, A
+(cid:75)
+
+(cid:74)
+
+, we show that (T a
+
+xz) ∈ Upara :
+
+∀j ∈
+
+1, Ja
+
+(cid:74)
+
+Ia(cid:88)
+
+(cid:75)
+
+i=1
+
+(T a
+
+xz)ij =
+
+Ia(cid:88)
+
+Ka(cid:88)
+
+(T a
+
+xy)ik
+
+i=1
+
+k=1
+
+Ka(cid:88)
+
+=
+
+(T a
+
+yz)kj
+
+1
+qa
+k
+
+(T a
+
+yz)kj
+
+∀i ∈
+
+1, Ia
+
+(cid:74)
+
+Ja(cid:88)
+
+(cid:75)
+
+j=1
+
+k=1
+= ra
+j ,
+Ja(cid:88)
+
+(T a
+
+xz)ij =
+
+Ka(cid:88)
+
+(T a
+
+xy)ik
+
+j=1
+
+k=1
+
+(T a
+
+xy)ik
+
+Ka(cid:88)
+
+=
+
+k=1
+= pa
+i .
+
+1
+qa
+k
+
+(T a
+
+yz)kj
+
+We now prove the triangle inequality:
+OT T (X, Z, (pa)a∈
+If (1),...,If (D)
+(cid:88)
+
+1,A
+(cid:75)
+(cid:74)
+Jf (1),...,Jf (D)
+(cid:88)
+
+, (ra)a∈
+(cid:74)
+
+1,A
+
+)
+
+(cid:75)
+
+L(Xi1,...,iD , Zj1...,jD )
+
+D
+(cid:89)
+
+(T f (d)
+xz
+
+)id,jd
+
+d=1
+
+i1,...,iD=1
+
+j1,...,jD=1
+
+If (1),...,If (D)
+(cid:88)
+
+Jf (1),...,Jf (D)
+(cid:88)
+
+Kf (1),...,Kf (D)
+(cid:88)
+
+≤
+
+=
+
+≤
+
+i1,...,iD=1
+
+j1,...,jD=1
+
+k1,...,kD=1
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+
+∀d id
+
+∀d jd
+
+∀d kd
+
+L (Xi1,...,iD , Yk1,...,kD )
+
+D
+(cid:89)
+
+(T f (d)
+xy
+
+d=1
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+
++
+
+∀d id
+
+∀d jd
+
+∀d kd
+
+L (Yk1,...,kD , Zj1,...,jD )
+
+D
+(cid:89)
+
+d=1
+
+(T f (d)
+xy
+
+)kdjd
+
+yz
+
+)idkd(T f (d)
+qf (d)
+kd
+)idkd (T f (d)
+qf (d)
+kd
+
+yz
+
+)kdjd
+
+)kdjd
+
+(T f (d)
+yz
+qf (d)
+kd
+(T f (d)
+xy
+qf (d)
+kd
+
+D
+(cid:89)
+
+d=1
+
+)idkd
+
+)kdjd
+
+(T f (d)
+yz
+qf (d)
+kd
+(T f (d)
+xy
+qf (d)
+kd
+
+If (d)
+(cid:88)
+
+id=1
+
+)idkd
+
+(cid:88)
+
+(cid:88)
+
+=
+
+∀d id
+
+∀d kd
+
+L (Xi1,...,iD , Yk1,...,kD )
+
+D
+(cid:89)
+
+(T f (d)
+xy
+
+)idkd
+
+(cid:88)
+
+D
+(cid:89)
+
+d=1
+
+∀d jd
+
+d=1
+
+(cid:88)
+
+(cid:88)
+
++
+
+∀d jd
+
+∀d kd
+
+L (Yk1,...,kD , Zj1,...,jD )
+
+D
+(cid:89)
+
+d=1
+
+(T f (d)
+yz
+
+)kdjd
+
+(cid:88)
+
+∀d id
+
+(cid:88)
+
+(cid:88)
+
+=
+
+∀d id
+
+∀d kd
+
+L (Xi1,...,iD , Yk1,...,kD )
+
+D
+(cid:89)
+
+(T f (d)
+xy
+
+)idkd
+
+d=1
+
+D
+(cid:89)
+
+Jf (d)
+(cid:88)
+
+d=1
+
+jd=1
+
+(cid:88)
+
+(cid:88)
+
++
+
+∀d jd
+
+∀d kd
+
+L (Yk1,...,kD , Zj1,...,jD )
+
+D
+(cid:89)
+
+d=1
+
+(T f (d)
+yz
+
+)kdjd
+
+D
+(cid:89)
+
+d=1
+
+(cid:88)
+
+(cid:88)
+
+=
+
+∀d id
+
+∀d kd
+
+L (Xi1,...,iD , Yk1,...,kD )
+
+D
+(cid:89)
+
+(T f (d)
+xy
+
+)idkd
+
+d=1
+
+(cid:88)
+
+(cid:88)
+
++
+
+∀d jd
+
+∀d kd
+
+L (Yk1,...,kD , Zj1,...,jD )
+
+D
+(cid:89)
+
+(T f (d)
+yz
+
+)kdjd
+
+d=1
+) + OT T (Y, Z, (qa)a∈
+
+L (Xi1,...,iD , Zj1,...,jD )
+
+D
+(cid:89)
+
+(T f (d)
+xy
+
+d=1
+
+yz
+
+)idkd (T f (d)
+qf (d)
+kd
+
+)kdjd
+
+(21)
+
+(22)
+
+(23)
+
+(24)
+
+(25)
+
+(26)
+
+(27)
+
+(28)
+
+(29)
+
+(30)
+
+(31)
+
+(32)
+
+(33)
+
+(34)
+
+=OT T (X, Y, (pa)a∈
+
+, (qa)a∈
+(cid:74)
+
+1,A
+(cid:75)
+In Equation (31), the product/sum inversion is possible as no element in the product depends on (jd)d∈
+. Similarly, in
+Equation (32), the sum/product inversion is allowed as only one term in the product depends on the sum. In addition, each of
+those sums are equal to 1 by deﬁnition of (T a
+
+, this leads to Equation (33).
+
+1,D
+(cid:74)
+
+1,A
+(cid:74)
+
+1,A
+(cid:74)
+
+1,A
+(cid:74)
+
+(cid:75)
+
+(cid:75)
+
+(cid:75)
+
+(cid:75)
+
+, (ra)a∈
+
+).
+
+OTT respects the triangle inequality, thus it is a distance.
+
+xy)a∈
+
+1,A
+(cid:75)
+(cid:74)
+
+We now prove Theorem 2 with a more general formulation that the one proposed in the paper. More precisely, we extend it to
+R with F not necessarily restricted to 1 as supposed in the paper to simplify the
+
+the case where the loss is a function of RF
+notations. First we recall the deﬁnition of an OTT barycenter.
+Deﬁnition
+(cid:16)
+X b ∈ RKb
+
+(OTT
+f (D)×F , (qa,b ∈ ∆Kb
+
+barycenter) Given B
+
+2.
+f (1)...Kb
+
+(cid:1)
+
+∈
+
+(cid:17)
+
+N weighted
+
+tensors
+
+of
+
+sizes
+
+1,B
+(cid:74)
+(cid:75)
+. Let λ ∈ ∆B be the weights quantifying the importance of
+
+1,A
+(cid:74)
+
+(cid:75)
+
+((K b
+
+a)a∈
+
+)b∈
+
+,
+
+a
+
+(cid:75)
+
+1,B
+
+1,A
+(cid:74)
+
+)a∈
+b∈
+and weights (pa ∈ ∆Ia )a∈
+(cid:74)
+(cid:74)
+B
+(cid:88)
+
+(cid:75)
+
+each tensor. For ﬁxed size (Ia)a∈
+
+1,A
+(cid:74)
+
+(cid:75)
+
+, the OTT barycenter is deﬁned as follows:
+
+1,A
+(cid:75)
+
+min
+X∈RIf (1)...If (D)×F
+
+b=1
+
+λbOTT(X, X b, (pa)a∈
+
+1,A
+(cid:75)
+(cid:74)
+
+, (qa,b)a∈
+
+).
+
+1,A
+(cid:74)
+
+(cid:75)
+
+(35)
+
+Theorem 2. Assume that the loss L is continuous and can be written as L(x, y) = f1(x) + f2(y) − h1(x)h2(y) with four
+functions (f1, f2 : RF
+RF ) such that the function (∇h1)−1l∇f1 : RF −→ RF is invertible,
+were the F × F matrix (∇h1)−1l(x) is the left inverse of the F × F matrix ∇h1(x), ∀x ∈ RF . We also suppose that,
+∀r ∈
+
+, the optimal solution X ∗ of Problem (8) reads,
+
+(cid:1)
++∞. For ﬁxed (T a,b)a∈
+
+(cid:1)
+L(x, y) −→
+
+R) and (h1, h2 : RF
+
+1, F
+(cid:74)
+
+(cid:75)
+
+xr→±∞
+
+X ∗
+
+i1,...,iD
+
+= (cid:0)(∇h1)−1l∇f1
+
+(cid:1)−1
+
+
+
+1,A
+(cid:74)
+(cid:75)
+
+
+B
+(cid:88)
+
+Kb
+
+f (1),...,Kb
+(cid:88)
+
+f (D)
+
+λb
+
+b=1
+
+k1,...,kD=1
+
+h2(X b
+
+k1,...,kD
+
+D
+(cid:89)
+
+)
+
+d=1
+
+T f (d),b
+idkd
+pf (d)
+id
+
+
+
+
+
+for all (id ∈
+
+1, If (d)
+
+.
+(cid:75)
+In particular, when L is the squared euclidean distance,
+Kb
+
+1,D
+(cid:74)
+
+)d∈
+
+(cid:75)
+
+(cid:74)
+
+X ∗
+
+i1,...,iD
+
+=
+
+B
+(cid:88)
+
+λb
+
+f (1),...,Kb
+(cid:88)
+
+f (D)
+
+b=1
+
+k1,...,kD=1
+
+X b
+
+k1...kD
+
+D
+(cid:89)
+
+d=1
+
+T f (d),b
+idkd
+pf (d)
+id
+
+.
+
+Proof. For ﬁxed ((T a,b)a∈
+, we are looking for the derivative of Equation (35) with respect to Xi1,...,iD and we
+equate it to 0 to ﬁnd the optimal solution. Xi1,...,iD might be a vector if the features dimension is not reduced to 1. Each gradient
+in the following equation is a vector of size F .
+
+1,B
+(cid:74)
+
+1,A
+(cid:74)
+
+)b∈
+
+(cid:75)
+
+(cid:75)
+
+B
+(cid:88)
+
+b=1
+
+B
+(cid:88)
+
+b=1
+
+B
+(cid:88)
+
+0 =
+
+⇐⇒ 0 =
+
+⇐⇒ 0 =
+
+Kb
+
+f (1),...,Kb
+(cid:88)
+
+f (D)
+
+λb
+
+k1,...,kD=1
+
+∇Xi1,...,iD
+
+L(Xi1,...,iD , X b
+
+k1,...,kD
+
+D
+(cid:89)
+
+)
+
+d=1
+
+T f (d),b
+idkd
+
+(cid:88)
+
+λb
+
+(cid:0)∇f1 (Xi1,...,iD ) − ∇h1(Xi1,...,iD )h2(X b
+
+k1,...,kD
+
+∀d kd
+
+(cid:88)
+
+λb
+
+(cid:0)∇f1 (Xi1,...,iD ) − ∇h1(Xi1,...,iD )h2(X b
+
+k1,...,kD
+
+)(cid:1)
+
+)(cid:1)
+
+D
+(cid:89)
+
+d=1
+
+D
+(cid:89)
+
+d=1
+
+T f (d),b
+idkd
+
+T f (d),b
+idkd
+
+b=1
+
+∀d kd
+
+⇐⇒ 0 = ∇f1 (Xi1,...,iD )
+
+B
+(cid:88)
+
+λb
+
+(cid:88)
+
+D
+(cid:89)
+
+b=1
+
+∀d kd
+
+d=1
+
+T f (d),b
+idkd
+
+− ∇h1(Xi1,...,iD )
+
+B
+(cid:88)
+
+λb
+
+(cid:88)
+
+b=1
+
+∀d kd
+
+h2(X b
+
+k1,...,kD
+
+D
+(cid:89)
+
+)
+
+d=1
+
+T f (d),b
+idkd
+
+⇐⇒ ∇f1 (Xi1,...,iD )
+
+B
+(cid:88)
+
+λb
+
+D
+(cid:89)
+
+b=1
+
+d=1
+
+pf (d)
+id
+
+= ∇h1(Xi1,...,iD )
+
+B
+(cid:88)
+
+λb
+
+(cid:88)
+
+b=1
+
+∀d kd
+
+h2(X b
+
+k1,...,kD
+
+D
+(cid:89)
+
+)
+
+d=1
+
+T f (d),b
+idkd
+
+⇐⇒ (∇h1)−1l(Xi1,...,iD )∇f1(Xi1,...,iD )
+
+D
+(cid:89)
+
+d=1
+
+pf (d)
+id
+
+=
+
+B
+(cid:88)
+
+λb
+
+(cid:88)
+
+b=1
+
+∀d kd
+
+h2(X b
+
+k1,...,kD
+
+D
+(cid:89)
+
+)
+
+d=1
+
+T f (d),b
+idkd
+
+⇐⇒ Xi1,...,iD = (cid:0)(∇h1)−1l∇f1
+
+(cid:1)−1
+
+(cid:32) B
+(cid:88)
+
+(cid:88)
+
+λb
+
+h2(X b
+
+k1,...,kD
+
+D
+(cid:89)
+
+)
+
+(cid:33)
+
+T f (d),b
+idkd
+pf (d)
+id
+
+∀d kd
+There is only one vector Xi1,...,iD found as (∇h1)−1l∇f1 is invertible. Thus, if we suppose that the gradient is a maximum
+or an inﬂection point, then there is no minimum in RIf (1)×...×If (D)×F as OTT is continuous. This is in contradiction with the
+hypothesis that the loss tends to +∞ when xr −→ +∞ for any r ∈
+
+. Thus the value obtained is a minimum.
+
+For the squared euclidean distance, for any x, y ∈ RF , ∇h1(x) is the identity matrix, h2(y) = 2y and ∇f1(x) = 2x.
+
+1, F
+
+d=1
+
+b=1
+
+(cid:74)
+
+(cid:75)
+
+(36)
+
+(37)
+
+(38)
+
+(39)
+
+(40)
+
+(41)
+
+(42)
+
+(43)
+
+(44)
+
+(45)
+
+5 Experiments
+All the experiments were conducted on a linux internal cluster using only CPUs with 16GB of RAM. The important softwares
+and versions for reproducing the experiments are:
+• python version: 3.7.9
+• numpy version: 1.19.1
+• scipy version: 1.5.2
+• sklearn version: 0.23.2
+• umap version: 0.4.1
+
+As some experiments depend on randomness, the seeds to reproduce them were ﬁxed using the numpy.seed function. The
+
+exact seeds that were randomly ﬁxed are available in the provided code to reproduce the experiments.
+
+Impact of the order of the tensors on the gradient approximation
+
+5.1
+In this section, we will analyze the impact of the order of the tensors X and Y on the gradient approximation that would lead to
+a discussion on the choice of the number of samples M . Note that experiments for the choice of M were already conducted
+by Kerdoncuff, Emonet, and Sebban (2021), for the Gromov Wasserstein problem. They concluded that choosing M equal to 1
+was sufﬁcient to have a good approximation of the gradient, we will see that this is no longer true for D > 2.
+
+In these experiments, we generate a pair of graphs, a pair of 3-regular hypergraphs (Berge 1984) and a pair of 4-regular
+hypergraphs. To do so, we sample 100 points in a 10 dimensional space using 3 Gaussians with random mean and variance,
+this correspond to the nodes of the hypergraphs. Then the edges of the hypergraphs are created by the D-tuple formed by the
+D nearest neighbors of each point and we symmetrize the hypergraphs. We give an example for D = 3 and the tensor X that
+represents the hypergraph. For a point xi, we ﬁnd the 3 nearest neighbors, noted (xi, xj, xl) and add a value in the tensor X at
+the position (i, j, l), (i, l, j), (j, i, l), (j, l, i), (l, i, j) and (l, j, i) to ensure the symmetry of the tensor X.
+
+The OTT algorithm, with random marginals, is computed to the iteration S. Then we look at the relative difference in Frobenius
+norm between the estimated gradient (cid:100)∇E for different values of M and the real one ∇E: (cid:107)∇E−(cid:100)∇E(cid:107)F
+. As most of the time the
+real gradient cannot be computed in a reasonable time, we use the value found with 106 samples as a reference. Figure 2 shows
+a clear correlation (with log-log axis) between the number of samples and the estimate of the gradient, with the exception of
+the very noisy ﬁrst points. Some points are even omitted if they correspond to a gradient of 0. The latter may happen when M
+is too small and for high order tensors as the tensors X and Y become sparser. Thus, the 1 sample approximation proposed
+by Kerdoncuff, Emonet, and Sebban (2021) is no longer possible for D > 2, as it often corresponds to a null gradient.
+
+(cid:107)∇E(cid:107)F
+
+From a time complexity point of view, the main bottleneck in terms of efﬁciency (excluding the gradient approximation) is
+the Sinkhorn algorithm with a complexity O(SN 2), independent of D, where S is the number of Sinkhorn iterations which
+is usually of the order of 100 or 1000. Thus, since the gradient approximation step has a complexity of O(M N 2), M can be
+chosen of the same order as S to avoid any increase in terms of time complexity. As shown in Figure 2, this is acceptable for
+D = 3 (as in the experiments bellow) but might not be enough for D = 4. This difference between all three orders is expected as
+there is a sum of 104 matrices in the gradient for D = 2, 108 for D = 3 and 1012 for D = 4. On both ﬁgures, to have the same
+relative error of 0.5 on the gradient, it requires approximately 105 samples for D = 4, 5 × 103 samples for D = 3 and 2 × 102
+for D = 2.
+
+5.2 Domain Adaptation (DA)
+Hyperparameters This section will describe the key hyperparameters used by all the methods for reproducibility purpose.
+Except for the Kullback-Leibler regularization (cid:15) and class regularization η, we keep the default parameters provided with the
+code of each algorithm. Note that the code is also attached to this supplementary material.
+
+S-GWL
+• Loss: squared euclidean distance
+• Outer iteration: 4000
+• Max iteration for the barycenter: 4
+• We use the automatic update of the marginal p proposed by S-GWL. Similar results were obtained without any automatic
+
+update of the marginal.
+
+OTT
+• Loss: squared euclidean distance
+• Number of samples M : 1000
+• Number of iterations S: 1000
+• Number of outer iterations of OTDA (Courty et al. 2016): 10
+• Number of inner iterations of OTDA (Courty et al. 2016): 200
+
+102
+
+101
+
+100
+
+10−1
+
+F
+(cid:107)
+E
+
+(cid:100)∇
+−
+E
+∇
+(cid:107)
+
+F
+(cid:107)
+E
+∇
+(cid:107)
+
+2-order tensor
+3-order tensor
+4-order tensor
+
+102
+
+101
+
+100
+
+10−1
+
+10−2
+
+2-order tensor
+3-order tensor
+4-order tensor
+
+100
+
+101
+
+102
+
+103
+
+104
+
+105
+
+100
+
+101
+
+102
+
+103
+
+104
+
+105
+
+Number of samples M
+
+Number of samples M
+
+Figure 2: Relative error of the gradient approximation for an increasing number of samples M . The gradient was approximated
+after 100 (left) and 1000 (right) iterations of the algorithm OTT. The mean and standard deviation over 10 runs are displayed.
+The points corresponding to a gradient of 0 are omitted. This may happen with a small number of samples M and for high order
+tensors as the tensors X and Y become sparser.
+
+Co-OT
+
+• Loss: squared euclidean distance
+• Number of iterations S: 10
+• Number of outer iterations of OTDA (Courty et al. 2016): 10
+• Number of inner iterations of OTDA (Courty et al. 2016): 200
+
+GW
+
+• Loss: squared euclidean distance
+• Number of iterations S: 1000
+• Number of outer iterations of OTDA (Courty et al. 2016): 10
+• Number of inner iterations of OTDA (Courty et al. 2016): 200
+
+SVM
+
+• Square L2 penality C: 1.0 (Any value will give the same result has there is only 1 point per class)
+
+Figures for each parameter and datasets
+In this section we present the Figures evoked in Section 6.1 for each dataset instead
+of the average. We also display in Figures 4 to 10 the values of the various computed distances rescaled between 0 and 1 for
+every transport method to more clearly demonstrate the correlation between the distance and the target accuracy. This supports
+the choice of using the distance to select the hyperparameters on this Domain Adaptation task. In addition we also plot similar
+ﬁgures related to the class regularization η and quickly analyze the performance for an increasing number of samples for the
+gradient estimation.
+
+Increasing number of samples Figure 3 shows that having a higher number of samples M for the estimation of the gradient
+improves the performances of OTT.
+
+Kullback-Leibler and classes regularization We show on Figures 4 to 10 the impact of the Kullback-Leibler and classes
+regularizations.
+
+Increasing the supervision We show in Figures 11 to 17 the impact of an increase in terms of supervision with respect to the
+pairwise information that the same users rated old and new movies and the number of labels available for the target.
+
+5.3 Comparison based clustering using OTT barycenter
+Theoretical link between t-STE and OTT In this section, we show that t-STE (Van Der Maaten and Weinberger 2012) is
+just a OTT111 barycenter with a ﬁxed transport plan. While in the closed form presented in Theorem 2 we minimized directly
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+75
+
+70
+
+65
+
+60
+
+OTT
+
+OTT
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+0
+
+200
+
+400
+
+600
+
+800
+
+1,000
+
+0
+
+200
+
+400
+
+600
+
+800
+
+1,000
+
+Number of samples M
+
+Number of samples M
+
+Figure 3: Average target accuracy and distance over all the dataset for an increasing number of samples for the estimation of the
+gradient.
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+OTT
+Co-OT
+GW
+S-GWL
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback Leiber regularization (cid:15)
+
+102
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+10−4
+
+10−4
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+101
+
+101
+
+Figure 4: (Top row) Average target accuracy for an increasing Kullback-Leibler and classes regularization values. (Bottom row)
+Distances of the different methods for an increasing Kullback-Leibler and classes regularization values. The distances have been
+re-scaled between 0 and 1.
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+OTT
+Co-OT
+GW
+S-GWL
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback Leiber regularization (cid:15)
+
+102
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+10−4
+
+10−4
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+101
+
+101
+
+Figure 5: (Top row) Target accuracy for an increasing Kullback-Leibler and classes regularization values with the dataset
+composed of the two classes Thriller/Crime/Drama and Fantasy/Sci-Fi. (Bottom row) Distances of the different methods for an
+increasing Kullback-Leibler and classes regularization values with the dataset composed of the two classes Thriller/Crime/Drama
+and Fantasy/Sci-Fi. The distances have been re-scaled between 0 and 1.
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+90
+
+80
+
+70
+
+60
+
+50
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+OTT
+Co-OT
+GW
+S-GWL
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback Leiber regularization (cid:15)
+
+102
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+90
+
+80
+
+70
+
+60
+
+50
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+10−4
+
+10−4
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+101
+
+101
+
+Figure 6: (Top row) Target accuracy for an increasing Kullback-Leibler and classes regularization values with the dataset
+composed of the two classes Children’s/Animation and Fantasy/Sci-Fi. (Bottom row) Distances of the different methods for an
+increasing Kullback-Leibler and classes regularization values with the dataset composed of the two classes Children’s/Animation
+and Fantasy/Sci-Fi. The distances have been re-scaled between 0 and 1.
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+75
+
+70
+
+65
+
+60
+
+55
+
+50
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+OTT
+Co-OT
+GW
+S-GWL
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+75
+
+70
+
+65
+
+60
+
+55
+
+50
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+10−4
+
+10−4
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+101
+
+101
+
+Figure 7: (Top row) Target accuracy for an increasing Kullback-Leibler and classes regularization values with the dataset
+composed of the two classes Thriller/Crime/Drama and War/Western. (Bottom row) Distances of the different methods for an
+increasing Kullback-Leibler and classes regularization values with the dataset composed of the two classes Thriller/Crime/Drama
+and War/Western. The distances have been re-scaled between 0 and 1.
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+OTT
+Co-OT
+GW
+S-GWL
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+70
+
+60
+
+50
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+10−4
+
+10−4
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+101
+
+101
+
+Figure 8: (Top row) Target accuracy for an increasing Kullback-Leibler and classes regularization values with the dataset
+composed of the two classes Fantasy/Sci-Fi and Children’s/Animation. (Bottom row) Distances of the different methods for an
+increasing Kullback-Leibler and classes regularization values with the dataset composed of the two classes Fantasy/Sci-Fi and
+Children’s/Animation. The distances have been re-scaled between 0 and 1.
+
+70
+
+65
+
+60
+
+55
+
+50
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+OTT
+Co-OT
+GW
+S-GWL
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+75
+
+70
+
+65
+
+60
+
+55
+
+50
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+10−4
+
+10−4
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+101
+
+101
+
+Figure 9: (Top row) Target accuracy for an increasing Kullback-Leibler and classes regularization values with the dataset
+composed of the two classes Fantasy/Sci-Fi and War/Western. (Bottom row) Distances of the different methods for an increasing
+Kullback-Leibler and classes regularization values with the dataset composed of the two classes Fantasy/Sci-Fi and War/Western.
+The distances have been re-scaled between 0 and 1.
+
+80
+
+70
+
+60
+
+50
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+OTT
+Co-OT
+GW
+S-GWL
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+10−5 10−4 10−3 10−2 10−1 100
+
+101
+Kullback-Leibler regularization (cid:15)
+
+102
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+10−4
+
+10−4
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+10−2
+
+10−3
+100
+Class regularization η of OTDA
+
+10−1
+
+101
+
+101
+
+Figure 10: (Top row) Target accuracy for an increasing Kullback-Leibler and classes regularization values with the dataset
+composed of the two classes Children’s/Animation and War/Western. (Bottom row) Distances of the different methods for an
+increasing Kullback-Leibler and classes regularization values with the dataset composed of the two classes Children’s/Animation
+and War/Western. The distances have been re-scaled between 0 and 1.
+
+OTT
+Co-OT
+GW
+S-GWL
+SVM
+Rdm
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+90
+
+80
+
+70
+
+60
+
+50
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+90
+
+80
+
+70
+
+60
+
+50
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+Figure 11: (Top row) Average target accuracy for an increasing number of users known and label available in the target domain.
+(Bottom row) Distances of the different methods for an increasing number of users known and label available in the target
+domain. The distances have been re-scaled between 0 and 1.
+
+OTT
+Co-OT
+GW
+S-GWL
+SVM
+Rdm
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+90
+
+80
+
+70
+
+60
+
+50
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+Figure 12: (Top row) Target accuracy for an increasing increasing number of users known and label available in the target
+domain with the dataset composed of the two classes Thriller/Crime/Drama and Fantasy/Sci-Fi. (Bottom row) Distances of the
+different methods for an increasing increasing number of users known and label available in the target domain with the dataset
+composed of the two classes Thriller/Crime/Drama and Fantasy/Sci-Fi. The distances have been re-scaled between 0 and 1.
+
+OTT
+Co-OT
+GW
+S-GWL
+SVM
+Rdm
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+90
+
+80
+
+70
+
+60
+
+50
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+100
+
+90
+
+80
+
+70
+
+60
+
+50
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+Figure 13: (Top row) Target accuracy for an increasing increasing number of users known and label available in the target
+domain with the dataset composed of the two classes Children’s/Animation and Fantasy/Sci-Fi. (Bottom row) Distances of the
+different methods for an increasing increasing number of users known and label available in the target domain with the dataset
+composed of the two classes Children’s/Animation and Fantasy/Sci-Fi. The distances have been re-scaled between 0 and 1.
+
+OTT
+Co-OT
+GW
+S-GWL
+SVM
+Rdm
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+40
+
+30
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+60
+
+40
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+Figure 14: (Top row) Target accuracy for an increasing increasing number of users known and label available in the target
+domain with the dataset composed of the two classes Thriller/Crime/Drama and War/Western. (Bottom row) Distances of the
+different methods for an increasing increasing number of users known and label available in the target domain with the dataset
+composed of the two classes Thriller/Crime/Drama and War/Western. The distances have been re-scaled between 0 and 1.
+
+OTT
+Co-OT
+GW
+S-GWL
+SVM
+Rdm
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+90
+
+80
+
+70
+
+60
+
+50
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+90
+
+80
+
+70
+
+60
+
+50
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+Figure 15: (Top row) Target accuracy for an increasing increasing number of users known and label available in the target
+domain with the dataset composed of the two classes Fantasy/Sci-Fi and Children’s/Animation. (Bottom row) Distances of the
+different methods for an increasing increasing number of users known and label available in the target domain with the dataset
+composed of the two classes Fantasy/Sci-Fi and Children’s/Animation. The distances have been re-scaled between 0 and 1.
+
+OTT
+Co-OT
+GW
+S-GWL
+SVM
+Rdm
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+80
+
+70
+
+60
+
+50
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+90
+
+80
+
+70
+
+60
+
+50
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+Figure 16: (Top row) Target accuracy for an increasing increasing number of users known and label available in the target
+domain with the dataset composed of the two classes Fantasy/Sci-Fi and War/Western. (Bottom row) Distances of the different
+methods for an increasing increasing number of users known and label available in the target domain with the dataset composed
+of the two classes Fantasy/Sci-Fi and War/Western. The distances have been re-scaled between 0 and 1.
+
+OTT
+Co-OT
+GW
+S-GWL
+SVM
+Rdm
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+90
+
+80
+
+70
+
+60
+
+50
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+1
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+y
+c
+a
+r
+u
+c
+c
+a
+
+t
+e
+g
+r
+a
+T
+
+90
+
+80
+
+70
+
+60
+
+50
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+
+1
+
+d
+n
+a
+
+0
+n
+e
+e
+w
+t
+e
+b
+
+d
+e
+l
+a
+c
+s
+e
+r
+
+s
+e
+c
+n
+a
+t
+s
+i
+D
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Number of similar users known
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+Number of labels in target
+
+Figure 17: (Top row) Target accuracy for an increasing increasing number of users known and label available in the target
+domain with the dataset composed of the two classes Children’s/Animation and War/Western. (Bottom row) Distances of the
+different methods for an increasing increasing number of users known and label available in the target domain with the dataset
+composed of the two classes Children’s/Animation and War/Western. The distances have been re-scaled between 0 and 1.
+
+the value of the tensor X, we could also minimize another related variable, such as points in a vector space x which generate
+X(x). This is the principle of many triplet embedding methods which are looking for points x in a vector space that respect as
+closely as possible the triplets provided in X 1. Theorem 3 shows that a widely used method for triplet embedding, t-STE (Van
+Der Maaten and Weinberger 2012), is a particular case of OTT barycenter.
+
+Theorem 3. We suppose that T is a list of triplets which can also be represented with a cubic 3-order tensor X 1 of size
+(I1, I1, I1) with, at the position i1, i2, i3 the number of occurrences of the triplet (i1, i2, i3) in T . Let x = (xi)i∈
+be I1
+points in a vector space Rq. We can then set the tensor X to the t-STE or the STE formula as given in (Van Der Maaten and
+(cid:74)
+exp(−(cid:107)xi1 −xi2 (cid:107)2)+exp(−(cid:107)xi1 −xi3 (cid:107)2) . If L is the cross-entropy and f is the constant
+Weinberger 2012), for STE: Xi1,i2,i3 =
+function (all the 3 transport plans are similar), then STE is a particular case of OTT with the identity matrix Id (divided by I1)
+of size I1 as the transport plan,
+
+exp(−(cid:107)xi1 −xi2 (cid:107)2)
+
+1,I1
+
+(cid:75)
+
+max
+x∈RI1×q
+
+(cid:88)
+
+(i1,i2,i3)∈T
+
+log(Xi1i2i3(x)) = I 3
+
+1 min
+
+x∈RI1×q
+
+1
+(cid:88)
+
+b=1
+
+E
+
+(cid:18)
+
+X(x), X 1,
+
+(cid:19)
+
+.
+
+Id
+I1
+
+(46)
+
+Proof. We start from the STE formulation and reformulate the problem,
+
+max
+x∈RI1×q
+
+(cid:88)
+
+(i1,i2,i3)∈T
+
+log(Xi1,i2,i3(x))
+
+= max
+
+x∈RI1×q
+
+= min
+
+x∈RI1×q
+
+I1,I1,I1
+(cid:88)
+
+i1,i2,i3=1
+
+I1,I1,I1
+(cid:88)
+
+i1,i2,i3=1
+
+X 1
+
+i1,i2,i3
+
+log(Xi1,i2,i3 (x))
+
+−X 1
+
+i1,i2,i3
+
+log(Xi1,i2,i3(x))
+
+= min
+
+x∈RI1×q
+
+= min
+
+x∈RI1×q
+
+I1,I1,I1
+(cid:88)
+
+I1,I1,I1
+(cid:88)
+
+i1,i2,i3=1
+
+k1,k2,k3=1
+
+I1,I1,I1
+(cid:88)
+
+I1,I1,I1
+(cid:88)
+
+i1,i2,i3=1
+
+k1,k2,k3=1
+
+−X 1
+
+i1,i2,i3
+
+log(Xk1,k2,k3 (x))Idi1,k1Idi2,k2Idi3,k3
+
+L (cid:0)X 1
+
+i1,i2,i3
+
+, Xk1,k2,k3 (x)(cid:1) Idi1,k1 Idi2,k2Idi3,k3
+
+= I 3
+
+1 min
+
+x∈RI1×q
+
+I1,I1,I1
+(cid:88)
+
+I1,I1,I1
+(cid:88)
+
+i1,i2,i3=1
+
+k1,k2,k3=1
+
+L (cid:0)X 1
+
+i1,i2,i3
+
+, Xk1,k2,k3 (x)(cid:1) Idi1,k1
+
+I1
+
+Idi2,k2
+I1
+
+Idi3,k3
+I1
+
+.
+
+(47)
+
+(48)
+
+(49)
+
+(50)
+
+(51)
+
+(52)
+
+Note that, any permutation are equivalent to the identity as xi and xj can be exchanged. In addition, the identity matrix is not
+necessarily the optimal value, thus the OTT barycenter might lead to a better optimum, but loses the pairwise connection that can
+be useful for interpretation.
+
+Interestingly, this new interpretation of t-STE in the light of Theorem 3 gives a good theoretical justiﬁcation of the choice of
+the log function in t-STE which is nothing more than a cross entropy between 3D-tensor. One speciﬁcity of OTT barycenter,
+compared to t-STE, is that the size of the barycenter X is not necessarily the size of X 1. Thus, it is notably possible to use a
+small size for X which will aggregate similar points from X 1. This idea has been used advantageously in the experiment to
+obtain a direct clustering of a triplet dataset.
+
+Hyperparameters used In this section we details the hyperparameters used in the experiment.
+
+OTT
+
+• Loss type: squared euclidean distance
+
+• Number of samples M : 100
+
+• Number of iterations S: 500
+
+• Kullback-Leibler regularization: 0.1
+
+AddS3
+
+• Number of iterations of the k-means: 300
+
+t-STE
+
+• Degrees of freedom in student T kernel: 0
+
+• Number of iterations of k-means: 300
+
+• Maximum number of iterations: 1000
+
+• L2 regularization constant: 0
+
+Detailed tables for the experiment We display the ARI for comparison based clustering in Table 1 which is similar to the
+one provided in the paper, without averaging the different classes. This table shows a similar behaviour, OTT is very often better
+than AddS3s while being comparable to t-STEs on most datasets.
+
+Additionally, we present several experiments in the balanced case in Table 2 where the proportion of classes are similar. In
+this case, OTT is slightly worse than the two other baselines while still being competitive. This is not surprising since OTT,
+contrary to AddS3 and t-STE, was not speciﬁcally designed to handle triplet comparisons. Instead, it is a general purpose Optimal
+Transport formulation between tensors of potentially high order that can be used to solve multiple kind of tasks.
+
+Table 1: ARI for unbalanced comparison-based clustering tasks on MNIST dataset. Each line corresponds to the average over 10
+runs.
+
+nb. examples per class—classes AddS3
+
+200,20,20—0,1,2
+200,20,20—1,3,4
+200,20,20—1,9,4
+200,20,20—2,9,8
+200,20,20—3,4,0
+200,20,20—3,4,9
+200,20,20—5,7,0
+200,20,20—6,4,8
+200,20,20—6,8,5
+200,20,20—7,1,9
+30,3,1—0,1,2
+30,3,1—1,3,4
+30,3,1—1,9,4
+30,3,1—2,9,8
+30,3,1—3,4,0
+30,3,1—3,4,9
+30,3,1—5,7,0
+30,3,1—6,4,8
+30,3,1—6,8,5
+30,3,1—7,1,9
+30,3,3—0,1,2
+30,3,3—1,3,4
+30,3,3—1,9,4
+30,3,3—2,9,8
+30,3,3—3,4,0
+30,3,3—3,4,9
+30,3,3—5,7,0
+30,3,3—6,4,8
+30,3,3—6,8,5
+30,3,3—7,1,9
+300,30,10—0,1,2
+300,30,10—1,3,4
+300,30,10—1,9,4
+300,30,10—2,9,8
+300,30,10—3,4,0
+300,30,10—3,4,9
+300,30,10—5,7,0
+300,30,10—6,4,8
+300,30,10—6,8,5
+300,30,10—7,1,9
+
+0.35±0.02
+0.35±0.02
+0.35±0.02
+0.32±0.03
+0.72±0.32
+0.38±0.06
+0.57±0.34
+0.35±0.03
+0.36±0.03
+0.53±0.35
+0.32±0.08
+0.28±0.08
+0.27±0.1
+0.29±0.08
+0.2±0.1
+0.29±0.06
+0.25±0.06
+0.31±0.03
+0.31±0.05
+0.27±0.23
+0.4±0.11
+0.37±0.05
+0.37±0.05
+0.34±0.06
+0.47±0.38
+0.38±0.1
+0.27±0.21
+0.36±0.04
+0.36±0.04
+0.38±0.27
+0.3±0.02
+0.29±0.01
+0.29±0.01
+0.28±0.03
+0.25±0.04
+0.3±0.04
+0.3±0.19
+0.3±0.02
+0.3±0.02
+0.25±0.03
+
+AddS3s
+0.89±0.19
+0.92±0.03
+0.92±0.03
+0.8±0.05
+0.52±0.25
+0.83±0.18
+0.76±0.35
+0.89±0.2
+0.81±0.24
+0.69±0.22
+0.8±0.33
+0.85±0.33
+0.96±0.09
+0.87±0.15
+0.61±0.24
+0.84±0.21
+0.7±0.01
+0.94±0.12
+0.9±0.14
+0.76±0.12
+0.85±0.19
+0.85±0.24
+0.85±0.25
+0.8±0.24
+0.5±0.25
+0.83±0.21
+0.73±0.29
+0.89±0.19
+0.89±0.19
+0.59±0.23
+0.96±0.02
+0.93±0.02
+0.94±0.03
+0.8±0.05
+0.59±0.23
+0.85±0.1
+0.68±0.02
+0.93±0.09
+0.9±0.1
+0.69±0.04
+
+t-STE
+
+0.36±0.02
+0.34±0.01
+0.34±0.01
+0.72±0.21
+0.94±0.02
+0.39±0.16
+0.93±0.04
+0.33±0.01
+0.4±0.18
+0.86±0.05
+0.35±0.17
+0.37±0.21
+0.3±0.03
+0.35±0.17
+0.9±0.12
+0.33±0.17
+0.85±0.22
+0.29±0.03
+0.29±0.03
+0.84±0.23
+0.38±0.11
+0.35±0.03
+0.36±0.03
+0.38±0.17
+0.94±0.07
+0.37±0.17
+0.91±0.09
+0.36±0.03
+0.36±0.03
+0.81±0.19
+0.3±0.01
+0.28±0.0
+0.28±0.01
+0.42±0.26
+0.92±0.03
+0.4±0.22
+0.9±0.04
+0.28±0.01
+0.34±0.19
+0.65±0.27
+
+t-STEs
+0.97±0.02
+0.94±0.03
+0.94±0.03
+0.82±0.06
+0.88±0.18
+0.9±0.05
+0.94±0.04
+0.96±0.02
+0.93±0.04
+0.8±0.06
+0.93±0.12
+1.0±0.01
+0.99±0.01
+0.9±0.14
+0.85±0.15
+0.87±0.15
+0.88±0.15
+0.96±0.09
+0.97±0.1
+0.81±0.15
+0.89±0.12
+0.99±0.01
+0.99±0.01
+0.87±0.12
+0.95±0.09
+0.89±0.12
+0.95±0.09
+0.96±0.07
+0.98±0.07
+0.77±0.17
+0.96±0.03
+0.89±0.1
+0.93±0.03
+0.77±0.04
+0.91±0.06
+0.9±0.04
+0.91±0.04
+0.92±0.09
+0.94±0.03
+0.76±0.05
+
+OTT
+
+0.96±0.02
+0.94±0.03
+0.94±0.03
+0.8±0.06
+0.87±0.06
+0.9±0.04
+0.93±0.05
+0.97±0.02
+0.94±0.03
+0.8±0.05
+0.93±0.12
+0.96±0.09
+0.95±0.09
+0.84±0.15
+0.84±0.21
+0.84±0.21
+0.9±0.15
+0.9±0.13
+0.9±0.14
+0.84±0.16
+0.83±0.19
+0.93±0.18
+0.92±0.18
+0.81±0.24
+0.8±0.17
+0.85±0.19
+0.89±0.19
+0.92±0.18
+0.93±0.18
+0.8±0.2
+0.96±0.02
+0.93±0.03
+0.93±0.04
+0.73±0.06
+0.85±0.06
+0.91±0.03
+0.88±0.06
+0.96±0.03
+0.93±0.03
+0.78±0.05
+
+AVG 0.34±0.09
+
+0.81±0.16
+
+0.51±0.1
+
+0.91±0.08
+
+0.89±0.1
+
+Table 2: ARI for balanced comparison-based clustering tasks on MNIST dataset. Each line corresponds to the average over 10
+different combinations of classes, each run 10 times.
+
+nb. examples per class AddS3
+
+10,10,10
+20,20,20
+30,30,30
+40,40,40
+50,50,50
+60,60,60
+70,70,70
+80,80,80
+90,90,90
+100,100,100
+
+0.9±0.08
+0.88±0.06
+0.91±0.05
+0.92±0.06
+0.92±0.06
+0.92±0.05
+0.92±0.05
+0.92±0.06
+0.92±0.11
+0.92±0.13
+
+AddS3s
+0.9±0.1
+0.87±0.07
+0.9±0.05
+0.91±0.05
+0.92±0.06
+0.91±0.04
+0.92±0.05
+0.91±0.03
+0.92±0.11
+0.92±0.13
+
+t-STE
+
+0.88±0.13
+0.86±0.11
+0.87±0.1
+0.86±0.1
+0.85±0.11
+0.86±0.09
+0.85±0.07
+0.85±0.1
+0.87±0.09
+0.85±0.09
+
+t-STEs
+0.93±0.11
+0.91±0.08
+0.92±0.07
+0.92±0.06
+0.92±0.06
+0.92±0.05
+0.92±0.05
+0.92±0.06
+0.92±0.11
+0.92±0.13
+
+OTT
+
+0.9±0.11
+0.86±0.08
+0.91±0.07
+0.9±0.06
+0.9±0.06
+0.9±0.05
+0.88±0.05
+0.86±0.06
+0.8±0.11
+0.73±0.13
+
+AVG 0.91±0.04
+
+0.91±0.05
+
+0.86±0.1
+
+0.92±0.05
+
+0.86±0.08
+
+References
+Beck, A.; and Teboulle, M. 2003. Mirror descent and nonlinear projected subgradient methods for convex optimization.
+Operations Research Letters.
+Berge, C. 1984. Hypergraphs: combinatorics of ﬁnite sets. Elsevier.
+Chowdhury, S.; and M´emoli, F. 2019. The Gromov–Wasserstein distance between networks and stable network invariants.
+Information and Inference: A Journal of the IMA.
+Courty, N.; Flamary, R.; Tuia, D.; and Rakotomamonjy, A. 2016. Optimal transport for domain adaptation. IEEE transactions on
+pattern analysis and machine intelligence, 39(9): 1853–1865.
+Kerdoncuff, T.; Emonet, R.; and Sebban, M. 2021. Sampled Gromov Wasserstein. Machine Learning.
+Peyr´e, G.; Cuturi, M.; and Solomon, J. 2016. Gromov-wasserstein averaging of kernel and distance matrices. In International
+Conference on Machine Learning.
+Redko, I.; Vayer, T.; Flamary, R.; and Courty, N. 2020. CO-Optimal Transport. In Advances in Neural Information Processing
+Systems.
+Van Der Maaten, L.; and Weinberger, K. 2012. Stochastic triplet embedding. In 2012 IEEE International Workshop on Machine
+Learning for Signal Processing. IEEE.
+Villani, C. 2008. Optimal transport: old and new. Springer Science & Business Media.
+Xu, H.; Luo, D.; Zha, H.; and Duke, L. C. 2019. Gromov-Wasserstein Learning for Graph Matching and Node Embedding. In
+International Conference on Machine Learning.
+
+

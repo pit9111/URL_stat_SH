@@ -1,0 +1,1247 @@
+Cauchy Multichannel Speech Enhancement with a Deep
+Speech Prior
+Mathieu Fontaine, Aditya Arie Nugraha, Roland Badeau, Kazuyoshi Yoshii,
+
+Antoine Liutkus
+
+To cite this version:
+
+Mathieu Fontaine, Aditya Arie Nugraha, Roland Badeau, Kazuyoshi Yoshii, Antoine Liutkus. Cauchy
+Multichannel Speech Enhancement with a Deep Speech Prior. EUSIPCO 2019 - 27th European Signal
+Processing Conference, Sep 2019, Coruña, Spain. ￿10.23919/EUSIPCO.2019.8903091￿. ￿hal-02288063￿
+
+HAL Id: hal-02288063
+
+https://telecom-paris.hal.science/hal-02288063
+
+Submitted on 16 Oct 2019
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Cauchy Multichannel Speech Enhancement
+with a Deep Speech Prior
+
+Mathieu Fontaine∗ Aditya Arie Nugraha† Roland Badeau‡ Kazuyoshi Yoshii†§ Antoine Liutkus¶
+
+∗Universit´e de Lorraine, CNRS, Inria, LORIA, Nancy, France
+
+‡LTCI, T´el´ecom ParisTech, Universit´e Paris-Saclay, Paris, France
+
+†AIP, RIKEN, Tokyo, Japan
+¶Inria, LIRMM, Montpellier, France
+
+§Graduate School of Informatics, Kyoto University, Kyoto, Japan
+
+Abstract—We propose a semi-supervised multichannel speech
+enhancement system based on a probabilistic model which as-
+sumes that both speech and noise follow the heavy-tailed multi-
+variate complex Cauchy distribution. As we advocate, this allows
+handling strong and adverse noisy conditions. Consequently, the
+model is parameterized by the source magnitude spectrograms
+and the source spatial scatter matrices. To deal with the non-
+additivity of scatter matrices, our ﬁrst contribution is to perform
+the enhancement on a projected space. Then, our second contri-
+bution is to combine a latent variable model for speech, which
+is trained by following the variational autoencoder framework,
+with a low-rank model for the noise source. At test time, an it-
+erative inference algorithm is applied, which produces estimated
+parameters to use for separation. The speech latent variables are
+estimated ﬁrst from the noisy speech and then updated by a gra-
+dient descent method, while a majorization-equalization strategy
+is used to update both the noise and the spatial parameters of
+both sources. Our experimental results show that the Cauchy
+model outperforms the state-of-art methods. The standard devi-
+ation scores also reveal that the proposed method is more robust
+against non-stationary noise.
+
+Index Terms—Multichannel speech enhancement, multivariate
+complex Cauchy distribution, variational autoencoder, nonnega-
+tive matrix factorization
+
+I. INTRODUCTION
+
+Multichannel speech enhancement aims to extract speech
+from an observed multichannel noisy signal [1]. Usually, para-
+metric models are used for the speech (target) signal, the addi-
+tive noise, and the way both are captured by the microphones.
+The core feature of such models is to allow the reconstruction
+of the target signal from the noisy mixture, provided that the
+parameters are well estimated. The standard example is having
+sources parameterized by their spectrograms, and reconstructed
+through soft-masking (Wiener-like) strategies.
+
+Deep neural networks (DNNs) have been increasingly used
+in this context [1]–[4]. Most approaches train denoising DNNs
+to estimate the model parameters, e.g., source spectrograms
+or the time-frequency mask of one or all of the sources. In
+this case, the training employs paired data consisting of noisy
+speech and clean speech. Although it has been shown that
+denoising DNNs could be robust to unseen environments [5],
+there is still a concern that they are not adaptive enough to
+unseen noises.
+
+This work was partly supported by the research programme KAMoulox (ANR-
+15-CE38-0003-01) funded by ANR, the French State agency for research, and
+JSPS KAKENHI No. 19H04137.
+
+This issue has recently been addressed by several studies on
+semi-supervised speech enhancement [6]–[10]. The core idea
+of these studies is to formulate a probabilistic generative model
+in which both speech spectrogram and noise spectrogram are
+modeled by latent variable models. The speech spectrogram
+model is trained as the decoder in the variational autoencoder
+(VAE) framework [11], while the noise spectrogram is modeled
+by a nonnegative matrix factorization (NMF) [12] approach.
+The speech model is trained with clean speech only, thus
+independent from the actual noise that will be found in the
+observations at test time. Indeed, the core feature of this strategy
+is to let the noise parameters be estimated and adapted at test
+time, so that it is ﬂexible and may achieve good denoising
+performance even in adversarial conditions not met at training
+time. In the case of multichannel enhancement [8], [9], the
+spatial parameters are also estimated at test time.
+
+Most of these methods [6]–[9] tackle such a whole estimation
+problem under a Gaussian probabilistic setting. Although it
+is convenient because it leads to straightforward inference
+methods, it has the drawback of being sensitive to initialization
+and prone to be trapped in a local minimum [13].
+
+As opposed to their Gaussian counterpart, heavy-tailed prob-
+abilistic models allow for outcomes that are far away from the
+expected values [14], [15]. From an inference perspective, this
+means that unlikely observations will not have a detrimental
+impact on the parameters, yielding robust estimation. Among
+them, non-Gaussian α-stable models are remarkable because
+they also satisfy the central limit theorem [16], which means
+that a sum of α-stable random vectors remains α-stable. This
+is an interesting feature in a context of speech enhancement
+where additive sources are combined to yield the observed
+mixture. Notwithstanding their attractive features, the main
+weakness of these distributions is the absence of a closed-form
+probability density function (PDF), except for α = 0.5 (the
+L´evy distribution), α = 1 (the Cauchy distribution), and α = 2
+(the Gaussian distribution).
+
+An option is to express an α-stable random variable as con-
+ditionally Gaussian [16]. This may always be done in the scalar
+(single-channel) case and only in some cases for multichannel
+data. Put it simply, the trick is to write an α-stable random vari-
+able as a Gaussian variable with a covariance that is multiplied
+by a random impulse variable, distributed as a positive α
+2 -stable
+random variable. This makes it possible to use the classical
+
+Gaussian methodology, provided that some speciﬁc method is
+found to estimate the impulse variables, notably some Markov
+chain Monte Carlo (MCMC) strategy [17]–[19]. However, the
+MCMC algorithm is often computationally demanding at test
+time, and [20] proposes an approximation to construct ﬁlters
+without requiring the estimation of impulse variables. Still, this
+strategy does not provide any convenient cost function to use
+for parameter estimation, which is inconvenient in our case.
+
+In line with the present study, combining a VAE and general
+α-stable distributions has recently been proposed in [10]. It suf-
+fers from expensive MCMC schemes. A simpliﬁed approach
+undertaken in [21] is to focus on the Cauchy α = 1 case,
+for which closed-form expressions of the likelihood are avail-
+able. However, this study is limited to single-channel source
+separation based on low-rank source models.
+
+In this paper, we go beyond related work in this respect and
+introduce a semi-supervised multichannel speech enhancement
+method that uses a VAE-based speech model and a low-rank
+noise model, that both parameterize Cauchy models for the
+sources. To the best of our knowledge, this is the ﬁrst study
+that uses a computationally-tractable heavy-tailed model for
+multichannel sources unlike previous studies that use a heavy-
+tailed model for multichannel mixtures [22], [23]. Additionally,
+we show how deep latent variable models may be combined
+with more classical low-rank models in this setting.
+
+II. PROBABILISTIC FORMULATION
+
+This section formulates a probabilistic model for the pro-
+
+posed Cauchy multichannel speech enhancement method.
+
+A. Multivariate Complex Cauchy Distribution
+
+Let y be a complex random vector of dimension K. Then,
+µ, V) follows a circularly-symmetric multivariate
+
+y
+complex Cauchy distribution iff. its probability density is
+
+C(y
+
+∼ C
+
+|
+
+pµ,V(y) = AK,V
+
+(cid:16)
+
+1 + (y
+
+−
+
+µ)H V−1 (y
+
+−
+
+where
+
+(cid:17)−K− 1
+
+2
+
+µ)
+
+, (1)
+
+AK,V =
+
+K
+(cid:89)
+
+(cid:18)
+
+k=1
+
+K
+
+−
+
+k +
+
+(cid:19)
+
+1
+2
+
+π−K det (V)−1
+
+(2)
+
+and .H, V and µ in (1) respectively stand for the Hermitian
+transposition, the positive deﬁnite scatter matrix and the loca-
+tion parameter [24], [25]. Similarly to the Gaussian distribution,
+a linear combination of Cauchy vectors remains a Cauchy vec-
+tor. However, the tails of a Gaussian distribution are lighter
+than those of a Cauchy one (see Fig. 1).
+
+B. Spatial Model
+
+∈
+
+∈
+
+[1, F ] and t
+
+We work in the short time Fourier transform (STFT) domain.
+[1, T ] be the frequency bin and time
+Let f
+frame indexes, respectively. Following the literature, we assume
+that the observed mixture signal is a linear combination of
+the sources. Considering speech and noise as the sources, the
+CF ×T ×K is expressed
+STFT of a K-channel noisy speech x
+∈
+for each time-frequency (TF) bin f t as
+f t + xn
+f t,
+
+xf t = xs
+
+(3)
+
+Fig. 1: Tails of unidimensional Cauchy and Gaussian PDF
+
+(cid:40)
+
+f t ∈
+
+CK are
+
+CK and the noise xn
+
+f t ∈
+
+where the speech xs
+assumed to follow a Cauchy distribution:
+f tRs
+f
+f tRn
+f
+
+xs
+C
+f t ∼ C
+xn
+C
+f t ∼ C
+R+ and an
+with as
+f t ∈
+while Rs
+f are the K
+scatter matrices of the sources.
+
+(cid:12)
+(cid:12)0, as
+(cid:12)
+(cid:12)0, an
+
+f and Rn
+
+f t ∈
+
+(cid:1),
+(cid:1),
+
+(cid:0)xs
+(cid:0)xn
+f t
+R+ are the sources’ magnitudes,
+K positive deﬁnite spatial
+
+(4)
+
+×
+
+f t
+
+C. Source Models
+
+f and Rn
+
+While the scatter matrices Rs
+
+First, the F -dimensional vector as
+
+f are left unconstrained,
+speciﬁc models are picked for the speech and noise magnitudes.
+t gathering the speech
+magnitudes as
+f t for frame t is assumed to depend on low-
+RD with D < F .
+dimensional latent variables written zt
+This mapping is given by a function called the decoder and
+written as
+
+t = µθ(zt), parameterized by θ.
+
+∈
+
+Second, the noise magnitudes an
+
+f t are modeled with a non-
+
+negative matrix factorization (NMF) [26] as follows:
+
+an
+f t =
+
+L
+(cid:88)
+
+l=1
+
+wf lhlt for
+
+f, t,
+
+∀
+
+(5)
+
+where L is the number of basis vectors.
+
+At test time, the key idea becomes to use the observed
+mixture x to estimate the most likely latent vectors zt and
+NMF parameters w and h as well as the scatter matrices. They
+are then used in conjunction to ˆas
+t = µθ(zt) to separate the
+signals with the technique presented in section II-D.
+
+D. Projection-Based Wiener Filter
+
+The Cauchy model above resembles its Gaussian counter-
+part [27]. Instead of scatter matrices, the Gaussian model has
+covariance matrices. The mixture covariance matrix is simply
+a linear combination of the source covariance matrices. In this
+case, given the model parameters, the multichannel Wiener ﬁl-
+ter can be used to extract the sources. Unfortunately, this linear
+combination between scatter matrices is usually not satisﬁed
+for the Cauchy model with K > 1.
+
+We therefore propose to project the observation vectors
+CK to the complex plane C. Let us consider M vectors
+, uM
+
+CK and let
+
+xf t
+u1,
+
+∈
+· · ·
+
+∈
+
+xmf t = uH
+
+mxf t for
+(6)
+be the mth-projection of the observed signal xf t. As demon-
+strated in [28], the random variable xmf t is Cauchy distributed
+
+m, f, t
+
+∀
+
+−10.0−7.5−5.0−2.50.02.55.07.510.0y10−1410−1110−810−510−2p(y)Cauchypdf.Gaussianpdf.and the following posterior mean of the projected speech ˆxs
+is tractable for all m, f, t:
+
+mf t
+
+ˆxs
+mf t
+
+(cid:44) E (cid:2)uH
+
+mxs
+
+xmf t, Ψ(cid:3) =
+
+f t|
+
+(cid:115)
+
+vs
+mf t
+vmf t
+
+xmf t,
+
+(7)
+
+where
+
+and Ψ (cid:44)
+
+
+
+
+
+
+mf t = as
+vs
+mf t = an
+vn
+vmf t =
+
+mRs
+f tuH
+f um,
+mRn
+f tuH
+f um,
+(cid:16)(cid:112)vs
+mf t + (cid:112)vn
+(cid:111)
+.
+
+(cid:110)
+
+f t, an
+as
+
+f t, Rs
+
+f , Rn
+f
+
+(8)
+
+(cid:17)2
+
+,
+
+mf t
+
+We then deduce an estimator ˆxs
+
+f t of xs
+
+f t by using U†, which
+CM ×K:
+
+is the pseudo-inverse of U (cid:44) [u1, . . . , uM ]H
+f t = U† (cid:2)ˆxs
+(cid:3)T
+ˆxs
+An estimator ˆxn
+f t of xn
+f t can be computed in a similar way.
+In this paper, in order to simplify the computation of (9), the
+projector U is chosen to be unitary so that U† = U.
+
+1f t,
+
+∈
+.
+
+, ˆxs
+
+· · ·
+
+(9)
+
+mf t
+
+III. PARAMETER ESTIMATION
+
+This section explains how to estimate the parameters of the
+
+probabilistic model proposed in Section II.
+
+(a) Encoder
+
+(b) Decoder
+
+Fig. 2: The encoder and decoder of the speech VAE. ‘FC’
+represents a fully-connected layer whose size is shown inside
+the parentheses. The speech magnitude estimate is computed
+from the decoder output ˆas
+
+t = exp (ln µt).
+
+a cost function for training the parameters θ, may be picked
+as the negative log-likelihood (NLL):
+
+mag c
+=
+
+L
+
+1
+T
+
+F,T
+(cid:88)
+
+(cid:32)
+
+(cid:32)
+
+ln[γθ(zt)]f + ln
+
+1 +
+
+f,t=1
+
+(cid:0)as
+
+f t −
+
+[µθ(zt)]f
+γ2
+f t
+
+(cid:1)2
+
+(cid:33)(cid:33)
+
+.
+
+Then, assuming a simple prior pθ(zt)
+
+ularization term
+
+reg [11] is computed as
+
+∼ N
+
+D,T
+(cid:88)
+
+L
+(cid:32)
+[µq
+
+d,t=1
+
+φ(as
+
+t)]2
+
+d + [σq
+
+φ(as
+
+t)]2
+
+d −
+
+(12)
+
+0, I), the reg-
+
+(zt
+
+|
+
+ln[σq
+
+φ(as
+
+t)]2
+
+d −
+
+(cid:33)
+.
+
+1
+
+(13)
+
+A. Training Phase
+
+To train the speech decoder model µθ (z), we adopt the VAE
+
+framework [11]. For training, two DNNs are considered:
+
+reg =
+
+L
+
+1
+2T
+
+φ(as
+
+φ(as
+
+t) and σq
+
+• An encoder that inputs as
+
+vectors written µq
+the distribution of the latent vectors: qφ(zt
+as
+
+t and outputs two D-dimensional
+t). Together, they deﬁne
+at), deﬁned
+|
+
+φ(at)])
+• A decoder that outputs two F -dimensional vectors written
+µθ(zt) and γθ(zt), that together describe the distribution
+of the speech magnitudes as
+zt).
+We detail that distribution later.
+
+t given z, written pθ(as
+t|
+
+µq
+φ(at), Diag[σq
+
+(zt
+
+N
+
+|
+
+In any case, the model parameters θ and φ are jointly opti-
+
+(cid:90)
+
+t) =
+
+ln pθ(as
+
+mized by minimizing the negative log-likelihood (NLL):
+as
+t)
+|
+as
+t)
+|
+pθ(as
+t|
+ln
+qφ(zt
+
+zt)pθ(zt)
+as
+t)
+
+qφ(zt
+qφ(zt
+(cid:20)
+
+t, zt)dzt
+
+pθ(as
+
+ln
+
+−
+
+(cid:21)
+
+−
+
+zt
+Eqφ(zt|as
+t)
+Eqφ(zt|as
+t)[ln pθ(as
+t|
+reg,
+mag +
+
+≤ −
+=
+def
+=
+
+−
+
+|
+
+zt)]+KL[qφ(zt
+
+as
+t)
+
+|
+
+pθ(zt)]
+(cid:107)
+
+(10)
+
+L
+
+L
+where KL[q
+p] is the Kullback-Leibler (KL) divergence from
+(cid:107)
+p to q [29]. The reparameterization trick [11] is used to obtain
+zt given the encoder outputs µq
+
+φ(as
+For training, the observed magnitudes from a clean speech
+f t, are assumed to follow a real Cauchy distribution
+R+:
+
+t) and σq
+
+φ(as
+
+t).
+
+dataset, as
+R with location [µθ(zt)]f ∈
+C
+(cid:0)as
+f t|
+
+pθ(as
+
+zt) =
+
+C
+
+R
+
+f t
+
+R+ and scale [γθ(zt)]f ∈
+(cid:12)
+(cid:12) [µθ(zt)]f , [γθ(zt)]f
+
+(cid:1).
+
+(11)
+
+This complies with the α
+[30]. Thus, the magnitude reconstruction loss
+
+spectrogram assumption for α = 1
+mag, serving as
+
+−
+
+L
+
+B. Test Phase
+
+As advocated above, the projected mixtures xmf t are con-
+sidered as isotropic complex random variables. They are thus
+parameterized through a scale parameter √vmf t and the nega-
+tive log-likelihood is given by
+
+D (v)
+
+c
+=
+
+M,F,T
+(cid:88)
+
+m,f,t=1
+
+(cid:16)
+
+ln
+
+3
+2
+
+vmf t +
+
+xmf t
+|
+
+2(cid:17)
+|
+
+−
+
+1
+2
+
+where c
+
+= denotes equality up to a constant.
+
+ln (vmf t) , (14)
+
+|
+
+| |
+
+xt
+
+At test time, the latent variables zt are initialized by sampling
+from qφ(zt
+), i.e., by applying the encoder to the average of
+the mixture magnitude spectrogram over channels. This in turn
+provides an initial estimate µθ(zt) for the speech magnitude as
+t.
+Then, the latent variables zt are updated by backpropagation
+with a gradient descent method to minimize the cost function
+(14). In this case, all parameters other than zt, including the
+decoder parameters, are kept ﬁxed.
+
+For estimating the noise parameters, we adopt a majorization-
+equalization (ME) strategy [26] as in [21]. Due to space con-
+straints, we only provide here the multiplicative updates used
+for the parameters w and h as follows:
+
+wf l
+
+←
+
+hlt
+
+←
+
+1
+3
+
+1
+3
+
+wf l
+
+(cid:80)
+
+hlt
+
+(cid:80)
+
+,
+
+(cid:80)
+
+mt hltψn
+mf
+mf ξmf t
+
+mt hltψn
+(cid:80)
+
+mf hf lψn
+mf
+mf ξmf t
+
+mf wf lψn
+
+,
+
+(15)
+
+(16)
+
+Fig. 3: Performance comparison in terms of PESQ (left), STOI (middle), and SDR (right). Higher is better. The mean and the
+standard deviation are respectively shown in white and black fonts.
+
+ψn
+
+mf
+
+(cid:44)
+
+ξmf t (cid:44) 1 + |
+
+mRn
+uH
+f um
+(cid:112)vn
+mf tvmf t
+2
+xmf t
+|
+vmf t
+
+,
+
+.
+
+(17)
+
+(18)
+
+f t
+
+ˆRj
+
+f t = aj
+mator ˆvj
+f for j
+the source models and ˆRj
+
+Similarly for noise parameter estimation, we deﬁne the esti-
+, where aj
+s, n
+f t is provided by
+∈ {
+}
+f = (cid:80)
+m(cid:48) rj
+m(cid:48). It leads to
+(cid:80)
+mt aj
+mt ηj
+
+m(cid:48),f um(cid:48)uH
+f tηj
+mm(cid:48)f t
+mm(cid:48)f tξmf t
+
+rj
+m(cid:48)f ←
+
+rj
+m(cid:48)f
+
+(19)
+
+1
+3
+
+(cid:80)
+
+,
+
+ηj
+mm(cid:48)f t
+
+(cid:44) |
+(cid:113)
+
+2
+
+uH
+m(cid:48)um
+vj
+mf tvmf t
+
+|
+
+.
+
+(20)
+
+IV. EVALUATION
+
+In this section, we compare the performance of three different
+systems on a 5-channel speech enhancement task. Each of
+them includes at least one multichannel nonnegative matrix
+factorization (MNMF) spectrogram model [31]. The systems
+include: (1) Cauchy VAE-MNMF, that we propose above; (2)
+Gaussian VAE-MNMF, that is a system similar to ours, but
+based on a Gaussian model [9]; and (3) Cauchy MNMF, that
+is a semi-supervised multichannel Cauchy NMF, where the
+speech magnitude is also modeled with an NMF with basis
+vectors trained on clean speech beforehand. The Gaussian
+VAE-MNMF system is provided by the authors [9].
+
+The performance is measured by the signal-to-distortion ratio
+(SDR) provided by the BSS-Eval toolbox [32], the Perceptual
+Evaluation of Speech Quality (PESQ) score [33], and the Short-
+Time Objective Intelligibility (STOI) score [34]. The SDR is
+computed on the enhanced 5-channel speech, while the PESQ
+and the STOI are computed on one of the channels.
+
+A. Experimental Conditions
+
+We consider the simulated training, development, and test
+sets of the CHiME-4 corpus [5]. All data are sampled at 16
+kHz. We use 7138 single-channel clean speech signals of the
+training set for training the DNNs of the Cauchy VAE-MNMF
+and the speech basis vectors of the Cauchy MNMF. Moreover,
+we use 1640 single-channel clean speech signals from the
+development set as the validation set for the DNN training.
+The evaluation is then done on 10% of the full test set, i.e.,
+132 randomly selected 5-channel noisy utterances (K = 5).
+
+The STFT coefﬁcients are extracted using a Hann window with
+a length of 1024 samples and an overlap of 75% (F = 513).
+The encoder and the decoder of the speech VAE for the
+Cauchy VAE-MNMF is depicted in Fig. 2. These DNNs are
+trained by backpropagation with the Adam update rule whose
+learning rate is ﬁxed to 10−3 [35]. The update is done for
+every minibatch of 8192 frames from 32 randomly selected
+utterances. The gradient is normalized with threshold ﬁxed
+to 1 [36]. The weight normalization [37] is also employed.
+The training is started with a warm-up technique [38] for 100
+epochs and stopped after 50 consecutive epochs that failed to
+obtain a better validation score. The latest model yielding the
+lowest error is kept. These DNNs are comparable in size to
+the ones used in the Gaussian VAE-MNMF.
+
+For both VAE-MNMF methods, the latent variable dimension
+of the speech model is ﬁxed to D = 32 and the number of bases
+of the noise model is ﬁxed to L = 32. Similarly, for the Cauchy
+MNMF, the number of bases of both source models is ﬁxed to
+L = 32. For the Cauchy MNMF and the Cauchy VAE-MNMF,
+the dimension of the projector U is ﬁxed to M = 8. The NMF
+parameters are initialized randomly and the coefﬁcients rj
+mf
+are initialized as 1. We consider 64 optimization iterations for
+the Cauchy MNMF and 50 for both VAE-MNMF methods.
+
+B. Experimental Results
+
+Fig. 3 shows that the Cauchy VAE-MNMF globally outper-
+forms the Cauchy MNMF and the Gaussian VAE-MNMF. It
+provides an SDR improvement of 4.2 dB w.r.t. the Gaussian
+VAE-MNMF. We also observe that the standard deviation of
+the metrics is generally smaller for the Cauchy VAE-MNMF,
+suggesting that it has stronger robustness to noise.
+
+As an illustration, we also displayed in Fig. 4 the log-
+magnitude spectrograms of estimated speech obtained with
+the Cauchy and the Gaussian VAE-MNMFs. We see that the
+one seems less robust against non-stationary noise.
+
+V. CONCLUSION
+
+We proposed a speech enhancement system combining a
+nonnegative matrix factorization (NMF) model for the noise
+and a variational autoencoder (VAE) for speech, that is trained
+and used under heavy-tailed probabilistic models. We derived
+the whole training and inference strategy and gave the details
+of the corresponding algorithms.
+
+[12] D. D. Lee and H. S. Seung, “Learning the parts of objects by non-
+negative matrix factorization,” Nature, vol. 401, no. 6755, pp. 788–791,
+1999.
+
+[13] C. Boutsidis and E. Gallopoulos, “SVD based initialization: A head start
+for nonnegative matrix factorization,” Pattern Recognition, vol. 41, no. 4,
+pp. 1350–1362, 2008.
+
+[14] R. A. Fisher, “Applications of “Student’s” distribution,” Metron, vol. 5,
+
+no. 3, pp. 90–104, 1925.
+
+[15] R. Martin and C. Breithaupt, “Speech enhancement in the DFT domain
+using Laplacian speech priors,” in Proc. IWAENC, vol. 3, 2003, pp.
+87–90.
+
+[16] G. Samoradnitsky and M. S. Taqqu, Stable non-Gaussian random pro-
+cesses: stochastic models with inﬁnite variance. Chapman and Hall/CRC,
+1994.
+
+[17] S. Leglaive, U. S¸ ims¸ekli, A. Liutkus, R. Badeau, and G. Richard, “Alpha-
+stable multichannel audio source separation,” in Proc. IEEE ICASSP,
+2017, pp. 576–580.
+
+[18] M. Fontaine, F.-R. St¨oter, A. Liutkus, U. S¸ ims¸ekli, R. Serizel, and
+R. Badeau, “Multichannel audio modeling with elliptically stable tensor
+decomposition,” in Proc. LVA/ICA, 2018, pp. 13–23.
+
+[19] U. S¸ ims¸ekli, H. Erdogan, S. Leglaive, A. Liutkus, R. Badeau, and
+G. Richard, “Alpha-stable low-rank plus residual decomposition for
+speech enhancement,” in Proc. IEEE ICASSP, 2018.
+
+[20] M. Fontaine, A. Liutkus, L. Girin, and R. Badeau, “Explaining the pa-
+rameterized Wiener ﬁlter with alpha-stable processes,” in Proc. WASPAA,
+2017.
+
+[21] A. Liutkus, D. Fitzgerald, and R. Badeau, “Cauchy nonnegative matrix
+
+factorization,” in Proc. WASPAA, 2015, pp. 1–5.
+
+[22] K. Kitamura, Y. Bando, K. Itoyama, and K. Yoshii, “Student’s t multi-
+channel nonnegative matrix factorization for blind source separation,” in
+Proc. IWAENC, 2016, pp. 1–5.
+
+[23] D. Kitamura, S. Mogami, Y. Mitsui, N. Takamune, H. Saruwatari, N. Ono,
+Y. Takahashi, and K. Kondo, “Generalized independent low-rank matrix
+analysis using heavy-tailed distributions for blind source separation,”
+EURASIP J. on Adv. in Signal Process., vol. 2018, no. 1, pp. 1–25, 2018.
+[24] M. Lombardi and D. Veredas, “Indirect estimation of elliptical stable
+distributions,” Computational Statistics & Data Analysis, vol. 53, no. 6,
+pp. 2309–2324, 2009.
+
+[25] S. J. Press, “Multivariate stable distributions,” Journal of Multivariate
+
+Fig. 4: Log-magnitude spectrograms of clean speech (top-
+left), corrupted speech (top-right), speech estimated with the
+Gaussian VAE-MNMF (bottom-left) and speech estimated
+with the Cauchy VAE-MNMF (bottom-right). The utterance is
+M05_447C020F_PED from the test set et05_ped_simu.
+
+In an evaluation on 5-channel mixtures from the CHiME-4
+corpus, we found out that our proposed system achieves a
+signiﬁcantly better performance than its Gaussian counterpart,
+yielding a 4 dB SDR improvement.
+
+ACKNOWLEDGEMENT
+
+We thank S. Leglaive for providing the code of [9].
+
+REFERENCES
+
+[1] E. Vincent, T. Virtanen, and S. Gannot, Eds., Audio Source Separation
+
+Analysis, vol. 2, no. 4, pp. 444–462, 1972.
+
+and Speech Enhancement. Wiley, 2018.
+
+[2] A. A. Nugraha, A. Liutkus, and E. Vincent, “Multichannel audio source
+separation with deep neural networks,” IEEE/ACM Trans. ASLP, vol. 24,
+no. 9, pp. 1652–1664, 2016.
+
+[3] J. Heymann, L. Drude, and R. Haeb-Umbach, “A generic neural acoustic
+beamforming architecture for robust multi-channel speech processing,”
+Computer Speech & Language, vol. 46, pp. 374–385, 2017.
+
+[4] T. N. Sainath, R. J. Weiss, K. W. Wilson, B. Li, A. Narayanan, E. Variani,
+M. Bacchiani, I. Shafran, A. Senior, K. Chin, A. Misra, and C. Kim,
+“Multichannel signal processing with deep neural networks for automatic
+speech recognition,” IEEE/ACM Trans. ASLP, vol. 25, no. 5, pp. 965–979,
+May 2017.
+
+[5] E. Vincent, S. Watanabe, A. A. Nugraha, J. Barker, and R. Marxer, “An
+analysis of environment, microphone and data simulation mismatches in
+robust speech recognition,” Computer Speech & Language, vol. 46, pp.
+535–557, 2017.
+
+[6] Y. Bando, M. Mimura, K. Itoyama, K. Yoshii, and T. Kawahara, “Sta-
+tistical speech enhancement based on probabilistic integration of varia-
+tional autoencoder and non-negative matrix factorization,” in Proc. IEEE
+ICASSP, 2018, pp. 716–720.
+
+[7] S. Leglaive, L. Girin, and R. Horaud, “A variance modeling framework
+based on variational autoencoders for speech enhancement,” in Proc.
+IEEE MLSP, 2018.
+
+[8] K. Sekiguchi, Y. Bando, K. Yoshii, and T. Kawahara, “Bayesian multi-
+channel speech enhancement with a deep speech prior,” in Proc. APSIPA,
+2018, pp. 1233–1239.
+
+[9] S. Leglaive, L. Girin, and R. Horaud, “Semi-supervised multichannel
+speech enhancement with variational autoencoders and non-negative
+matrix factorization,” in Proc. IEEE ICASSP, 2019.
+
+[10] S. Leglaive, U. S¸ ims¸ekli, A. Liutkus, L. Girin, and R. Horaud, “Speech
+enhancement with variational autoencoders and alpha-stable distributions,”
+in Proc. IEEE ICASSP, 2019.
+
+[11] D. P. Kingma and M. Welling, “Auto-encoding variational Bayes,” in
+
+Proc. ICLR, 2014.
+
+[26] C. F´evotte and J. Idier, “Algorithms for nonnegative matrix factorization
+with the β-divergence,” Neural Computation, vol. 23, no. 9, pp. 2421–
+2456, 2011.
+
+[27] N. Q. K. Duong, E. Vincent, and R. Gribonval, “Under-determined
+reverberant audio source separation using a full-rank spatial covariance
+model,” IEEE Trans. ASLP, vol. 18, no. 7, pp. 1830–1840, 2010.
+[28] D. Fitzgerald, A. Liutkus, and R. Badeau, “Projection-based demixing of
+spatial audio,” IEEE/ACM Trans. ASLP, vol. 24, no. 9, pp. 1556–1568,
+2016.
+
+[29] S. Kullback and R. A. Leibler, “On information and sufﬁciency,” Ann.
+
+Math. Statist., vol. 22, no. 1, pp. 79–86, 1951.
+
+[30] A. Liutkus and R. Badeau, “Generalized Wiener ﬁltering with fractional
+power spectrograms,” in Proc. IEEE ICASSP, 2015, pp. 266–270.
+[31] A. Ozerov and C. F´evotte, “Multichannel nonnegative matrix factorization
+in convolutive mixtures for audio source separation,” IEEE Trans. ASLP,
+vol. 18, no. 3, pp. 550–563, 2009.
+
+[32] E. Vincent, H. Sawada, P. Boﬁll, S. Makino, and J. P. Rosca, “First
+stereo audio source separation evaluation campaign: Data, algorithms
+and results,” in Proc. ICA, 2007, pp. 552–559.
+
+[33] ITU-T, “P.862 : Perceptual evaluation of speech quality (PESQ): An
+objective method for end-to-end speech quality assessment of narrow-
+band telephone networks and speech codecs,” 2001.
+
+[34] C. H. Taal, R. C. Hendriks, R. Heusdens, and J. Jensen, “An algorithm
+for intelligibility prediction of time-frequency weighted noisy speech,”
+IEEE Trans. ASLP, vol. 19, no. 7, pp. 2125–2136, 2011.
+
+[35] D. P. Kingma and J. Ba, “Adam: A method for stochastic optimization,”
+
+in Proc. ICLR, 2015.
+
+[36] R. Pascanu, T. Mikolov, and Y. Bengio, “On the difﬁculty of training
+recurrent neural networks,” in Proc. ICML, 2013, pp. 1310–1318.
+[37] T. Salimans and D. P. Kingma, “Weight normalization: A simple repa-
+rameterization to accelerate training of deep neural networks,” in Proc.
+NIPS, 2016, pp. 901–909.
+
+[38] C. K. Sønderby, T. Raiko, L. Maaløe, S. K. Sønderby, and O. Winther,
+“Ladder variational autoencoders,” in Proc. NIPS, 2016, pp. 3738–3746.
+
+02000400060008000frequency[Hz]012345time[s]02000400060008000frequency[Hz]012345time[s]

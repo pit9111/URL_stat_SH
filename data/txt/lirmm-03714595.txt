@@ -1,0 +1,3344 @@
+Rewriting the Infinite Chase
+Michael Benedikt, Maxime Buron, Stefano Germano, Kevin Kappelmann,
+
+Boris Motik
+
+To cite this version:
+
+Michael Benedikt, Maxime Buron, Stefano Germano, Kevin Kappelmann, Boris Motik. Rewriting
+the Infinite Chase. VLDB 2022 - 48th International Conference on Very Large Databases, Sep 2022,
+Sydney, Australia. pp.3045-3057, ￿10.14778/3551793.3551851￿. ￿lirmm-03714595￿
+
+HAL Id: lirmm-03714595
+
+https://hal-lirmm.ccsd.cnrs.fr/lirmm-03714595
+
+Submitted on 5 Jul 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Distributed under a Creative Commons Attribution - NonCommercial - NoDerivatives 4.0
+International License
+
+Rewriting the Infinite Chase
+
+Michael Benedikt
+Oxford University
+Oxford, United Kingdom
+michael.benedikt@cs.ox.ac.uk
+
+Maxime Buron
+LIRMM, Inria, Univ. of Montpellier
+Montpellier, France
+maxime.buron@inria.fr
+
+Stefano Germano
+Oxford University
+Oxford, United Kingdom
+stefano.germano@cs.ox.ac.uk
+
+Kevin Kappelmann
+Technical University of Munich
+Munich, Germany
+kevin.kappelmann@tum.de
+
+Boris Motik
+Oxford University
+Oxford, United Kingdom
+boris.motik@cs.ox.ac.uk
+
+ABSTRACT
+Guarded tuple-generating dependencies (GTGDs) are a natural ex-
+tension of description logics and referential constraints. It has long
+been known that queries over GTGDs can be answered by a variant
+of the chase—a quintessential technique for reasoning with depen-
+dencies. However, there has been little work on concrete algorithms
+and even less on implementation. To address this gap, we revisit
+Datalog rewriting approaches to query answering, where GTGDs
+are transformed to a Datalog program that entails the same base
+facts on each base instance. We show that the rewriting can be
+seen as containing “shortcut” rules that circumvent certain chase
+steps, we present several algorithms that compute the rewriting by
+simulating specific types of chase steps, and we discuss important
+implementation issues. Finally, we show empirically that our tech-
+niques can process complex GTGDs derived from synthetic and
+real benchmarks and are thus suitable for practical use.
+
+PVLDB Reference Format:
+Michael Benedikt, Maxime Buron, Stefano Germano, Kevin Kappelmann,
+and Boris Motik. Rewriting the Infinite Chase. PVLDB, 15(11): XXX-XXX,
+2022.
+doi:XX.XX/XXX.XX
+
+PVLDB Artifact Availability:
+The source code, data, and/or other artifacts have been made available at
+https://github.com/KRR-Oxford/Guarded-saturation.
+
+1 INTRODUCTION
+Tuple-generating dependencies (TGDs) are a natural extension of
+description logics and referential constraints, and they are exten-
+sively used in databases. For example, they are used in data integra-
+tion to capture semantic restrictions on data sources, mapping rules
+between data sources and the mediated schema, and constraints
+on the mediated schema. A fundamental computational problem in
+such applications is query answering under TGDs: given a query 𝑄,
+a collection of facts 𝐼 , and a set of TGDs Σ, find all the answers to
+𝑄 that logically follow from 𝐼 and Σ. This problem has long been
+seen as a key component of a declarative data integration systems
+
+This work is licensed under the Creative Commons BY-NC-ND 4.0 International
+License. Visit https://creativecommons.org/licenses/by-nc-nd/4.0/ to view a copy of
+this license. For any use beyond those covered by this license, obtain permission by
+emailing info@vldb.org. Copyright is held by the owner/author(s). Publication rights
+licensed to the VLDB Endowment.
+Proceedings of the VLDB Endowment, Vol. 15, No. 11 ISSN 2150-8097.
+doi:XX.XX/XXX.XX
+
+[25, 33], and it also arises in answering querying using views and
+accessing data sources with restrictions [20, 26, 37].
+
+The chase is a quintessential technique for reasoning with TGDs.
+It essentially performs “forward reasoning” by extending a set of
+given facts 𝐼 to a set 𝐼 ′ of all facts implied by 𝐼 and a set of TGDs Σ.
+To answer a query, one can compute 𝐼 ′ using the chase and then
+evaluate the query in 𝐼 ′. Unfortunately, the chase does not neces-
+sarily terminate, and in fact query answering for general TGDs is
+undecidable. Considerable effort was devoted to identifying classes
+of TGDs for which query answering is decidable. One line of work
+has focused on TGDs where the chase terminates; weakly-acyclic
+TGDs [21] are perhaps the best-known such class. Another line of
+work focused on guarded TGDs (GTGDs). GTGDs are interesting
+since they can capture common constraints used in data integration,
+and ontologies expressed in variants of description logic (DL) [6]
+can be translated directly into GTGDs. Example 1.1 illustrates the
+use of GTGDs used in a practical data integration scenario.
+
+Example 1.1. The IEC Common Information Model (CIM) is
+an open model for describing power generation and distribution
+networks. It is frequently used as a semantic layer in applications
+that integrate data about power systems [22]. CIM is defined in UML,
+but its formal semantics has been provided by a translation into
+an OWL ontology. The domain of CIM is described using classes
+and properties, which correspond to unary and binary relations,
+respectively. Moreover, semantic relationships between classes and
+properties are represented as OWL axioms, many of which can
+be translated into GTGDs. A significant portion of CIM describes
+power distribution equipment using GTGDs such as (1)–(4).
+ACEquipment(𝑥) → ∃𝑦 hasTerminal(𝑥, 𝑦) ∧ ACTerminal(𝑦) (1)
+ACTerminal(𝑥) → Terminal(𝑥) (2)
+hasTerminal(𝑥, 𝑧) ∧ Terminal(𝑧) → Equipment(𝑥) (3)
+ACTerminal(𝑥) → ∃𝑦 partOf(𝑥, 𝑦) ∧ ACEquipment(𝑦) (4)
+
+Data integration is then achieved by populating the vocabulary
+using mappings, which can be seen queries over the data sources
+that produce a set of facts called a base instance. A key issue in
+data integration is dealing with incompleteness of data sources.
+For example, it is not uncommon that one data source mentions
+two switches sw1 and sw2, while another data source provides
+information about connected terminals only for switch sw1.
+
+ACEquipment(sw1) ACEquipment(sw2)
+hasTerminal(sw1, trm1) ACTerminal(trm1)
+
+(5)
+
+(6)
+
+GTGDs can be used to complete the data. For example, if a user
+asks to list all pieces of equipment known to the system, both sw1
+and sw2 will be returned, even though the base instance does not
+⊳
+explicitly classify either switch as a piece of equipment.
+
+Even though the chase for GTGDs does not necessarily terminate,
+query answering for GTGDs is decidable [34]. To prove decidability,
+one can argue that the result of a chase is tree-like—that is, the
+facts derived by the chase can be arranged into a particular kind
+of tree. Next, one can develop a finite representation of potentially
+infinite trees. One possibility is to describe the trees using a finite
+tree automaton, so query answering can be reduced to checking
+automaton emptiness. While theoretically elegant, this method
+is not amenable to practical use: building the automaton and the
+emptiness test are both complex and expensive, and such algorithms
+always exhibit worst-case complexity. Alternatively, one can use
+blocking to identify a tree prefix sufficient for query evaluation.
+Blocking is commonly used in description logic reasoning [6], and
+it was later lifted to guarded logic [27]. However, blocking was
+shown to be impractical for query answering: the required tree
+prefix can be much larger than the base instance 𝐼 so, as 𝐼 grows in
+size, the size of the tree prefix becomes unmanageable.
+
+More promising query answering techniques for GTGDs are
+based on Datalog rewriting [35]. The idea was initially proposed by
+Marnette [35], and it was later extended to broader classes of TGDs
+[10, 24] and settings [11]. The main idea is to transform an input
+set of GTGDs Σ into a set rew(Σ) of Datalog rules such that Σ and
+rew(Σ) entail the same base facts on each base instance. Thus, given
+a base instance 𝐼 , instead of computing the chase of 𝐼 and Σ (which
+may not terminate), we compute the chase 𝐼 ′ of 𝐼 and rew(Σ). Since
+Datalog rules essentially correspond to existential-free TGDs, 𝐼 ′
+is always finite and it can be computed using optimized Datalog
+engines. Moreover, Σ and rew(Σ) entail the same base facts on 𝐼 , so
+we can answer any existential-free conjunctive query (i.e., queries
+where all variables are answer variables) by evaluating in 𝐼 ′. The
+restriction to existential-free queries is technical: existentially quan-
+tified variables in a query can be matched to objects introduced by
+existential quantification, and these are not preserved in a Datalog
+rewriting. However, practical queries are typically existential-free
+since all query variables are usually answer variables.
+
+Example 1.2. A Datalog program consisting of rules (2)–(3) and
+
+(7) is a rewriting of GTGDs (1)–(4).
+
+ACEquipment(𝑥) → Equipment(𝑥)
+
+(7)
+
+Rule (7) is a logical consequence of GTGDs (1)–(3), and it provides
+⊳
+a “shortcut” for the inferences of the other GTGDs.
+
+The advantage of rewriting-based approaches is scalability in the
+size of the base instance 𝐼 . Such techniques have been implemented
+and practically validated in the context of description logics [28, 29],
+but practical algorithms have not yet been proposed for GTGDs.
+This raises several theoretical and practical questions.
+
+How to compute the Datalog rules needed for completeness?
+Existing Datalog rewriting algorithms often prove their correctness
+indirectly. For example, completeness of a rewriting algorithm for
+description logics [29] uses a proof-theoretic argument, which does
+not provide an intuition about why the algorithm actually works.
+
+Our first contribution is to relate Datalog rewriting approaches to the
+chase. Towards this goal, we introduce the one-pass variant of the
+chase, which we use to develop a general completeness criterion
+for Datalog rewriting algorithms. This, in turn, provides us with
+a better understanding of how rewriting algorithms work, and it
+allows us to discover new algorithms in a systematic way.
+
+What does the space of rewriting algorithms look like? Com-
+puting the rewriting rew(Σ) usually requires extending Σ with
+certain logical consequences of Σ. We show that we can select the
+relevant consequences using different criteria. Some methods re-
+quire deriving TGDs with existential quantifiers in the head, others
+generate Datalog rules directly, and yet other methods derive logical
+implications with function symbols. We relate all of these methods
+to the one-pass chase mentioned earlier, and we provide theoretical
+worst-case guarantees about their performance.
+
+How do we ensure scalability of rewriting algorithms? Im-
+plementations of Datalog rewriting algorithms have thus far been
+mainly considered in the setting of description logics [29, 38]. To
+the best of our knowledge, we provide the first look at optimization
+and implementation of Datalog rewriting algorithms for GTGDs. We
+achieve scalability by developing and combining various indexing
+and redundancy elimination techniques.
+
+How do we evaluate rewriting algorithms? We provide a bench-
+mark for GTGD query answering algorithms, and we use it to eval-
+uate our methods. To the best of our knowledge, this is the first
+attempt to evaluate query answering techniques for GTGDs.
+
+Summary of contributions. We give an extensive account of Dat-
+alog rewriting for GTGDs. In particular, we develop a theoretical
+framework that allows us to understand, motivate, and show com-
+pleteness of rewriting algorithms. Moreover, we present several
+concrete algorithms, establish worst-case complexity bounds, and
+discuss their relationships. We complement this theoretical analy-
+sis with a discussion of how to adapt techniques from first-order
+theorem proving to the setting of GTGDs. Finally, we empirically
+evaluate our techniques using an extensive benchmark. All proofs
+and the details of one algorithm are given in the appendix of this
+paper. Our implementation and a more detailed account of our
+experimental results can be found online [13].
+
+2 RELATED WORK
+Answering queries via rewriting has been extensively considered
+in description logics. For example, queries over ontologies in the
+DL-Lite family of languages can be rewritten into first-order queries
+[18], and fact entailment for SH IQ ontologies can be rewritten to
+disjunctive Datalog [29]. These techniques provide the foundation
+for the Ontop [17] and KAON2 [38] systems, respectively.
+
+In the context of TGDs, first-order rewritings were considered in
+data integration systems with inclusion and key dependencies [16].
+Datalog rewritings have been considered for GTGDs [35] and their
+extensions such as frontier-guarded TGDs [11], and nearly frontier-
+guarded and nearly guarded TGDs [24]. The focus in these studies
+was to identify complexity bounds and characterize expressivity of
+TGD classes rather than provide practical algorithms. Existing im-
+plements of query answering for TGDs use first-order rewriting for
+linear TGDs [48], chase variants for TGDs with terminating chase
+
+[14], chase with blocking for warded TGDs [12], chase with the
+magic sets transformation for shy TGDs [3], and Datalog rewriting
+for separable and weakly separable TGDs [49]. These TGD classes
+are all different from GTGDs, and we are unaware of any attempts
+to implement and evaluate GTGD rewriting algorithms.
+
+Our algorithms are related to resolution-based decision proce-
+dures for variants of guarded logics [19, 23, 50]. Moreover, our
+characterization of Datalog rewritings is related to a chase vari-
+ant used to answer queries over data sources with access patterns
+[4]. Finally, a variant of the one-pass chase from Section 4 was
+generalized to the broader context of disjunctive GTGDs [31].
+
+3 PRELIMINARIES
+In this section, we recapitulate the well-known definitions and
+notation that we use to formalize our technical results.
+
+TGDs. Let consts, vars, and nulls be pairwise disjoint, infinite sets
+of constants, variables, and labeled nulls, respectively. A term is a
+constant, a variable, or a labeled null; moreover, a term is ground
+if it does not contain a variable. For 𝛼 a formula or a set thereof,
+consts(𝛼), vars(𝛼), nulls(𝛼), and terms(𝛼) are the sets of constants,
+free variables, labeled nulls, and terms, respectively, in 𝛼.
+
+A schema is a set of relations, each of which is associated with a
+nonnegative integer arity. A fact is an expression of the form 𝑅((cid:174)𝑡),
+where 𝑅 is an 𝑛-ary relation and (cid:174)𝑡 is a vector of 𝑛 ground terms;
+moreover, 𝑅((cid:174)𝑡) is a base fact if (cid:174)𝑡 contains only constants. An instance
+𝐼 is a finite set of facts, and 𝐼 is a base instance if it contains only
+base facts. An atom is an expression of the form 𝑅((cid:174)𝑡), where 𝑅 is
+an 𝑛-ary relation and (cid:174)𝑡 is a vector of 𝑛 terms not containing labeled
+nulls. Thus, each base fact is an atom. We often treat conjunctions
+as sets of conjuncts; for example, for 𝛾 a conjunction of facts and 𝐼
+an instance, 𝛾 ⊆ 𝐼 means that each conjunct of 𝛾 is contained 𝐼 .
+
+A tuple generating dependency (TGD) is a first-order formula of
+the form ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂], where 𝛽 and 𝜂 are conjunctions of atoms,
+𝜂 is not empty, the free variables of 𝛽 are (cid:174)𝑥, and the free variables
+of 𝜂 are contained in (cid:174)𝑥 ∪ (cid:174)𝑦. Conjunction 𝛽 is the body and formula
+∃(cid:174)𝑦 𝜂 is the head of the TGD. We often omit ∀(cid:174)𝑥 when writing a
+TGD. A TGD is full if (cid:174)𝑦 is empty; otherwise, the TGD is non-full.
+A TGD is in head-normal form if it is full and its head contains
+exactly one atom, or it is non-full and each head atom contains at
+least one existentially quantified variable. Each TGD can be easily
+transformed to an equivalent set of TGDs in head-normal form.
+A full TGD in head-normal form is a Datalog rule, and a Datalog
+program is a finite set of Datalog rules. The head-width (hwidth) and
+the body-width (bwidth) of a TGD are the numbers of variables in
+the head and body, respectively; these are extended to sets of TGDs
+by taking the maxima over all TGDs. The notion of an instance
+satisfying a TGD is inherited from first-order logic. A base fact 𝐹 is
+entailed by an instance 𝐼 and a finite set of TGDs Σ, written 𝐼, Σ |= 𝐹 ,
+if 𝐹 ∈ 𝐼 ′ holds for each instance 𝐼 ′ ⊇ 𝐼 that satisfies Σ.
+
+A substitution 𝜎 is a function that maps finitely many variables
+to terms. The domain and the range of 𝜎 are dom(𝜎) and rng(𝜎),
+respectively. For 𝛾 a term, a vector of terms, or a formula, 𝜎 (𝛾) is
+obtained by replacing each free occurrence of a variable 𝑥 in 𝛾 such
+that 𝑥 ∈ dom(𝜎) with 𝜎 (𝑥).
+
+Fact Entailment for Guarded TGDs. Fact entailment for general
+TGDs is semidecidable, and many variants of the chase can be used
+
+to define a (possibly infinite) set of facts that is homomorphically
+contained in each modef of a base instance and a set of TGDs.
+
+Fact entailment is decidable for guarded TGDs (GTGDs): a TGD
+∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂] is guarded if 𝛽 contains an atom (called a guard) that
+contains all variables of (cid:174)𝑥. Note that a guard need not be unique in
+𝛽. Let Σ be a finite set of GTGDs. We say that a set of ground terms
+𝐺 is Σ-guarded by a fact 𝑅((cid:174)𝑡) if 𝐺 ⊆ (cid:174)𝑡 ∪ consts(Σ). Moreover, 𝐺 is
+Σ-guarded by a set of facts 𝐼 if 𝐺 is Σ-guarded by some fact in 𝐼 .
+Finally, a fact 𝑆 ( (cid:174)𝑢) is Σ-guarded by a fact 𝑅((cid:174)𝑡) (respectively a set of
+facts 𝐼 ) if (cid:174)𝑢 is Σ-guarded by 𝑅((cid:174)𝑡) (respectively 𝐼 ).
+
+By adapting the reasoning techniques for guarded logics [5, 47]
+and referential database constraints [30], fact entailment for GTGDs
+can be decided by a chase variant that works on tree-like structures.
+A chase tree 𝑇 consists of a directed tree, one tree vertex that is said
+to be recently updated, and a function mapping each vertex 𝑣 in the
+tree to a finite set of facts 𝑇 (𝑣). A chase tree 𝑇 can be transformed
+to another chase tree 𝑇 ′ in the following two ways.
+• One can apply a chase step with a GTGD 𝜏 = ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂] in
+head-normal form. The precondition is that there exist a vertex
+𝑣 in 𝑇 and a substitution 𝜎 with domain (cid:174)𝑥 such that 𝜎 (𝛽) ⊆ 𝑇 (𝑣).
+The result of the chase step is obtained as follows.
+– If 𝜏 is full (and thus 𝜂 is a single atom), then chase tree 𝑇 ′
+is obtained from 𝑇 by making 𝑣 recently updated in 𝑇 ′ and
+setting 𝑇 ′ (𝑣) = 𝑇 (𝑣) ∪ {𝜎 (𝜂)}.
+
+– If 𝜏 is not full, then 𝜎 is extended to a substitution 𝜎 ′ that
+maps each variable in (cid:174)𝑦 to a labeled null not occurring in 𝑇 ,
+and chase tree 𝑇 ′ is obtained from 𝑇 by introducing a fresh
+child 𝑣 ′ of 𝑣, making 𝑣 ′ recently updated in 𝑇 ′, and setting
+𝑇 (𝑣 ′) = 𝜎 ′ (𝜂) ∪ {𝐹 ∈ 𝑇 (𝑣) | 𝐹 is Σ-guarded by 𝜎 ′ (𝜂)}.
+• One can apply a propagation step from a vertex 𝑣 to a vertex 𝑣 ′
+in 𝑇 . Chase tree 𝑇 ′ is obtained from 𝑇 by making 𝑣 ′ recently
+updated in 𝑇 ′ and setting 𝑇 ′ (𝑣 ′) = 𝑇 (𝑣 ′) ∪ 𝑆 for some nonempty
+set 𝑆 satisfying 𝑆 ⊆ {𝐹 ∈ 𝑇 (𝑣) | 𝐹 is Σ-guarded by 𝑇 (𝑣 ′)}.
+A tree-like chase sequence for a base instance 𝐼 and a finite set of
+GTGDs Σ in head-normal form is a finite sequence of chase trees
+𝑇0, . . . ,𝑇𝑛 such that 𝑇0 contains exactly one root vertex 𝑟 that is
+recently updated in 𝑇0 and 𝑇0 (𝑟 ) = 𝐼 , and each 𝑇𝑖 with 0 < 𝑖 ≤ 𝑛
+is obtained from 𝑇𝑖 −1 by a chase step with some 𝜏 ∈ Σ or a prop-
+agation step. For each vertex 𝑣 in 𝑇𝑛 and each fact 𝐹 ∈ 𝑇𝑛 (𝑣), this
+sequence is a tree-like chase proof of 𝐹 from 𝐼 and Σ. It is well known
+that 𝐼, Σ |= 𝐹 if and only if there exists a tree-like chase proof of 𝐹
+from 𝐼 and Σ (e.g., [34]). Example 4.3 in Section 4 illustrates these
+definitions. One can decide 𝐼, Σ |= 𝐹 by imposing an upper bound
+on the size of chase trees that need to be considered [34].
+Rewriting. A Datalog rewriting of a finite set of TGDs Σ is a Datalog
+program rew(Σ) such that 𝐼, Σ |= 𝐹 if and only if 𝐼, rew(Σ) |= 𝐹 for
+each base instance 𝐼 and each base fact 𝐹 . If Σ contains GTGDs only,
+then a Datalog rewriting rew(Σ) is guaranteed to exist (which is
+not the case for general TGDs). Thus, we can reduce fact entailment
+for GTGDs to Datalog reasoning, which can be solved using highly
+optimized Datalog techniques [1, 38]. For example, given a base
+instance 𝐼 , we can compute the materialization of rew(Σ) on 𝐼 by
+applying the rules of rew(Σ) to 𝐼 up to a fixpoint. This will compute
+precisely all base facts entailed by rew(Σ) (and thus also by Σ) on 𝐼 ,
+and it can be done in time polynomial in the size of 𝐼 .
+
+Encoding Existentials by Function Symbols. It is sometimes
+convenient to represent existentially quantified values using func-
+tional terms. In such cases, we use a slightly modified notions of
+terms, atoms, and rules. It will be clear from the context which
+definitions we use in different parts of the paper.
+
+We adjust the notion of a term as either a constant, a variable,
+or an expression of the form 𝑓 ((cid:174)𝑡) where 𝑓 is an 𝑛-ary function
+symbol and (cid:174)𝑡 is a vector of 𝑛 terms. The notions of ground terms,
+(base) facts, and (base) instances, and atoms are the same as before,
+but they use the modified notion of terms. A rule is a first-order
+implication of the form ∀(cid:174)𝑥 [𝛽 → 𝐻 ] where 𝛽 is a conjunction of
+atoms whose free variables are (cid:174)𝑥, and 𝐻 is an atom whose free
+variables are contained in (cid:174)𝑥; as for TGDs, we often omit ∀(cid:174)𝑥. A
+rule thus contains no existential quantifiers, but its head contains
+exactly one atom that can contain function symbols. Also, a Datalog
+rule, a function-free rule, and a full TGD in head-normal form are
+all synonyms. Finally, a base fact still contains only constants.
+
+Skolemization allow us to replace existential quantifiers in TGDs
+by functional terms. Specifically, let 𝜏 = ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂], and let 𝜎
+be a substitution defined on each 𝑦 ∈ (cid:174)𝑦 as 𝜎 (𝑦) = 𝑓𝜏,𝑦 ( (cid:174)𝑥) where
+𝑓𝜏,𝑦 is a fresh | (cid:174)𝑥 |-ary Skolem symbol uniquely associated with 𝜏
+and 𝑦. Then, the Skolemization of 𝜏 produces rules ∀(cid:174)𝑥 [𝛽 → 𝜎 (𝐻 )]
+for each atom 𝐻 ∈ 𝜂. Moreover, the Skolemization Σ′ of a finite set
+of TGDs Σ is the union of the rules obtained by Skolemizing each
+𝜏 ∈ Σ. It is well known that 𝐼, Σ |= 𝐹 if and only if 𝐼, Σ′ |= 𝐹 for each
+base instance 𝐼 and each base fact 𝐹 .
+Unification. A unifier of atoms 𝐴1, . . . , 𝐴𝑛 and 𝐵1, . . . , 𝐵𝑛 is a
+substitution 𝜃 such that 𝜃 (𝐴𝑖 ) = 𝜃 (𝐵𝑖 ) for 1 ≤ 𝑖 ≤ 𝑛. Such 𝜃 is a
+most general unifier (MGU) if, for each unifier 𝜎 of 𝐴1, . . . , 𝐴𝑛 and
+𝐵1, . . . , 𝐵𝑛, there exists a substitution 𝜌 such that 𝜎 = 𝜌 ◦ 𝜃 (where
+◦ is function composition). An MGU is unique up to variable renam-
+ing if it exists, and it can be computed in time 𝑂 ((cid:205)𝑛
+𝑖=1 |𝐴𝑖 | + |𝐵𝑖 |)
+where |𝐴𝑖 | and |𝐵𝑖 | are the encoding sizes of 𝐴𝑖 and 𝐵𝑖 [41, 42].
+
+4 CHASE-BASED DATALOG REWRITING
+Our objective is to develop rewriting algorithms that can handle
+complex GTGDs. Each algorithm will derive Datalog rules that
+provide “shortcuts” in tree-like chase proofs: instead of introduc-
+ing a child vertex 𝑣 ′ using a chase step with a non-full GTGD at
+vertex 𝑣, performing some inferences in 𝑣 ′, and then propagating a
+derived fact 𝐹 back from 𝑣 ′ to 𝑣, these “shortcuts” will derive 𝐹 in
+one step without having to introduce 𝑣 ′. The main question is how
+to derive all “shortcuts” necessary for completeness while keeping
+the number of derivations low. In this section we lay the technical
+foundations that will allow us to study different strategies for deriv-
+ing “shortcuts” in Section 5. We show that, instead of considering
+arbitrary chase proofs, we can restrict our attention to chase proofs
+that are one-pass according to Definition 4.1. Then, we identify the
+parts of such proofs that we need to be able to circumvent using
+“shortcuts”. Finally, we present sufficient conditions that guaran-
+tee completeness of rewriting algorithms. We start by describing
+formally the structure of tree-like chase proofs.
+Definition 4.1. A tree-like chase sequence 𝑇0, . . . ,𝑇𝑛 for a base
+instance 𝐼 and a finite set of GTGDs Σ in head-normal form is one-
+pass if, for each 0 < 𝑖 ≤ 𝑛, chase tree 𝑇𝑖 is obtained by applying one
+of the following two steps to the recently updated vertex 𝑣 of 𝑇𝑖 −1:
+
+𝑇0
+
+𝐴(𝑎, 𝑏)
+
+𝑇1
+
+𝐴(𝑎, 𝑏)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+
+𝑇2
+
+𝐴(𝑎, 𝑏)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+
+𝑇3
+
+𝐴(𝑎, 𝑏)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+
+𝑇4
+
+𝐴(𝑎, 𝑏)
+𝐸 (𝑎)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+
+𝑇5
+
+𝐴(𝑎, 𝑏)
+𝐸 (𝑎)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+
+𝐸 (𝑎)
+𝐹 (𝑎, 𝑛2)
+𝐹 (𝑛2, 𝑛3)
+
+𝑇6
+
+𝐴(𝑎, 𝑏)
+𝐸 (𝑎)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+
+𝐸 (𝑎)
+𝐹 (𝑎, 𝑛2)
+𝐹 (𝑛2, 𝑛3)
+𝐺 (𝑎)
+
+𝑇7
+
+𝐴(𝑎, 𝑏)
+𝐸 (𝑎)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+𝐺 (𝑎)
+
+𝐸 (𝑎)
+𝐹 (𝑎, 𝑛2)
+𝐹 (𝑛2, 𝑛3)
+𝐺 (𝑎)
+
+𝑇8
+
+𝐴(𝑎, 𝑏)
+𝐸 (𝑎)
+
+𝐸 (𝑎)
+𝐹 (𝑎, 𝑛2)
+𝐹 (𝑛2, 𝑛3)
+𝐺 (𝑎)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+𝐺 (𝑎)
+𝐻 (𝑎)
+
+Figure 1: Tree-Like Chase Sequence for Example 4.3
+
+• a propagation step copying exactly one fact from 𝑣 to its parent, or
+• a chase step with a GTGD from Σ provided that no propagation
+
+step from 𝑣 to the parent of 𝑣 is applicable.
+
+Thus, each step in a tree-like chase sequence is applied to a “fo-
+cused” vertex; steps with non-full TGDs move the “focus” from a
+parent to a child, and propagation steps move the “focus” in the op-
+posite direction. Moreover, once a child-to-parent propagation takes
+place, the child cannot be revisited in further steps. Theorem 4.2
+states a key property about chase proofs for GTGDs: whenever a
+proof exists, there exists a one-pass proof too. Example 4.3 illus-
+trates important aspects of Definition 4.1 and Theorem 4.2.
+
+Theorem 4.2. For each base instance 𝐼 , each finite set of GTGDs Σ
+in head-normal form, and each base fact 𝐹 such that 𝐼, Σ |= 𝐹 , there
+exists a one-pass tree-like chase proof of 𝐹 from 𝐼 and Σ.
+
+Example 4.3. Let 𝐼 = {𝐴(𝑎, 𝑏)} and let Σ contain GTGDs (8)–(13).
+𝐴(𝑥1, 𝑥2) → ∃𝑦 𝐵(𝑥1, 𝑦) ∧ 𝐶 (𝑥1, 𝑦)
+𝐶 (𝑥1, 𝑥2) → 𝐷 (𝑥1, 𝑥2)
+
+(9)
+
+(8)
+
+(10)
+
+(11)
+
+(12)
+
+𝐵(𝑥1, 𝑥2) ∧ 𝐷 (𝑥1, 𝑥2) → 𝐸 (𝑥1)
+
+𝐴(𝑥1, 𝑥2) ∧ 𝐸 (𝑥1) → ∃𝑦1, 𝑦2 𝐹 (𝑥1, 𝑦1) ∧ 𝐹 (𝑦1, 𝑦2)
+𝐸 (𝑥1) ∧ 𝐹 (𝑥1, 𝑥2) → 𝐺 (𝑥1)
+𝐵(𝑥1, 𝑥2) ∧ 𝐺 (𝑥1) → 𝐻 (𝑥1)
+
+(13)
+A tree-like chase sequence for 𝐼 and Σ is shown in Figure 1,
+and it provides a proof of the base fact 𝐻 (𝑎) from 𝐼 and Σ. The
+recently updated vertex of each chase tree is shown in red. We
+denote the root vertex by 𝑟 , and its left and right children by 𝑣1 and
+𝑣2, respectively. The step producing 𝑇7 from 𝑇6 does not satisfy the
+requirements of one-pass chase: it propagates the fact 𝐺 (𝑎) from
+𝑣2 to 𝑣1, where the latter is a “sibling” of the former.
+
+To obtain a one-pass chase sequence, we could try to “slow down”
+the propagation of 𝐺 (𝑎): we first propagate 𝐺 (𝑎) from 𝑣2 to 𝑟 , and
+then from 𝑟 to 𝑣1. The former step is allowed in one-pass chase,
+but the latter step is not: once we leave the subtree rooted at 𝑣1,
+we are not allowed to revisit it later. Note, however, that 𝐵(𝑎, 𝑛1)
+and 𝐺 (𝑎) must occur jointly in a vertex of a chase tree in order to
+derive 𝐻 (𝑎). Moreover, note that no reordering of chase steps will
+
+𝑇 1
+7
+
+𝐴(𝑎, 𝑏)
+𝐸 (𝑎)
+𝐺 (𝑎)
+
+𝑇 2
+7
+
+𝐴(𝑎, 𝑏)
+𝐸 (𝑎)
+𝐺 (𝑎)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+
+𝐸 (𝑎)
+𝐹 (𝑎, 𝑛2)
+𝐹 (𝑛2, 𝑛3)
+𝐺 (𝑎)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+
+𝐸 (𝑎)
+𝐹 (𝑎, 𝑛2)
+𝐹 (𝑛2, 𝑛3)
+𝐺 (𝑎)
+
+𝐵(𝑎, 𝑛3)
+𝐶 (𝑎, 𝑛3)
+𝐸 (𝑎)
+𝐺 (𝑎)
+
+𝑇 1
+8
+
+𝐴(𝑎, 𝑏)
+𝐸 (𝑎)
+𝐺 (𝑎)
+
+𝑇9
+
+𝐴(𝑎, 𝑏)
+𝐸 (𝑎)
+𝐺 (𝑎)
+𝐻 (𝑎)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+
+𝐸 (𝑎)
+𝐹 (𝑎, 𝑛2)
+𝐹 (𝑛2, 𝑛3)
+𝐺 (𝑎)
+
+𝐵(𝑎, 𝑛3)
+𝐶 (𝑎, 𝑛3)
+𝐸 (𝑎)
+𝐺 (𝑎)
+𝐻 (𝑎)
+
+𝐵(𝑎, 𝑛1)
+𝐶 (𝑎, 𝑛1)
+𝐷 (𝑎, 𝑛1)
+𝐸 (𝑎)
+
+𝐸 (𝑎)
+𝐹 (𝑎, 𝑛2)
+𝐹 (𝑛2, 𝑛3)
+𝐺 (𝑎)
+
+𝐵(𝑎, 𝑛3)
+𝐶 (𝑎, 𝑛3)
+𝐸 (𝑎)
+𝐺 (𝑎)
+𝐻 (𝑎)
+
+Figure 2: One-Pass Chase Sequence Obtained from Figure 1
+
+derive 𝐻 (𝑎): we must first produce 𝑣1 to be able to derive 𝑣2, and
+we must combine 𝐺 (𝑎) from 𝑣2 and 𝐵(𝑎, 𝑛1) from 𝑣1.
+
+The solution, which is used in the proof of Theorem 4.2, is to
+replace propagation to the child by “regrowing” the entire subtree.
+In our example, we replace the steps producing 𝑇7 and 𝑇8 with
+the steps shown in Figure 2. Chase tree 𝑇 1
+7 is obtained from 𝑇6 by
+propagating 𝐺 (𝑎) from 𝑣2 to 𝑟 . Then, instead of propagating 𝐺 (𝑎)
+from 𝑟 to 𝑣1, a new vertex 𝑣3 is created in 𝑇 2
+7 by reapplying (8) and
+fact 𝐺 (𝑎) is pushed to 𝑣3 as part of the chase step with a non-full
+GTGD. This allows 𝐻 (𝑎) to be derived in vertex 𝑣3 of 𝑇 1
+8 .
+
+Fact 𝐷 (𝑛3) can be derived in vertex 𝑣3, but this is not needed to
+prove 𝐻 (𝑎). Moreover, our chase is oblivious [34]: a non-full TGD
+can be applied to the same facts several times, each time introducing
+a fresh vertex and fresh labeled nulls. The number of children of
+a vertex is thus not naturally bounded, and our objective is not to
+apply all chase steps exhaustively to obtain a universal model of
+Σ. Instead, we are interested only in chase proofs, which must only
+contain steps needed to demonstrate entailment of a specific fact. ⊳
+
+One-pass chase proofs are interesting because they can be de-
+
+composed into loops as described in Definition 4.4.
+
+Definition 4.4. For 𝑇0, . . . ,𝑇𝑛 a one-pass tree-like chase sequence for
+some 𝐼 and Σ, a loop at vertex 𝑣 with output fact 𝐹 is a subsequence
+𝑇𝑖, . . . ,𝑇𝑗 with 0 ≤ 𝑖 < 𝑗 ≤ 𝑛 such that
+• 𝑇𝑖+1 is obtained by a chase step with a non-full GTGD,
+• 𝑇𝑗 is obtained by a propagation step that copies 𝐹 , and
+• 𝑣 is the recently updated vertex of both 𝑇𝑖 and 𝑇𝑗 .
+The length of the loop is defined as 𝑗 − 𝑖.
+
+Example 4.5. Subsequence 𝑇0,𝑇1,𝑇2,𝑇3,𝑇4 of the chase trees from
+Example 4.3 is a loop at the root vertex 𝑟 with output fact 𝐸 (𝑎): chase
+tree 𝑇1 is obtained by applying a non-full GTGD to 𝑟 , and chase
+tree 𝑇4 is obtained by propagating 𝐸 (𝑎) back to 𝑟 . Analogously,
+7 is another loop at 𝑟 with output fact 𝐺 (𝑎). Finally,
+𝑇4,𝑇5,𝑇6,𝑇 1
+⊳
+,𝑇 2
+𝑇 1
+,𝑇9 is a loop at 𝑟 with output fact 𝐻 (𝑎).
+7
+7
+
+,𝑇 1
+8
+
+Thus, a loop is a subsequence of chase steps that move the “focus”
+from a parent to a child vertex, perform a series of inferences in the
+child and its descendants, and finally propagate one fact back to
+
+the parent. If non-full TGDs are applied to the child, then the loop
+can be recursively decomposed into further loops at the child. The
+properties of the one-pass chase ensure that each loop is finished as
+soon as a fact is derived in the child that can be propagated to the
+parent, and that the vertices introduced in the loop are not revisited
+at any later point in the proof. In this way, each loop at vertex 𝑣 can
+be seen as taking the set 𝑇𝑖 (𝑣) as input and producing the output
+fact 𝐹 that is added to 𝑇𝑗 (𝑣). This leads us to the following idea:
+for each loop with the input set of facts 𝑇𝑖 (𝑣), a rewriting should
+contain a “shortcut” Datalog rule that derives the loop’s output.
+
+Example 4.6. One can readily check that rules (14)–(16) provide
+
+“shortcuts” for the three loops identified in Example 4.5.
+
+𝐴(𝑥1, 𝑥2) → 𝐸 (𝑥1)
+𝐴(𝑥1, 𝑥2) ∧ 𝐸 (𝑥1) → 𝐺 (𝑥1)
+𝐴(𝑥1, 𝑥2) ∧ 𝐺 (𝑥1) → 𝐻 (𝑥1)
+
+(14)
+
+(15)
+
+(16)
+
+Moreover, these are all relevant “shortcuts”: the union of rules (14)–
+(16) and the Datalog rules from Example 4.3—that is, rules (9), (10),
+(12), and (13)—is a rewriting of the set Σ from Example 4.1.
+⊳
+
+These ideas are formalized in Proposition 4.7, which will provide
+
+us with a correctness criterion for our algorithms.
+
+Proposition 4.7. A Datalog program Σ′ is a rewriting of a finite
+
+set of GTGDs Σ in head-normal form if
+• Σ′ is a logical consequence of Σ,
+• each Datalog rule of Σ is a logical consequence of Σ′, and
+• for each base instance 𝐼 , each one-pass tree-like chase sequence
+𝑇0, . . . ,𝑇𝑛 for 𝐼 and Σ, and each loop 𝑇𝑖, . . . ,𝑇𝑗 at the root vertex 𝑟
+with output fact 𝐹 , there exist a Datalog rule 𝛽 → 𝐻 ∈ Σ′ and a
+substitution 𝜎 such that 𝜎 (𝛽) ⊆ 𝑇𝑖 (𝑟 ) and 𝜎 (𝐻 ) = 𝐹 .
+
+Intuitively, the first condition ensures soundness: rewriting Σ′
+should not derive more facts than Σ. The second condition ensures
+that Σ′ can mimic direct applications of Datalog rules from Σ at the
+root vertex 𝑟 . The third condition ensures that Σ′ can reproduce
+the output of each loop at vertex 𝑟 using a “shortcut” Datalog rule.
+
+5 REWRITING ALGORITHMS
+We now consider ways to produce “shortcut” Datalog rules sat-
+isfying Proposition 4.7. In Subsection 5.1 we present the ExbDR
+algorithm that manipulates GTGDs directly, and in Subsections 5.2
+and 5.3 we present the SkDR and HypDR algorithms, respectively,
+that manipulate rules obtained by Skolemizing the input GTGDs.
+All of these algorithms can produce intermediate GTGDs/rules that
+are not necessarily Datalog rules. In Appendix E we present the
+FullDR algorithm that manipulates GTGDs, but derives only Dat-
+alog rules. However, the performance of FullDR proved to not be
+competitive, so we do not discuss it any further here.
+
+Each algorithm is defined by an inference rule Inf that can be
+applied to several TGDs/rules to derive additional TGDs/rules. For
+simplicity, we use the same name for the rule and the resulting
+algorithm. Given a set of GTGDs Σ, the algorithm applies Inf to
+(the Skolemization of) Σ as long as possible and then returns all
+produced Datalog rules. This process, however, can derive a large
+
+number of TGDs/rules, so it is vital to eliminate TGDs/rules when-
+ever possible. We next define notions of redundancy that can be
+used to discard certain TGDs/rules produced by Inf.
+Definition 5.1. A TGD 𝜏1 = ∀(cid:174)𝑥1 [𝛽1 → ∃(cid:174)𝑦1 𝜂1] is a syntactic tau-
+tology if it is in head-normal form and 𝛽1 ∩ 𝜂1 ≠ ∅. TGD 𝜏1 subsumes
+a TGD 𝜏2 = ∀(cid:174)𝑥2 [𝛽2 → ∃(cid:174)𝑦2 𝜂2] if there exists a substitution 𝜇 such
+that dom(𝜇) = (cid:174)𝑥1 ∪ (cid:174)𝑦1, 𝜇 ( (cid:174)𝑥1) ⊆ (cid:174)𝑥2, 𝜇 ( (cid:174)𝑦1) ⊆ (cid:174)𝑦1 ∪ (cid:174)𝑦2, 𝜇 (𝑦) ≠ 𝜇 (𝑦′)
+for distinct 𝑦 and 𝑦′ in (cid:174)𝑦1, 𝜇 (𝛽1) ⊆ 𝛽2, and 𝜇 (𝜂1) ⊇ 𝜂2.
+
+A rule 𝜏1 = ∀(cid:174)𝑥1 [𝛽1 → 𝐻1] is a syntactic tautology if 𝐻1 ∈ 𝛽1.
+Rule 𝜏1 subsumes a rule 𝜏2 = ∀(cid:174)𝑥2 [𝛽2 → 𝐻2] if there exists a substi-
+tution 𝜇 such that 𝜇 (𝛽1) ⊆ 𝛽2 and 𝜇 (𝐻1) = 𝐻2.
+
+A TGD/rule 𝜏 is contained in a set of TGDs/rules 𝑆 up to redun-
+
+dancy if 𝜏 is a syntactic tautology or some 𝜏 ′ ∈ 𝑆 subsumes 𝜏.
+
+The following example illustrates Definition 5.1.
+Example 5.2. Rule 𝐴(𝑥) ∧ 𝐵(𝑥) → 𝐴(𝑥) is a syntactic tautology:
+applying a chase step with it cannot produce a new fact. A non-full
+TGD in head-normal form cannot be a syntactic tautology since
+each head atom of such a TGD contains an existentially quantified
+variable that does not occur in the TGD body.
+
+Rule 𝜏1 = 𝐴(𝑓 (𝑥1), 𝑓 (𝑥1)) ∧ 𝐵(𝑥1) → 𝐵(𝑓 (𝑥1)) is subsumed by
+rule 𝜏2 = 𝐴(𝑥2, 𝑥3) → 𝐵(𝑥2) using substitution 𝜇1 that maps both
+𝑥2 and 𝑥3 to 𝑓 (𝑥1). If 𝜏1 derives 𝐵(𝑓 (𝑡)) in one step from a set of
+facts 𝐼 by a substitution 𝜎 where 𝜎 (𝑥1) = 𝑡, then 𝜏2 also derives
+𝐵(𝑓 (𝑡)) from 𝐼 in one step by substitution 𝜎 ◦ 𝜇1. Thus, rule 𝜏1 is
+not needed when rule 𝜏2 is present, so 𝜏1 can be discarded.
+
+While syntactic tautologies and rule subsumption are standard
+in first-order theorem proving [8], subsumption of TGDs is more in-
+volved. TGD 𝜏3 = 𝐴(𝑥1, 𝑥1) ∧ 𝐵(𝑥1) → ∃𝑦1 𝐶 (𝑥1, 𝑦1) is subsumed
+by TGD 𝜏4 = 𝐴(𝑥2, 𝑥3) → ∃𝑦2, 𝑦3 𝐶 (𝑥2, 𝑦2) ∧ 𝐷 (𝑥3, 𝑦3) by substitu-
+tion 𝜇2 where 𝜇2 (𝑥2) = 𝜇2 (𝑥3) = 𝑥1, 𝜇2 (𝑦2) = 𝑦1, and 𝜇2 (𝑦3) = 𝑦3.
+The conditions on substitution 𝜇2 in Definition 5.1 ensure that
+𝑦2 and 𝑦3 are not mapped to each other or to 𝑥1. Thus, as in the
+previous paragraph, the result of each chase step with 𝜏3 and sub-
+stitutions 𝜎 and 𝜎 ′ can always be obtained (up to isomorphism) by
+a chase step with 𝜏4 and substitutions 𝜎 ◦ 𝜇2 and 𝜎 ′ ◦ 𝜇2.
+⊳
+
+In Definition 5.3 we formalize the notion of applying Inf exhaus-
+tively up to redundancy. The definition, however, does not say how
+to actually do it: we discuss this and other issues in Section 6.
+
+Definition 5.3. For Inf an inference rule and Σ a finite set of GTGDs,
+Inf(Σ) is the subset of all Skolem-free Datalog rules of Σ′, where Σ′
+is the smallest set that contains up to redundancy each TGD/rule
+obtained by
+• transforming Σ into head-normal form if Inf manipulates TGDs
+
+or Skolemizing Σ if Inf manipulates rules, and
+
+• selecting an adequate number of premises in Σ′, renaming any
+variables shared by distinct premises, applying Inf to the renamed
+premises, and transforming the result into head-normal form.
+
+5.1 The Existential-Based Rewriting
+As we discussed in Section 4, each loop 𝑇𝑖, . . . ,𝑇𝑗 at vertex 𝑣 in a
+one-pass chase sequence can be seen as taking 𝑇𝑖 (𝑣) as input and
+producing one fact included in 𝑇𝑗 (𝑣) as output. Let 𝑣 ′ be child of 𝑣
+introduced in𝑇𝑖+1. The idea behind the ExbDR algorithm is to derive
+all GTGDs such that, for each 𝑘 with 𝑖 < 𝑘 ≤ 𝑗, all facts of 𝑇𝑘 (𝑣 ′)
+
+𝐴(𝑎, 𝑏)
+
+(8)
+
+(9)
+
+(10)
+
+𝐵(𝑎, 𝑛1), 𝐶 (𝑎, 𝑛1)
+
+𝐷 (𝑎, 𝑛1)
+
+𝐸 (𝑎)
+
+(17) = (8) + (9)
+
+(18) = (17) + (10)
+
+Figure 3: Deriving “shortcuts” for the loop 𝑇0–𝑇4 in ExbDR
+
+can be derived from the input 𝑇𝑖 (𝑣) in one step. The output of the
+loop can then also be derived from 𝑇𝑖 (𝑣) in one step by full GTGD,
+so this GTGD provides us with the desired loop “shortcut”. Before
+formalizing this idea, we slightly adapt the notion of unification.
+
+Definition 5.4. For 𝑋 a set of variables, an 𝑋 -unifier and an 𝑋 -
+MGU 𝜃 of atoms 𝐴1, . . . , 𝐴𝑛 and 𝐵1, . . . , 𝐵𝑛 are defined as in Section 3,
+but with the additional requirement that 𝜃 (𝑥) = 𝑥 for each 𝑥 ∈ 𝑋 .
+
+It is straightforward to see that an 𝑋 -MGU is unique up to the re-
+naming of variables not contained in 𝑋 , and that it can be computed
+as usual while treating variables in 𝑋 as if they were constants. We
+are now ready to formalize the ExbDR algorithm.
+
+Definition 5.5. The Existential-Based Datalog Rewriting inference
+rule ExbDR takes two guarded TGDs
+
+𝜏 = ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂 ∧ 𝐴1 ∧ · · · ∧ 𝐴𝑛] with 𝑛 ≥ 1 and
+𝜏 ′ = ∀(cid:174)𝑧 [𝐴′
+1 ∧ · · · ∧ 𝐴′
+𝑛 ∧ 𝛽′ → 𝐻 ′]
+and, for 𝜃 a (cid:174)𝑦-MGU of 𝐴1, . . . , 𝐴𝑛 and 𝐴′
+1
+and vars(𝜃 (𝛽′)) ∩ (cid:174)𝑦 = ∅, it derives
+
+, . . . , 𝐴′
+
+𝑛, , if 𝜃 ( (cid:174)𝑥) ∩ (cid:174)𝑦 = ∅
+
+𝜃 (𝛽) ∧ 𝜃 (𝛽′) → ∃(cid:174)𝑦 𝜃 (𝜂) ∧ 𝜃 (𝐴1) ∧ · · · ∧ 𝜃 (𝐴𝑛) ∧ 𝜃 (𝐻 ′).
+
+Example 5.6. Consider again the set Σ from Example 4.3. The
+idea behind the ExbDR algorithm is illustrated in Figure 3, which
+summarizes the steps of the loop 𝑇0,𝑇1,𝑇2,𝑇3,𝑇4 from Figure 1. We
+denote the vertices by 𝑟 and 𝑣1 as in Example 4.3.
+
+Fact 𝐴(𝑎, 𝑏) is the input to the loop, and the first step of the
+loop derives 𝐵(𝑎, 𝑛1) and 𝐶 (𝑎, 𝑛1) using GTGD (8). Next, GTGD (9)
+evolves vertex 𝑣1 by deriving 𝐷 (𝑎, 𝑛1). To capture this, the ExbDR
+inference rule combines (8), the GTGD that creates 𝑣1, with (9), the
+GTGD that evolves 𝑣1. This produces GTGD (17), which derives
+all facts of 𝑣1 from the input fact in one step. Vertex 𝑣1 is evolved
+further using GTGD (10) to derive 𝐸 (𝑎). To reflect this, the ExbDR
+inference rule combines (17) and (10) to produce (18), which again
+derives all facts of 𝑣1 from the loop’s input in one step.
+𝐴(𝑥1, 𝑥2) → ∃𝑦 𝐵(𝑥1, 𝑦) ∧ 𝐶 (𝑥1, 𝑦) ∧ 𝐷 (𝑥1, 𝑦)
+𝐴(𝑥1, 𝑥2) → ∃𝑦 𝐵(𝑥1, 𝑦) ∧ 𝐶 (𝑥1, 𝑦) ∧ 𝐷 (𝑥1, 𝑦) ∧ 𝐸 (𝑥1)
+
+(18)
+Fact 𝐸 (𝑎) does not contain the labeled null 𝑛1 that is introduced
+when creating 𝑣1, so it can be propagated to the root vertex 𝑟 as
+the output of the loop. This is reflected in (18): atom 𝐸 (𝑥1) does
+not contain any existential variables. Definition 5.3 requires each
+derived GTGD to be brought into head-normal, so (18) is broken up
+into (17) and (14). The latter GTGD is full, and it provides us with
+the desired shortcut for the loop.
+
+(17)
+
+Next, (12) and atom 𝐹 (𝑥1, 𝑦1) of (11) produce (19), and transfor-
+mation into head-normal form produces (11) and (15). Moreover,
+(8) and (13) produce (20), and transformation (20) into head-normal
+form produces (16) and (21).
+
+𝐴(𝑥1, 𝑥2) ∧ 𝐸 (𝑥1) → ∃𝑦1, 𝑦2 𝐹 (𝑥1, 𝑦1) ∧ 𝐹 (𝑦1, 𝑦2) ∧ 𝐺 (𝑥1)
+𝐴(𝑥1, 𝑥2) ∧ 𝐺 (𝑥1) → ∃𝑦 𝐵(𝑥1, 𝑦) ∧ 𝐶 (𝑥1, 𝑦) ∧ 𝐻 (𝑥1)
+𝐴(𝑥1, 𝑥2) ∧ 𝐺 (𝑥1) → ∃𝑦 𝐵(𝑥1, 𝑦) ∧ 𝐶 (𝑥1, 𝑦)
+
+(19)
+
+(20)
+
+(21)
+
+GTGD (21) is subsumed by (8) so it can be dropped. No further
+inferences are possible after this, so all derived full GTGDs are
+returned as the rewriting of Σ.
+⊳
+
+Before proceeding, we present an auxiliary result showing cer-
+
+tain key properties of the ExbDR inference rule.
+
+Proposition 5.7. Each application of the ExbDR inference rule
+to 𝜏, 𝜏 ′, and 𝜃 as in Definition 5.5 satisfies the following properties.
+1. Some atom 𝐴′
+𝑖 with 1 ≤ 𝑖 ≤ 𝑛 is a guard in 𝜏 ′.
+2. For each 1 ≤ 𝑖 ≤ 𝑛 such that 𝐴′
+
+𝑖 is a guard of 𝜏 ′, and for 𝜎 the (cid:174)𝑦-
+𝑖 and the corresponding atom 𝐴𝑖 such that 𝜎 ( (cid:174)𝑥) ∩ (cid:174)𝑦 = ∅,
+
+MGU of 𝐴′
+it is the case that vars(cid:0)𝜎 (𝐴′
+
+𝑗 )(cid:1) ∩ (cid:174)𝑦 ≠ ∅ for each 1 ≤ 𝑗 ≤ 𝑛.
+
+3. The result is a GTGD whose body and head width are at most
+
+bwidth(Σ) and hwidth(Σ), respectively.
+
+In the second claim of Proposition 5.7, 𝜎 unifies only 𝐴𝑖 and
+𝐴′
+𝑖 , whereas 𝜃 unifies all 𝐴1, . . . , 𝐴𝑛 and 𝐴′
+𝑛; thus, 𝜎 and 𝜃
+1
+are not necessarily the same. The third claim is needed to prove
+termination of ExbDR.
+
+, . . . , 𝐴′
+
+Proposition 5.7 can be used to guide the application of the ExbDR
+inference rule. Consider an attempt to apply the ExbDR inference
+rule to two candidate GTGDs 𝜏 = 𝛽 → ∃(cid:174)𝑦 𝜂 and 𝜏 ′ = 𝛽′ → 𝐻 ′. The
+first claim of Proposition 5.7 tells us that a guard of 𝜏 ′ will defi-
+nitely participate in the inference. Thus, we can choose one such
+guard 𝐺 ′ ∈ 𝛽′ of 𝜏 ′ and try to find a (cid:174)𝑦-MGU 𝜎 of 𝐺 ′ and a coun-
+terpart atom 𝐺 ∈ 𝜂 from the head of 𝜏. Next, we need to check
+whether 𝜎 ( (cid:174)𝑥) ∩ (cid:174)𝑦 = ∅; if not, there is no way for 𝜃 ( (cid:174)𝑥) ∩ (cid:174)𝑦 = ∅ to
+hold so the inference is not possible. By the second claim of Propo-
+sition 5.7, all candidates for the atoms participating in the inference
+will contain a variable that is mapped by 𝜎 to a member of (cid:174)𝑦; thus,
+𝑆 ′ = (cid:8)𝜎 (𝐴′) | 𝐴′ ∈ 𝛽′ ∧ vars(𝜎 (𝐴′)) ∩ (cid:174)𝑦 ≠ ∅(cid:9) is the set of all rele-
+vant side atoms. Note that we apply 𝜎 to the atoms in 𝑆 ′ to simplify
+further matching. The next step is to identify the corresponding
+head atoms of 𝜏. To achieve this, for each atom 𝐴′ ∈ 𝑆 ′ of the form
+𝑅(𝑡1, . . . , 𝑡𝑛), we identify the set 𝐶 [𝐴′] of candidate counterpart
+atoms as the set of atoms of the form 𝑅(𝑠1, . . . , 𝑠𝑛) ∈ 𝜎 (𝜂) such
+that, for each argument position 𝑖 with 1 ≤ 𝑖 ≤ 𝑛, if either 𝑡𝑖 ∈ (cid:174)𝑦 or
+𝑠𝑖 ∈ (cid:174)𝑦, then 𝑡𝑖 = 𝑠𝑖 . Finally, we consider each possible combination
+𝑆 of such candidates, and we try to find an MGU 𝜃 of sets 𝑆 and 𝑆 ′.
+If unification succeeds, we derive the corresponding GTGD.
+
+Theorem 5.8. Program ExbDR(Σ) is a Datalog rewriting of a
+finite set of GTGDs Σ. Moreover, the rewriting can be computed in
+time 𝑂 (𝑏𝑟 𝑑 · (𝑤𝑏 +𝑐 )𝑑𝑎 ·𝑟 𝑑 · (𝑤ℎ+𝑐 )𝑑𝑎
+) for 𝑟 the number of relations in Σ, 𝑎
+the maximum relation arity in Σ, 𝑤𝑏 = bwidth(Σ), 𝑤ℎ = hwidth(Σ),
+𝑐 = |consts(Σ)|, and some 𝑏 and 𝑑.
+
+use. From a theoretical point of view, checking fact entailment via
+ExbDR(Σ) is worst-case optimal. To see why, let 𝑟 , 𝑎, and 𝑐 be as in
+Theorem 5.8, and consider a base instance 𝐼 with 𝑐′ constants. The
+fixpoint of ExbDR(Σ) on 𝐼 contains at most 𝑟 (𝑐 + 𝑐′)𝑎 facts, and
+it can be computed in time 𝑂 (𝑟 (𝑐 + 𝑐′)𝑎 · |ExbDR(Σ)|): each rule
+𝜏 ∈ ExbDR(Σ) is guarded so we can apply a chase step with 𝜏 by
+matching a guard and then checking the remaining body atoms.
+Hence, we can compute ExbDR(Σ) and find its fixpoint in 2Exp-
+Time, in ExpTime if the relation arity is fixed, and in PTime if Σ is
+fixed (i.e., if we consider data complexity). These results match the
+lower bounds for checking fact entailment for GTGDs [34].
+
+5.2 Using Skolemization
+The ExbDR algorithm exhibits two drawbacks. First, each applica-
+tion of the ExbDR inference rule potentially introduces a head atom,
+so the rule heads can get very long. Second, each inference requires
+matching a subset of body atoms of 𝜏 ′ to a subset of the head atoms
+of 𝜏; despite the optimizations outlined after Proposition 5.7, this
+can be costly, particularly when rule heads are long.
+
+We would ideally derive GTGDs with a single head atom and
+unify just one body atom of 𝜏 ′ with the head atom of 𝜏, but this does
+not seem possible if we stick to manipulating GTGDs. For example,
+atoms 𝐶 (𝑦) and 𝐷 (𝑦) of GTGD (17) refer to the same labeled null
+(represented by variable 𝑦), and this information would be lost if we
+split (17) into two GTGDs. We thus need a way to refer to the same
+existentially quantified object in different logical formulas. This
+can be achieved by replacing existentially quantified variables by
+Skolem terms, which in turns gives rise to the SkDR algorithm from
+Definition 5.10. Before presenting the algorithm, in Definition 5.9
+we generalize the notion of guardedness to rules.
+
+Definition 5.9. Rule ∀(cid:174)𝑥 [𝛽 → 𝐻 ] is guarded if each function symbol
+in the rule is a Skolem symbol, the body 𝛽 contains a Skolem-free
+atom 𝐴 ∈ 𝛽 such that vars(𝐴) = (cid:174)𝑥, and each Skolem term in the rule
+is of the form 𝑓 ((cid:174)𝑡) where vars(cid:0)𝑓 ((cid:174)𝑡)(cid:1) = (cid:174)𝑥 and (cid:174)𝑡 is function-free.
+
+Definition 5.10. The Skolem Datalog Rewriting inference rule
+SkDR takes two guarded rules
+
+𝜏 = 𝛽 → 𝐻
+
+and
+
+𝜏 ′ = 𝐴′ ∧ 𝛽′ → 𝐻 ′
+
+such that
+• 𝛽 is Skolem-free and 𝐻 contains a Skolem symbol, and
+• 𝐴′ contains a Skolem symbol, or 𝜏 ′ is Skolem-free and 𝐴′ contains
+
+all variables of 𝜏 ′,
+
+and, for 𝜃 an MGU of 𝐻 and 𝐴′, it derives
+
+𝜃 (𝛽) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′).
+
+Example 5.11. Skolemizing GTGDs (8) and (11) produces rules
+
+(22)–(23), and (24)–(25), respectively.
+
+𝐴(𝑥1, 𝑥2) → 𝐵(𝑥1, 𝑓 (𝑥1, 𝑥2))
+𝐴(𝑥1, 𝑥2) → 𝐶 (𝑥1, 𝑓 (𝑥1, 𝑥2))
+𝐴(𝑥1, 𝑥2) ∧ 𝐸 (𝑥1) → 𝐹 (𝑥1, 𝑔(𝑥1, 𝑥2))
+𝐴(𝑥1, 𝑥2) ∧ 𝐸 (𝑥1) → 𝐹 (𝑔(𝑥1, 𝑥2), ℎ(𝑥1, 𝑥2))
+
+(22)
+
+(23)
+
+(24)
+
+(25)
+
+Program ExbDR(Σ) can thus be large in the worst case. In Sec-
+tion 7 we show empirically that rewritings are suitable for practical
+
+Intuitively, rules (22) and (23) jointly represent the facts introduced
+by the non-full GTGD (8): functional term 𝑓 (𝑥1, 𝑥2) allows both
+
+rules to “talk” about the same labeled nulls. This allows the SkDR
+inference rule to simulate the ExbDR inference rule while unifying
+just pairs of atoms. In particular, SkDR combines (22) and (10) to
+obtain (26); it combines (23) and (9) to obtain (27); and it combines
+(26) and (27) to obtain the “shortcut” rule (14).
+𝐴(𝑥1, 𝑥2) ∧ 𝐷 (𝑥1, 𝑓 (𝑥1, 𝑥2)) → 𝐸 (𝑥1)
+
+(26)
+
+𝐴(𝑥1, 𝑥2) → 𝐷 (𝑥1, 𝑓 (𝑥1, 𝑥2))
+
+(27)
+
+The rules with Skolem-free bodies derived in this way allow us to
+reconstruct derivations in one step analogously to Example 5.6, and
+the rules with Skolem symbols in body atoms capture the interme-
+diate derivation steps. For example, rules (26) and (28) capture the
+result of matching the first and the second body atom, respectively,
+of rule (10) to facts produced by rules (22) and (27), respectively.
+To complete the rewriting, SkDR combines (24) with (12) to obtain
+(15), and it combines (22) with (13) to derive (16).
+
+However, SkDR also combines (10) and (27) into (28), which with
+(22) derives (14) the second time. These inferences are superfluous:
+they just process the two body atoms of (10) in a different order.
+Also, SkDR combines (12) and (25) into rule (29), which is a “dead-
+end” in that it does not further contribute to a Datalog rule.
+
+𝐴(𝑥1, 𝑥2) ∧ 𝐵(𝑥1, 𝑓 (𝑥1, 𝑥2)) → 𝐸 (𝑥1)
+𝐴(𝑥1, 𝑥2) ∧ 𝐸 (𝑥1) ∧ 𝐸 (𝑔(𝑥1, 𝑥2)) → 𝐺 (𝑔(𝑥1, 𝑥2))
+Our HypDR algorithm in Subsection 5.3 can avoid these overheads,
+⊳
+but at the expense of using more than two rules at a time.
+
+(28)
+
+(29)
+
+Proposition 5.12 and Theorem 5.13 capture the relevant proper-
+
+ties of the SkDR algorithm.
+
+Proposition 5.12. Each application of the SkDR inference rule to
+
+rules 𝜏 and 𝜏 ′ as in Definition 5.10 produces a guarded rule.
+
+Theorem 5.13. Program SkDR(Σ) is a Datalog rewriting of a
+finite set of GTGDs Σ. Moreover, the rewriting can be computed in
+time 𝑂 (𝑏𝑟 𝑑 · (𝑒+𝑤𝑏 +𝑐 )𝑑𝑎
+) for 𝑟 the number of relations in Σ, 𝑎 the
+maximum relation arity in Σ, 𝑒 the number of existential quantifiers
+in Σ, 𝑤𝑏 = bwidth(Σ), 𝑐 = |consts(Σ)|, and some 𝑏 and 𝑑.
+
+It is natural to wonder whether SkDR is guaranteed to be more
+efficient than ExbDR. We next show that neither algorithm is gener-
+ally better: there exist families of inputs on which SkDR performs
+exponentially more inferences than ExbDR, and vice versa.
+
+Proposition 5.14. There exists a family {Σ𝑛 }𝑛∈N of finite sets of
+GTGDs such that the number of GTGDs derived by ExbDR is 𝑂 (2𝑛)
+times larger than the number of rules derived by SkDR on each Σ𝑛.
+
+Proof. For each 𝑛 ∈ N, let Σ𝑛 contain the following GTGDs.
+
+𝐴(𝑥) → ∃(cid:174)𝑦 𝐵1 (𝑥, 𝑦1) ∧ · · · ∧ 𝐵𝑛 (𝑥, 𝑦𝑛)
+
+(30)
+
+𝐵𝑖 (𝑥1, 𝑥2) ∧ 𝐶𝑖 (𝑥1) → 𝐷𝑖 (𝑥1, 𝑥2) for 1 ≤ 𝑖 ≤ 𝑛
+
+(31)
+On such Σ𝑛, ExbDR derives a GTGD of the form (32) for each subset
+{𝑘1, . . . , 𝑘𝑚 } ⊆ {1, . . . , 𝑛}, and there are 2𝑛 such TGDs. In contrast,
+the Skolemization of (30) consists of 𝑛 rules shown in equation (33),
+so SkDR derives just 𝑛 rules shown in equation (34).
+
+𝐴(𝑥) ∧
+
+𝑚
+(cid:219)
+
+𝑖=1
+
+𝐶𝑘𝑖 (𝑥) → ∃(cid:174)𝑦
+
+𝑛
+(cid:219)
+
+𝑖=1
+
+𝐵𝑖 (𝑥, 𝑦𝑖 ) ∧
+
+𝑚
+(cid:219)
+
+𝑖=1
+
+𝐷𝑘𝑖 (𝑥, 𝑦𝑘𝑖 )
+
+(32)
+
+𝐴(𝑥) → 𝐵𝑖 (𝑥, 𝑓𝑖 (𝑥)) for 1 ≤ 𝑖 ≤ 𝑛
+𝐴(𝑥) ∧ 𝐶𝑖 (𝑥) → 𝐷𝑖 (𝑥, 𝑓𝑖 (𝑥)) for 1 ≤ 𝑖 ≤ 𝑛
+
+(33)
+□(34)
+
+Proposition 5.15. There exists a family {Σ𝑛 }𝑛∈N of finite sets
+of GTGDs such that the number of rules derived by SkDR is 𝑂 (2𝑛)
+times larger than the number of TGDs derived by ExbDR on each Σ𝑛.
+
+Proof. For each 𝑛 ∈ N, let Σ𝑛 contain the following GTGDs.
+𝐴(𝑥) → ∃𝑦 𝐵1 (𝑥, 𝑦) ∧ · · · ∧ 𝐵𝑛 (𝑥, 𝑦)
+𝐵1 (𝑥1, 𝑥2) ∧ · · · ∧ 𝐵𝑛 (𝑥1, 𝑥2) → 𝐶 (𝑥1)
+(36)
+On such Σ𝑛, ExbDR derives just GTGD (37) in one step. In contrast,
+the Skolemization of (35) consists of 𝑛 rules of the form (38) for each
+1 ≤ 𝑖 ≤ 𝑛. Thus, SkDR combines these with (36) to derive 2𝑛 − 1
+rules of the form (39), one for each subset {𝑘1, . . . , 𝑘𝑚 } ⊊ {1, . . . , 𝑛}.
+(37)
+
+(35)
+
+𝐴(𝑥) → 𝐶 (𝑥)
+𝐴(𝑥) → 𝐵𝑖 (𝑥, 𝑓 (𝑥))
+𝐴(𝑥) ∧ 𝐵𝑘1
+
+(38)
+(𝑥, 𝑓 (𝑥)) ∧ · · · ∧ 𝐵𝑘𝑚 (𝑥, 𝑓 (𝑥)) → 𝐶 (𝑥) □ (39)
+
+5.3 Combining Several SkDR Steps into One
+The SkDR algorithm can produce many rules with Skolem symbols
+in the body, which is the main reason for Proposition 5.15. We
+next present the HypDR algorithm, which uses the hyperresolution
+inference rule as a kind of “macro” to combine several SkDR steps
+into one. We show that this can be beneficial for several reasons.
+
+Definition 5.16. The Hyperresolution Rewriting inference rule
+HypDR takes guarded rules
+𝜏1 = 𝛽1 → 𝐻1
+𝜏 ′ = 𝐴′
+
+. . .
+1 ∧ · · · ∧ 𝐴′
+𝑛 ∧ 𝛽′ → 𝐻 ′
+
+𝜏𝑛 = 𝛽𝑛 → 𝐻𝑛 and
+
+such that
+• for each 𝑖 with 1 ≤ 𝑖 ≤ 𝑛, conjunction 𝛽𝑖 is Skolem-free and atom
+
+𝐻𝑖 contains a Skolem symbol, and
+
+• rule 𝜏 ′ is Skolem-free,
+and, for 𝜃 an MGU of 𝐻1, . . . , 𝐻𝑛 and 𝐴′
+1
+is Skolem-free, it derives
+
+, . . . , 𝐴′
+
+𝑛, if conjunction 𝜃 (𝛽′)
+
+𝜃 (𝛽1) ∧ · · · ∧ 𝜃 (𝛽𝑛) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′).
+
+Example 5.17. The HypDR inference rule simulates chase steps
+in the child vertex of a loop analogously to ExbDR: all body atoms
+matching a fact introduced in the child vertex are resolved in one
+step. We can see two benefits of this on our running example.
+
+First, HypDR derives (27) from (23) and (9), and it derives (14)
+from (10), (22), and (27). Rule (14) is derived just once, and with-
+out intermediate rules (26) and (28). In other words, the HypDR
+inference rule does not resolve the body atoms of a rule in every
+possible order. As Proposition 5.20 below shows, this can reduce
+the number of derived rules by an exponential factor.
+
+Second, HypDR derives only rules with Skolem-free bodies, and
+thus does not derive the “dead-end” rule (29). In other words, all
+consequences of HypDR derive in one step one fact in the child
+vertex of a loop from the loop’s input 𝑇𝑖 (𝑣).
+
+The downside of HypDR is that more than two rules can partici-
+pate in an inference. This requires more complex unification and
+⊳
+selection of candidates that can participate in an inference.
+
+Proposition 5.18 and Theorem 5.19 capture the properties of
+
+HypDR, and Proposition 5.20 compares it to SkDR.
+
+Proposition 5.18. Each application of the HypDR inference rule
+to rules 𝜏1, . . . , 𝜏𝑛 and 𝜏 ′ as in Definition 5.16 produces a guarded rule.
+
+Theorem 5.19. Program HypDR(Σ) is a Datalog rewriting of a
+finite set of GTGDs Σ. Moreover, the rewriting can be computed in
+time time 𝑂 (𝑏𝑟 𝑑 · (𝑒+𝑤𝑏 +𝑐 )𝑑𝑎
+) for 𝑟 the number of relations in Σ, 𝑎 the
+maximum relation arity in Σ, 𝑒 the number of existential quantifiers
+in Σ, 𝑤𝑏 = bwidth(Σ), 𝑐 = |consts(Σ)|, and some 𝑏 and 𝑑.
+
+Proposition 5.20. There exists a family {Σ𝑛 }𝑛∈N of finite sets
+of GTGDs such that SkDR derives 𝑂 (2𝑛) more rules than HypDR on
+each Σ𝑛.
+
+Proof. For each 𝑛 ∈ N, let Σ𝑛 contain the following GTGDs.
+
+𝐴(𝑥) → ∃𝑦 𝐵(𝑥, 𝑦)
+𝐵(𝑥1, 𝑥2) ∧ 𝐶𝑖 (𝑥1) → 𝐷𝑖 (𝑥1, 𝑥2) for 1 ≤ 𝑖 ≤ 𝑛
+𝐷1 (𝑥1, 𝑥2) ∧ · · · ∧ 𝐷𝑛 (𝑥1, 𝑥2) → 𝐸 (𝑥1)
+
+(40)
+
+(41)
+
+(42)
+
+Skolemizing (40) produces (43). Thus, SkDR combines (43) with
+each (41) to derive each (44), and it uses (44) and (42) to derive
+2𝑛 − 1 rules of the form (45) for each set of indexes 𝐼 satisfying
+∅ ⊊ 𝐼 ⊆ {1, . . . , 𝑛}; note that none of these rules are redundant.
+
+𝐴(𝑥) → 𝐵(𝑥, 𝑓 (𝑥))
+𝐴(𝑥) ∧ 𝐶𝑖 (𝑥) → 𝐷𝑖 (𝑥, 𝑓 (𝑥)) for 1 ≤ 𝑖 ≤ 𝑛
+(cid:219)
+
+(cid:219)
+
+𝐷 𝑗 (𝑥, 𝑓 (𝑥)) → 𝐸 (𝑥)
+
+𝐶𝑖 (𝑥) ∧
+
+(43)
+
+(44)
+
+(45)
+
+𝐴(𝑥) ∧
+
+𝑖 ∈𝐼
+
+𝑗 ∈ {1,...,𝑛}\𝐼
+
+In contrast, HypDR derives each (44) just like SkDR, and it combines
+□
+in one step (42) and all (44) to derive (45) for 𝐼 = {1, . . . , 𝑛}.
+
+6 IMPLEMENTATION AND OPTIMIZATIONS
+In this section, we discuss numerous issues that have to be addressed
+to make the computation of a rewriting practical.
+Computing Inf(Σ) in Practice. Definition 5.3 does not specify
+how to compute the set Σ′, and redundancy elimination makes
+this question nontrivial. When Inf derives a TGD/rule 𝜏, we can
+apply subsumption in two ways. First, we can discard 𝜏 if 𝜏 is sub-
+sumed by a previously derived TGD/rule; this is known as forward
+subsumption. Second, if 𝜏 is not discarded, we can discard each pre-
+viously derived TGD/rule that is subsumed by 𝜏; this is known as
+backward subsumption. The set of derived TGD/rules can thus grow
+and shrink, so the application of Inf has to be carefully structured
+to ensure that all inferences are performed eventually.
+
+We address this problem by a variant of the Otter loop [36] used
+in first-order theorem provers. The pseudo-code is shown in Al-
+gorithm 1. The algorithm maintains two sets of TGDs/rules: the
+worked-off set W contain TGDs/rules that have been processed by
+Inf, and the unprocessed set U contains TGDs/rules that are still to
+be processed. Set W is initially empty (line 1), and set U is initial-
+ized to the head-normal form of Σ if Inf manipulates TGDs, or to
+the Skolemization of Σ if Inf manipulates rules. The algorithm then
+processes each 𝜏 ∈ U until U becomes empty (lines 3–10). It is gen-
+erally beneficial to process shorter TGDs/rules first as that improves
+chances of redundancy elimination. After moving 𝜏 to W (line 5),
+
+Algorithm 1 Computing Inf(Σ) for Σ a finite set of GTGDs
+
+1: W = ∅
+2: U = the head-normal form or the Skolemization of Σ
+3: while U ≠ ∅ do
+4:
+5: W = W ∪ {𝜏 }
+6:
+
+Choose some 𝜏 ∈ U and remove it from U
+
+Let E be the result of applying Inf to 𝜏 and a subset of W
+and transforming the result into head-normal form
+
+for each 𝜏 ′ ∈ E do
+
+7:
+
+8:
+
+9:
+
+if 𝜏 ′ is not contained in W ∪ U up to redundancy then
+Remove from W and U each 𝜏 ′′ subsumed by 𝜏 ′
+U = U ∪ {𝜏 ′}
+
+10:
+11: return {𝜏 ∈ W | 𝜏 is a Skolem-free Datalog rule}
+
+the algorithm applies Inf to 𝜏 and W and transforms the results
+into head-normal form (line 6). The algorithm discards each result-
+ing 𝜏 ′ ∈ E that is a syntactic tautology or is forward-subsumed by
+an element of W ∪ U (line 8). If 𝜏 ′ is not discarded, the algorithm
+applies backward subsumption to 𝜏 ′, W, and U (line 9) and adds
+𝜏 ′ to U (line 10). When all TGDs/rules are processed, the algorithm
+returns all Skolem-free Datalog rules from W (line 11). The result
+of applying Inf to TGDs/rules in W is thus contained in W ∪ U
+up to redundancy at all times so, upon algorithm’s termination, set
+W satisfies the condition on Σ′ from Definition 5.3.
+Checking Subsumption. Checking whether TGD/rule 𝜏1 sub-
+sumes 𝜏2 is NP-complete [32], and the main difficulty is in matching
+the variables of 𝜏1 to the variables of 𝜏2. Thus, we use an approxi-
+mate check in our implementation. First, we normalize each TGD
+to use fixed variables 𝑥1, 𝑥2, . . . and 𝑦1, 𝑦2, . . .: we sort the body and
+head atoms by their relations using an arbitrary, but fixed ordering
+and breaking ties arbitrarily, and then we rename all variables so
+that the 𝑖𝑡ℎ distinct occurrence of a universally (respectively exis-
+tentially) quantified variable from left to right is 𝑥𝑖 (respectively
+𝑦𝑖 ). To see whether 𝜏1 = 𝛽1 → ∃(cid:174)𝑦 𝜂1 subsumes 𝜏2 = 𝛽2 → ∃(cid:174)𝑦 𝜂2,
+we determine whether 𝛽1 ⊆ 𝛽2 and 𝜂1 ⊇ 𝜂2 holds, which requires
+only polynomial time. We use a similar approximation for rules.
+Variable normalization ensures termination, and using a modified
+subsumption check does not affect the correctness of the rewriting:
+set W may contain more TGDs/rules than strictly necessary, but
+these are all logical consequences of (the Skolemization of) Σ.
+Subsumption Indexing. Sets W and U can be large, so we use
+a variant of feature vector indexing [44] to retrieve subsumption
+candidates in W ∪ U. For simplicity, we consider only TGDs in
+the following discussion, but rules can be handled analogously.
+Note that a TGD 𝜏1 can subsume TGD 𝜏2 only if the set of relations
+occurring in the body of 𝜏1 (respectively the head of 𝜏2) is a subset of
+the set of relations occurring in the body of 𝜏2 (respectively the head
+of 𝜏1). Thus, we can reduce the problem of retrieving subsumption
+candidates to the problem of, given a domain set 𝐷, a set 𝑁 of
+subsets of 𝐷, a subset 𝑆 ⊆ 𝐷, and ⊲⊳ ∈ {⊆, ⊇}, retrieving each 𝑆 ′ ∈ 𝑁
+satisfying 𝑆 ′ ⊲⊳ 𝑆. The set-trie data structure [43] can address this
+problem. The idea is to order 𝐷 in an arbitrary, yet fixed way, so
+that we can treat each subset of 𝑁 as a word over 𝐷. We then index
+𝑁 by constructing a trie over the words representing the elements
+
+of 𝑁 . Finally, we retrieve all 𝑆 ′ ∈ 𝑁 satisfying 𝑆 ′ ⊲⊳ 𝑆 by traversing
+the trie, where the ordering on 𝐷 allows us to considerably reduce
+the number of vertices we visit during the traversal.
+
+A minor issue is that retrieving TGDs that subsume a given
+TGD requires both subset and superset testing for body and head
+relations, respectively, and vice versa for retrieval of subsumed
+TGDs. To address this, we introduce a distinct symbol 𝑅𝑏 and 𝑅ℎ
+for each relation 𝑅 occurring in Σ, and we represent each TGD 𝜏 as
+a feature vector 𝐹𝜏 of these symbols corresponding to the body and
+head of 𝜏. Moreover, we combine in the obvious way the subset and
+superset retrieval algorithms. For example, when searching for a
+TGD 𝜏 ′ ∈ W ∪ U that subsumes a given TGD 𝜏, we use the subset
+retrieval for the symbols 𝑅𝑏 and the superset retrieval for symbols
+𝑅ℎ. Finally, we order these symbols by the decreasing frequency of
+the order of the symbols’ occurrence in the set Σ of input TGDs,
+and moreover we order each 𝑅𝑏 before all 𝑅ℎ.
+Relation Clustering. We observed that the subsumption indexes
+can easily get very large, so index traversal can become a consid-
+erable source of overhead. To reduce the index size, we group the
+symbols 𝑅𝑏 and 𝑅ℎ into clusters 𝐶𝑏 and 𝐶ℎ, respectively. Then,
+the feature vector 𝐹𝜏 associated with each TGD 𝜏 consists of all
+clusters 𝐶𝑏 and 𝐶ℎ that contain a relation occurring in the body
+and head, respectively, of 𝜏. We adapt the trie traversal algorithms
+in the obvious way to take into account this change. The number
+of clusters is computed using the average numbers of symbols and
+atoms in the input TGDs, and clusters are computed with the aim
+of balancing the number of TGDs stored in each leaf vertex.
+
+Unification Indexing. We construct indexes over W that allow us
+to quickly identify TGDs/rules that can participate in an inference
+with some 𝜏. For TGDs, we maintain a hash table that maps each
+relation 𝑅 to a set of TGDs containing 𝑅 in the body, and another
+hash table that does the same but for TGD heads. To index rules,
+we use a variant of a path indexing [45]: each atom in a rule is rep-
+resented as a sequence of relations and function symbols occurring
+in the atom, and such sequences are entered into two tries (one for
+body and one for head atoms). Then, given rule 𝜏, we consider each
+body and head atom 𝐴 of 𝜏, we convert 𝐴 into the corresponding
+sequence, and we use the sequence to query the relevant trie for
+all candidates participating in an inference with 𝜏 on 𝐴.
+
+Cheap Lookahead Optimization. Consider an application of
+the ExbDR inference rule to GTGDs 𝜏 and 𝜏 ′ as in Definition 5.5,
+producing a GTGD 𝜏 ′′ where vars(𝜃 (𝐻 ′)) ∩ (cid:174)𝑦 ≠ ∅ and the relation
+of 𝐻 ′ does not occur in the body of a GTGD in Σ. In each one-pass
+chase sequence for some base instance and Σ, no GTGD of Σ can
+be applied to a fact obtained by instantiating 𝜃 (𝐻 ′), so deriving
+this fact is redundant. Consequently, we can drop such 𝜏 ′′ as soon
+as we derive it in line 6. Analogously, when the SkDR inference
+rule is applied to rules 𝜏 and 𝜏 ′ as in Definition 5.10, we can drop
+the resulting rule if 𝜃 (𝐻 ′) is not full and it contains a relation not
+occurring in the body of a GTGD in Σ.
+
+7 EXPERIMENTAL EVALUATION
+We implemented a system that can produce a Datalog rewriting of a
+set of GTGDs using our algorithms, and we conducted an empirical
+evaluation using a comprehensive collection of 428 synthetic and
+
+Table 1: Input GTGDs at a Glance
+
+Inputs
+
+# Full TGDs
+
+# Non-Full TGDs
+
+Min
+
+Max
+1 171,905 11,030
+
+Avg Med Min
+789
+
+Max Avg Med
+283
+
+2 156,743 5,255
+
+428
+
+realistic inputs. Our objectives were to show that our algorithms
+can indeed rewrite complex GTGDs, and that the rewriting can
+be successfully processed by modern Datalog systems. In Subsec-
+tion 7.1 we describe the test setting. Then, in Subsection 7.2 we
+discuss the rewriting experiments with GTGDs obtained from on-
+tologies, and in Subsection 7.3 we validate the usefulness of the
+rewriting approach end-to-end. Finally, in Subsection 7.4 we discuss
+rewriting GTGDs of higher arity. Due to the very large number of
+inputs, we can only summarize our results in this paper; however,
+our complete evaluation results are available online [13].
+
+7.1 Input GTGDs, Competitors, & Test Setting
+Before discussing our results, we next describe our test setting.
+
+Input GTGDs. We are unaware of any publicly available sets of
+GTGDs that we could readily use in our evaluation, so we derived
+the input GTGDs for our evaluation from the ontologies in the
+Oxford Ontology Library [40]. At the time of writing, this library
+contained 787 ontologies, each assigned a unique five-digit identifier.
+After removing closely-related ontology variants, we were left with
+428 core ontologies. We loaded each ontology using the parser from
+the Graal system [9], discarded axioms that cannot be translated
+into GTGDs, and converted the remaining axioms into GTGDs. We
+used the standard translation of description logics into first-order
+logic [6], where each class corresponds to a unary relation, and
+each property corresponds to a binary relation. We thus obtained
+428 sets of input GTGDs with properties shown in Table 1.
+
+To evaluate our algorithms on TGDs containing relations of ar-
+ity higher than two, we devised a way to “blow up” relation arity.
+Given a set of GTGDs and a blowup factor 𝑏, our method proceeds
+as follows. First, in each atom of each GTGD, it replaces each vari-
+able argument with 𝑏 fresh variables uniquely associated with the
+variable; for example, for 𝑏 = 2, atom 𝐴(𝑥, 𝑦) is transformed into
+atom 𝐴(𝑥1, 𝑥2, 𝑦1, 𝑦2). Next, the method randomly introduces fresh
+head and body atoms over the newly introduced variables; in doing
+so, it ensures that the new atoms do not introduce patterns that
+would prevent application of the ExbDR inference rule.
+
+Competitors. We compared the ExbDR, SkDR, and HypDR algo-
+rithms, implemented as described in Section 6. As noted in Section 2,
+no existing system we are aware of implements a Datalog rewriting
+algorithm for GTGDs. However, the KAON2 system [29, 38, 39]
+can rewrite GTGDs obtained from OWL ontologies, so we used
+KAON2 as a baseline in our experiments with OWL-based GTGDs.
+We made sure that all inputs to KAON2 and our algorithms include
+only GTGDs that all methods can process.
+
+Test Setting. We conducted all experiments on a laptop with an
+Intel Core i5-6500 CPU @ 3.20 GHz and 16 GB of RAM, running
+Ubuntu 20.04.4 LTS and Java 11.0.15. In each test run, we loaded
+a set of TGDs, measured the wall-clock time required to compute
+
+Time (s)
+
+ExbDR
+SkDR
+HypDR
+KAON2
+
+585
+
+100
+
+10
+
+1
+
+0.1
+
+50 100 150 200 250 300 350
+Nr. of Processed Sets of TGDs
+
+# of Processed Inputs
+Max. Processed Input Size
+Max. Output Size
+Max. Size Blowup
+Max. Body Atoms in Output
+# Blowup ≥ 1.5
+) Min.
+Max.
+Avg.
+Med.
+
+e
+m
+T
+
+s
+(
+
+i
+
+ExbDR
+367
+185,515
+196,594
+8.95
+7
+26
+0.05
+582.18
+23.23
+0.82
+
+SkDR HypDR KAON2
+362
+382
+N/A
+324,092
+61,964
+124,846
+N/A
+8.85
+4
+6
+N/A
+16
+0.21
+0.04
+547.53
+404.34
+18.66
+6.38
+0.49
+0.55
+
+377
+324,092
+124,846
+8.85
+6
+14
+0.05
+584.79
+14.34
+0.52
+
+𝑌
+
+𝑋
+ExbDR
+SkDR
+HypDR
+KAON2
+
+time (𝑌 )/time (𝑋 ) ≥ 10
+
+𝑋 and 𝑌 both fail
+
+ExbDR SkDR HypDR KAON2
+
+ExbDR SkDR HypDR KAON2
+
+19
+
+12
+15
+
+37
+37
+35
+
+0
+0
+
+0
+
+19
+26
+31
+
+61
+33
+35
+37
+
+51
+43
+47
+
+46
+46
+
+66
+
+Figure 4: Results for TGDs Derived from Ontologies
+
+the rewriting of a set of GTGDs, and saved the produced Datalog
+rewriting. We used a timeout of ten minutes for each test run.
+
+7.2 Experiments with GTGDs from Ontologies
+We computed the Datalog rewriting of GTGDs obtained from OWL
+ontologies using our three algorithms and KAON2. Figure 4 shows
+the number of inputs that each algorithm processed in a given time,
+provides information about the inputs and outputs of each system,
+and compares the performance among systems. The input size for
+ExbDR is the number of GTGDs after transforming the input into
+head-normal form, and for SkDR and HypDR it is the number of
+rules after Skolemization. Input size is not available for KAON2
+since this system reads an OWL ontology and transforms it into
+GTGDs internally. The output size is the number of Datalog rules
+in the rewriting. Finally, the blowup is the ratio of the output and
+the input sizes. Each input GTGD contained at most seven body
+atoms. Out of 428 inputs, 349 were processed within the ten minute
+limit by our three systems, and 334 inputs were processed by all
+four systems. Moreover, 32 inputs, each containing between 20,270
+and 221,648 GTGD, were not processed by any system.
+
+Discussion. As one can see in Figure 4, all algorithms were able
+to compute the rewriting of large inputs containing 100k+ GTGDs.
+Moreover, for the vast majority of inputs that were successfully
+
+processed, the size of the rewriting and the number of body atoms
+in the rewriting are typically of the same order of magnitude as
+the input. Hence, the worst-case exponential blowup from Theo-
+rems 5.8, 5.13, and 5.19 does not appear in practice: the size of the
+rewriting seems to be determined primarily by the input size.
+
+Relative Performance. No system can be identified as the best in
+general, but HypDR seems to offer the best performance on average.
+The algorithm was able to process most inputs; it was at least 35%
+faster than the other systems on the slowest input; it was never
+slower by an order of magnitude; there were only 14 inputs that
+could be processed by some other algorithm but not HypDR; and
+the output of HypDR does not differ significantly from the output
+of SkDR. This is in line with our motivation for HypDR outlined
+in Example 5.17. Specifically, HypDR derives rules with just one
+head atom, but it does not derive intermediate rules with functional
+body atoms. The main source of overhead in HypDR seems to be
+more complex selection of rules participating in an inference.
+
+Impact of Subsumption. All algorithms spend a considerable por-
+tion of their running time checking TGD/rule subsumption, so it is
+natural to wonder whether this overhead is justified. To answer this
+question, we ran our three approaches using a modification of Algo-
+rithm 1: we replaced the check for containment up to redundancy
+in line 8 with just checking 𝜏 ′ ∉ W ∪ U, and we removed line 9.
+Note that our normalization of variables described in Section 6
+still guarantees termination. This change significantly increased
+the number of derivations: the numbers of derived TGDs/rules
+increased on average by a factor of 104, 185, and 103 on ExbDR,
+SkDR, and HypDR, respectively. Interestingly, this increase did not
+affect the performance uniformly. While SkDR was able to process
+12 inputs an order of magnitude faster, ExbDR and HypDR timed
+out on 72 and 17 additional inputs, respectively. This, we believe,
+is due to how different inference rules select inference candidates.
+The SkDR rule is applied to just pairs of rules, and candidate pairs
+can be efficiently retrieved using unification indexes. In contrast,
+ExbDR requires matching several head atoms with as many body
+atoms, which makes developing a precise index for candidate pair
+retrieval difficult; thus, as the number of derived TGDs increases,
+the number of false candidates retrieved from the index increases as
+well. Finally, HypDR can be applied to an arbitrary number of rules,
+so selecting inference candidates clearly becomes more difficult as
+the number of derived rules increases.
+
+Impact of Structural Transformation. KAON2 uses structural
+transformation [7] to simplify ontology axioms before translating
+them into GTGDs. For example, axiom 𝐴 ⊑ ∃𝐵.∃𝐶.𝐷 is transformed
+into 𝐴 ⊑ ∃𝐵.𝑋 and 𝑋 ⊑ ∃𝐶.𝐷 for 𝑋 a fresh class. The resulting
+axioms have simpler structure, which is often beneficial to perfor-
+mance. To see how this transformation affects our algorithms, we
+reran our experiments while transforming the input axioms in the
+same way as in KAON2. This indeed improved the performance of
+SkDR by one order of magnitude on 22 ontologies, and it did not
+hurt the performance of HypDR. The main challenge is to general-
+ize this transformation to arbitrary GTGDs: whereas description
+logic axioms exhibit syntactic nesting that lends itself naturally to
+this transformation, it is less clear how to systematically apply this
+
+Table 2: Computing the Fixpoint of the Rewriting
+
+Ont. ID # Rules
+63,422
+00387
+00448
+67,986
+75,146
+00470
+78,977
+00471
+75,146
+00472
+00473
+78,977
+113,959
+00573
+68,461
+00682
+81,553
+00684
+124,846
+00686
+
+# Input Facts
+4,403,105
+5,510,444
+10,532,943
+11,077,423
+10,533,008
+11,077,459
+9,197,254
+5,183,460
+6,057,017
+10,402,324
+
+# Output Facts
+51,439,424
+107,235,697
+141,396,446
+128,954,126
+141,396,576
+128,954,198
+155,118,592
+105,431,952
+66,981,628
+166,366,039
+
+Time (s)
+53
+110
+242
+253
+279
+291
+206
+101
+109
+238
+
+transformation to TGDs, where heads and bodies consist of “flat”
+conjunctions. We leave this question for future work.
+
+7.3 End-to-End Experiments
+To validate our approach end-to-end, we selected ten inputs where
+ExbDR produced the largest rewritings. For each of these, we gen-
+erated a large base instance using WatDiv [2], and we computed
+the fixpoint of the rewriting and the instance using the RDFox [46]
+Datalog system v5.4. Table 2 summarizes our results.
+
+All programs used in this experiment are at least several orders
+of magnitude larger than what is usually encountered in practical
+applications of Datalog, but RDFox nevertheless computed the
+fixpoint of all rewritings in a few minutes. Moreover, although the
+fixpoints seem to be an order of magnitude larger than the base
+instance, this is not a problem for highly optimized systems such
+as RDFox. Hence, checking fact entailment via rewritings produced
+by our algorithms is feasible in practice.
+
+7.4 GTGDs With Relations of Higher Arity
+Finally, we computed the rewriting of GTGDs obtained by blowing
+up relation arity as described in Subsection 7.1 using a blowup
+factor of five. We did not use KAON2 since this system supports
+relations of arity at most two. Figure 5 summarizes our results. Out
+of 428 inputs, 187 were processed within the ten minute limit by our
+three systems, and 128 inputs were not processed by any system.
+While HypDR performed best on GTGDs derived from ontolo-
+gies, Figure 5 shows it to be worst-performing on higher-arity
+GTGDs: it successfully processed only 199 inputs within the ten
+minute timeout, whereas SkDR and ExbDR processed 238 and 274
+inputs, respectively. This is mainly due to additional body atoms
+introduced by our “blowup” method: these increase the number of
+rules participating in an application of the HypDR inference rule,
+which makes selecting the participating rules harder.
+
+This experiment proved to be more challenging, as most prob-
+lems discussed in Section 6 became harder. For example, in ExbDR,
+higher arity of atoms increases the likelihood that an atom re-
+trieved through a unification index does not unify with a given
+atom, and that the atoms of the selected GTGDs cannot be suc-
+cessfully matched. Subsumption indexing is also more difficult for
+similar reasons. However, the inputs used in this experiment consist
+of a large numbers of GTGDs with relations of arity ten, so they
+can be seen as a kind of a “stress test”. Our algorithms were able to
+
+Time (s)
+
+ExbDR
+SkDR
+HypDR
+
+592
+
+100
+
+10
+
+1
+
+0.1
+
+50
+
+100
+
+150
+
+200
+
+Nr. of Processed Sets of TGDs
+
+250
+
+# of Processed Inputs
+Max. Processed Input Size
+Max. Output Size
+Max. Size Blowup
+# Blowup ≥ 1.5
+) Min.
+Max.
+Avg.
+Med.
+
+e
+m
+T
+
+s
+(
+
+i
+
+ExbDR
+274
+69,046
+58,749
+9.00
+26
+0.06
+591.82
+26.70
+0.61
+
+SkDR HypDR
+199
+38,362
+38,335
+5.84
+3
+0.04
+557.75
+17.05
+1.72
+
+238
+182,569
+171,832
+5.84
+5
+0.05
+504.49
+38.39
+1.65
+
+𝑌
+
+𝑋
+ExbDR
+SkDR
+HypDR
+
+time (𝑌 )/time (𝑋 ) ≥ 10
+
+𝑋 and 𝑌 both fail
+
+ExbDR SkDR HypDR
+
+ExbDR SkDR HypDR
+
+61
+
+4
+
+11
+6
+
+87
+21
+
+154
+128
+148
+
+190
+184
+
+229
+
+Figure 5: Results for TGDs with Higher-Arity Relations
+
+process more than half of such inputs, which leads us to believe that
+they can also handle more well-behaved GTGDs used in practice.
+
+8 CONCLUSION
+We presented several algorithms for rewriting a finite set of guarded
+TGDs into a Datalog program that entails the same base facts on
+each base instance. Our algorithms are based on a new framework
+that establishes a close connection between Datalog rewritings
+and a particular style of the chase. In future, we plan to generalize
+our framework to wider classes of TGDs, such as frontier-guarded
+TGDs, as well as provide rewritings for conjunctive queries under
+certain answer semantics. Moreover, we shall investigate whether
+the extension of our framework to disjunctive guarded TGDs [31]
+can be used to obtain practical algorithms for rewriting disjunctive
+guarded TGDs into disjunctive Datalog programs.
+
+ACKNOWLEDGMENTS
+This work was funded by the EPSRC grants OASIS (EP/S032347/1),
+AnaLOG (EP/P025943/1), Concur (EP/V050869/1), and QUINTON
+(EP/T022124/1). For the purpose of Open Access, the author has
+applied a CC BY public copyright licence to any Author Accepted
+Manuscript (AAM) version arising from this submission.
+
+REFERENCES
+[1] Shqiponja Ahmetaj, Magdalena Ortiz, and Mantas Simkus. 2018. Rewrit-
+ing Guarded Existential Rules into Small Datalog Programs. In ICDT. Schloss
+Dagstuhl–Leibniz-Zentrum fuer Informatik, 4:1–4:24.
+
+[2] Günes Aluç, Olaf Hartig, M. Tamer Özsu, and Khuzaima Daudjee. 2014. Di-
+versified Stress Testing of RDF Data Management Systems. In ISWC. Springer,
+197–212.
+
+[3] Mario Alviano, Nicola Leone, Marco Manna, Giorgio Terracina, and Pierfrancesco
+Veltri. 2012. Magic-Sets for Datalog with Existential Quantifiers. In Datalog 2.0.
+Springer, 31–43.
+
+[4] Antoine Amarilli and Michael Benedikt. 2022. When Can We Answer Queries
+Using Result-Bounded Data Interfaces? Log. Methods Comput. Sci. 18, 2 (2022),
+14:1—-14:81.
+
+[5] Hajnal Andréka, Johan van Benthem, and István Németi. 1998. Modal languages
+and bounded fragments of predicate logic. Journal of Philosophical Logic 27
+(1998), 217–274.
+
+[6] F. Baader, D. Calvanese, D. McGuinness, D. Nardi, and P. F. Patel-Schneider (Eds.).
+2007. The Description Logic Handbook: Theory, Implementation and Applications
+(2nd ed.). Cambridge University Press, Cambridge, UK.
+
+[7] M. Baaz, U. Egly, and A. Leitsch. 2001. Normal Form Transformations.
+
+In
+Handbook of Automated Reasoning, A. Robinson and A. Voronkov (Eds.). Vol. I.
+Elsevier Science, Amsterdam, The Netherlands, Chapter 5, 273–333.
+
+[8] Leo Bachmair and Harald Ganzinger. 2001. Resolution Theorem Proving. Hand-
+
+[9]
+
+[10]
+
+book of automated reasoning 1 (2001), 19–99.
+J.-F. Baget, M. Leclère, M.-L. Mugnier, S. Rocher, and C. Sipieter. 2015. Graal:
+A Toolkit for Query Answering with Existential Rules. In RuleML. Springer,
+328–344.
+Jean-François Baget, Marie-Laure Mugnier, Sebastian Rudolph, and Michaël
+Thomazo. 2011. Walking the complexity lines for generalized guarded existential
+rules. In IJCAI. AAAI Press, 712–717.
+
+[11] Vince Bárány, Michael Benedikt, and Balder Ten Cate. 2013. Rewriting Guarded
+
+Negation Queries. In MFCS. Springer, 98–110.
+
+[12] Luigi Bellomarini, Emanuel Sallinger, and Georg Gottlob. 2018. The Vadalog
+System: Datalog-based Reasoning for Knowledge Graphs. Proc. VLDB Endow. 11,
+9 (2018), 975–987.
+
+[13] Michael Benedikt, Maxime Buron, Stefano Germano, Kevin Kappelmann, and
+Boris Motik. 2021. Guarded Saturation. GitHub. Retrieved July 4, 2022 from
+https://krr-oxford.github.io/Guarded-saturation/
+
+[14] Michael Benedikt, George Konstantinidis, Giansalvatore Mecca, Boris Motik,
+Paolo Papotti, Donatello Santoro, and Efthymia Tsamoura. 2017. Benchmarking
+the Chase. In PODS. ACM, 37–52.
+
+[15] Andrea Calì, Georg Gottlob, and Michael Kifer. 2013. Taming the Infinite Chase:
+Query Answering under Expressive Relational Constraints. Journal of Artificial
+Intelligence Research 48 (2013), 115–174.
+
+[16] Andrea Calì, Domenico Lembo, and Riccardo Rosati. 2003. Query rewriting
+and answering under constraints in data integration systems. In IJCAI. Morgan
+Kaufmann, 16–21.
+
+[17] Diego Calvanese, Benjamin Cogrel, Sarah Komla-Ebri, Roman Kontchakov, Da-
+vide Lanti, Martin Rezk, Mariano Rodriguez-Muro, and Guohui Xiao. 2017. Ontop:
+Answering SPARQL queries over relational databases. Semantic Web 8, 3 (2017),
+471–487.
+
+[18] Diego Calvanese, Giuseppe De Giacomo, Domenico Lembo, Maurizio Lenzerini,
+and Riccardo Rosati. 2007. Tractable Reasoning and Efficient Query Answering in
+Description Logics: The DL-Lite Family. J. Autom. Reason. 39, 3 (2007), 385–429.
+[19] Hans de Nivelle. 1998. A Resolution Decision Procedure for the Guarded Frag-
+
+ment. In CADE. Springer, 191–204.
+
+[20] A. Deutsch, L. Popa, and V. Tannen. 2006. Query reformulation with constraints.
+
+SIGMOD Record 35, 1 (2006), 65–73.
+
+[21] R. Fagin, P. G. Kolaitis, R. J. Miller, and L. Popa. 2005. Data exchange: semantics
+and query answering. Theoretical Computer Science 336, 1 (2005), 89–124.
+[22] Mohamed Gaha, Arnaud Zinflou, Christian Langheit, Alexandre Bouffard, Math-
+ieu Viau, and Luc Vouligny. 2013. An Ontology-Based Reasoning Approach for
+Electric Power Utilities. In RR. Springer, 95–108.
+
+[23] H. Ganzinger and H. de Nivelle. 1999. A Superposition Decision Procedure for
+the Guarded Fragment with Equality. In Proc. of the 14th IEEE Symposium on
+
+Logic in Computer Science (LICS ’99). IEEE Computer Society, 295–305.
+
+[24] Georg Gottlob, Sebastian Rudolph, and Mantas Simkus. 2014. Expressiveness of
+
+Guarded Existential Rule Languages. In PODS. ACM, 27–38.
+
+[25] Alon Halevy, Anand Rajaraman, and Joann Ordille. 2006. Data Integration: The
+
+Teenage Years. In VLDB. ACM, 9–16.
+
+[26] Alon Y. Halevy. 2001. Answering queries using views: A survey. VLDB Journal
+
+10, 4 (2001), 270–294.
+
+[27] Colin Hirsch. 2002. Guarded Logics: Algorithms and Bisimulation. Ph.D. Dis-
+sertation. RWTH Aachen, Aachen, Germany. Retrieved July 4, 2022 from
+http://www.umbrialogic.com/hirsch-thesis.pdf
+
+[28] Ullrich Hustadt, Boris Motik, and Ulrike Sattler. 2004. Reducing S H I Q −
+Description Logic to Disjunctive Datalog Programs. In KR. AAAI Press, 152–162.
+[29] Ullrich Hustadt, Boris Motik, and Ulrike Sattler. 2007. Reasoning in description
+logics by a reduction to disjunctive datalog. Journal of Automated Reasoning 39,
+3 (2007), 351–384.
+
+[30] David S. Johnson and Anthony C. Klug. 1984. Testing Containment of Conjunc-
+tive Queries under Functional and Inclusion Dependencies. JCSS 28, 1 (1984),
+167–189.
+
+[31] Kevin Kappelmann. 2019. Decision Procedures for Guarded Logics. CoRR
+abs/1911.03679 (2019), 92. Retrieved July 4, 2022 from http://arxiv.org/abs/
+1911.03679
+
+[32] Deepak Kapur and Paliath Narendran. 1986. NP-Completeness of the Set Unifi-
+
+cation and Matching Problems. In CADE. Springer, 489–495.
+
+[33] Alon Y. Levy. 2000. Logic-Based Techniques in Data Integration. Kluwer Academic
+
+Publishers, Norwell, MA, USA, 575–595.
+
+[34] Thomas Lukasiewicz, Andrea Calì, and Georg Gottlob. 2012. A General Datalog-
+Based Framework for Tractable Query Answering over Ontologies. Journal of
+Web Semantics 14, 0 (2012), 57–83.
+
+[35] Bruno Marnette. 2012. Resolution and Datalog Rewriting Under Value Invention
+
+and Equality Constraints. CoRR abs/1212.0254 (2012), 12.
+
+[36] William McCune and Larry Wos. 1997. Otter—The CADE-13 Competition Incar-
+
+nations. Journal of Automated Reasoning 18, 2 (1997), 211–220.
+
+[37] M. Meier. 2014. The backchase revisited. VLDB J. 23, 3 (2014), 495–516.
+[38] Boris Motik. 2006. Reasoning in description logics using resolution and deductive
+databases. Ph.D. Dissertation. Karlsruhe Institute of Technology, Karlsruhe,
+Germany. Retrieved July 4, 2022 from http://digbib.ubka.uni-karlsruhe.de/
+volltexte/1000003797
+
+[39] Boris Motik. 2022. The KAON2 System. Karslruhe Institute of Technology.
+
+Retrieved July 4, 2022 from http://kaon2.semanticweb.org/
+
+[40] Oxford KR group. 2021. Oxford Ontology Library. Oxford University. Retrieved
+
+July 4, 2022 from http://krr-nas.cs.ox.ac.uk/ontologies/
+
+[41] Mike Paterson and Mark N. Wegman. 1978. Linear Unification. J. Comput. Syst.
+
+[42]
+
+[43]
+
+Sci. 16, 2 (1978), 158–167.
+John Alan Robinson. 1965. A machine-oriented logic based on the resolution
+principle. JACM 12, 1 (1965), 23–41.
+Iztok Savnik. 2013. Index Data Structure for Fast Subset and Superset Queries.
+In CD-ARES. Springer, 134–148.
+
+[44] Stephan Schulz. 2013. Simple and Efficient Clause Subsumption with Feature
+
+Vector Indexing. In Automated Reasoning and Mathematics. Springer, 45–67.
+
+[45] Mark E. Stickel. 1989. The Path-Indexing Method for Indexing Terms. Technical
+
+Report. SRI.
+
+[46] Oxford Semantic Technologies. 2022. The RDFox System. Oxford Semantic
+
+Technologies. Retrieved July 4, 2022 from https://www.oxfordsemantic.tech/
+
+[47] Moshe Y. Vardi. 1997. Why Is Modal Logic so Robustly Decidable?. In DIMACS
+Series in Discrete Mathematics and Theoretical Computer Science, Vol. 31. American
+Mathematical Society, 149–184.
+
+[48] Roberto De Virgilio, Giorgio Orsi, Letizia Tanca, and Riccardo Torlone. 2012.
+NYAYA: A System Supporting the Uniform Management of Large Sets of Seman-
+tic Data. In ICDE. IEEE Computer Society, 1309–1312.
+
+[49] Zhe Wang, Peng Xiao, Kewen Wang, Zhiqiang Zhuang, and Hai Wan. 2021.
+Query Answering for Existential Rules via Efficient Datalog Rewriting. In IJCAI.
+ijcai.org, 1933–1939.
+
+[50] Sen Zheng and Renate A. Schmidt. 2020. Deciding the Loosely Guarded Fragment
+and Querying Its Horn Fragment Using Resolution. In AAAI. AAAI Press, 3080–
+3087.
+
+A PROOFS FOR SECTION 4: ONE-PASS CHASE PROOFS
+In Section 4 we introduced the notion of a one-pass chase proof, which allows us to establish a completeness criterion for saturations that is
+tied to the chase. We provide details of the proofs in this appendix.
+
+A.1 Proof of Theorem 4.2: Existence of One-Pass Chase Proofs
+
+Theorem 4.2. For each base instance 𝐼 , each finite set of GTGDs Σ in head-normal form, and each base fact 𝐹 such that 𝐼, Σ |= 𝐹 , there exists a
+
+one-pass tree-like chase proof of 𝐹 from 𝐼 and Σ.
+
+Throughout this section, we fix an arbitrary base instance 𝐼 and a finite set of GTGDs Σ. It is known that 𝐼, Σ |= 𝐹 if and only if there exists
+a tree-like chase proof of 𝐹 from 𝐼 and Σ. We next prove Theorem 4.2 by showing that each such proof can be transformed to a one-pass
+chase proof of 𝐹 from 𝐼 and Σ. This argument was developed jointly with Antoine Amarilli, and it is related to proofs by Amarilli and
+Benedikt [4] and Kappelmann [31]; however, note that Definition 4.1 imposes slightly stronger conditions on one-pass chase sequences than
+related definitions in those works.
+
+Towards our goal, we first state two basic properties of tree-like chase sequences. The first claim is a variation of the well-known fact that
+any chase tree produced for GTGDs represents a tree decomposition [15]. The second claim captures the idea that, as the chase progresses,
+facts may be added within a vertex, but this will not produced new guarded sets of terms.
+
+Lemma A.1. Let 𝑇0, . . . ,𝑇𝑛 be an arbitrary tree-like chase sequence for 𝐼 and Σ.
+
+1. For each 0 ≤ 𝑖 ≤ 𝑛, all vertices 𝑣1 and 𝑣2 in 𝑇𝑖 , each set 𝐺 of ground terms that is Σ-guarded by 𝑇𝑖 (𝑣1) and by 𝑇𝑖 (𝑣2), and each vertex 𝑣3 on
+
+the unique path in 𝑇𝑖 between 𝑣1 and 𝑣2, set 𝐺 is Σ-guarded by 𝑇𝑖 (𝑣3).
+
+2. For each 0 ≤ 𝑖 ≤ 𝑛, each vertex 𝑣 in 𝑇𝑖 , each set 𝐺 of ground terms that is Σ-guarded by 𝑇𝑖 (𝑣), and each 0 ≤ 𝑗 ≤ 𝑖 such that 𝑇𝑗 contains 𝑣, set
+
+𝐺 is Σ-guarded by 𝑇𝑗 (𝑣).
+
+Proof of Claim 1. The proof is by induction on 𝑖 with 0 ≤ 𝑖 ≤ 𝑛. For 𝑖 = 0, chase tree 𝑇0 contains just one vertex so the claim holds
+trivially. Now assume that the property holds for some 0 ≤ 𝑖 < 𝑛 and consider ways in which 𝑇𝑖+1 can be derived from 𝑇𝑖 . First, 𝑇𝑖+1 can be
+obtained by applying a chase step to 𝑇𝑖 at vertex 𝑣 with some GTGD 𝜏 ∈ Σ. Let 𝑣1 be the recently updated vertex of 𝑇𝑖+1. Thus, 𝑣1 is either 𝑣
+or a fresh child of 𝑣. Moreover, consider each fact 𝑅((cid:174)𝑡) derived by the step, each set of ground terms 𝐺 ⊆ (cid:174)𝑡, each vertex 𝑣2 such that 𝐺 is
+Σ-guarded by 𝑇𝑖+1 (𝑣2), and each vertex 𝑣3 on the unique path in 𝑇𝑖+1 between 𝑣1 and 𝑣2. If 𝐺 contains a labeled null that is freshly introduced
+in 𝑇𝑖+1, the claim holds trivially because 𝑣2 and 𝑣3 are necessarily the same as 𝑣1. Otherwise, 𝜏 is guarded, so 𝑇𝑖 (𝑣) contains a fact 𝑆 ( (cid:174)𝑢) such
+that 𝐺 ⊆ (cid:174)𝑢. But then, 𝐺 is Σ-guarded by 𝑇𝑖 (𝑣3) by the induction assumption. Moreover, 𝑇𝑖 (𝑣3) ⊆ 𝑇𝑖+1 (𝑣3) ensures that 𝐺 is Σ-guarded by
+□
+𝑇𝑖+1 (𝑣3), as required. Second, 𝑇𝑖+1 can be obtained by applying a propagation step to 𝑇𝑖 , but then the property clearly holds.
+
+Proof of Claim 2. The proof is by induction on 𝑖 with 0 ≤ 𝑖 ≤ 𝑛. The base case for 𝑖 = 0 is trivial. For the induction step, assume that the
+property holds for some 𝑖. If 𝑇𝑖+1 is obtained from 𝑇𝑖 by a chase step with a non-full GTGD, then the claim clearly holds for 𝑇𝑖+1 because the
+step introduces a fresh vertex that does not occur in any 𝑇𝑗 with 0 ≤ 𝑗 ≤ 𝑖. Otherwise, 𝑇𝑖+1 is obtained by extending some 𝑇𝑖 (𝑣), so consider
+an arbitrary fact 𝐹 ∈ 𝑇𝑖+1 (𝑣) \ 𝑇𝑖 (𝑣). Clearly, 𝐹 is Σ-guarded by 𝑇𝑖 (𝑣): if the step involves a full GTGD, then a body atom of the GTGD is
+matched to a fact 𝐹 ′ ∈ 𝑇𝑖 (𝑣) such that 𝐹 is Σ-guarded by 𝐹 ′; moreover, if the step involves propagation, then by definition there exists a fact
+𝐹 ′ ∈ 𝑇𝑖 (𝑣) such that 𝐹 is Σ-guarded by 𝐹 ′. Thus, each set of ground terms 𝐺 that is Σ-guarded by 𝑇𝑖+1 (𝑣) is also Σ-guarded by 𝐹 ′ ∈ 𝑇𝑖 (𝑣), so
+□
+the claim holds.
+
+In the rest of the proof, we show how to convert an arbitrary tree-like chase proof into a one-pass one through a series of transformations.
+
+Before proceeding, we next describe formally the types of chase sequence that we consider in our transformations.
+
+Definition A.2.
+• A chase sequence is local if each propagation step in the sequence copies just one fact to either the parent or a child vertex.
+• A chase sequence is rootward if each propagation step in the sequence copies just one fact from a child to its parent.
+• A chase sequence is almost one-pass if it is rootward and each chase or propagation step is applied to the recently updated vertex or an
+ancestor thereof, and a chase step is applied only if a propagation step is not applicable to the recently updated vertex or an ancestor thereof.
+
+Note that facts can still be copied from a parent to a child in a rootward chase sequence, but this can be done only in chase steps with
+non-full GTGDs that introduce a child. Furthermore, the use of “almost” in the “almost one-pass” reflects the caveat that, in an almost
+one-pass chase sequence, a step can be applied to an ancestor of the recently updated vertex, thus “jumping rootward” in the tree, whereas
+such steps are forbidden in a one-pass chase sequence.
+
+We capture formally the relationship between the chase sequences produced by our transformations using the notion introduced in
+
+Definition A.3.
+Definition A.3. A chase tree 𝑇 is a subset of a chase tree 𝑇 ′, written 𝑇 ⊆ 𝑇 ′, if the tree of 𝑇 is a subtree of 𝑇 ′ (i.e., the root of 𝑇 is the root of 𝑇 ′,
+and whenever vertex 𝑣 is a parent of vertex 𝑣 ′ in 𝑇 , then 𝑣 is a parent of 𝑣 ′ in 𝑇 ′), and 𝑇 (𝑣) ⊆ 𝑇 ′ (𝑣) holds for each vertex 𝑣 of 𝑇 .
+
+We are now ready to present our transformations, which we capture in a series of lemmas. We next summarize the main intuitions.
+
+• In Lemma A.4, we show that an arbitrary chase sequence can be transformed into a local chase sequence by “slowing down” propagation
+
+steps so that facts are copied only between vertices that are adjacent in a chase tree.
+
+• In Lemma A.5, we show that each local chase sequence can be transformed into a rootward chase sequence. Intuitively, instead of
+propagating a fact from a parent to a child, we “regrow” a clone of the relevant child and the entire subtree underneath. The relevant fact
+is then copied as part of the chase step with the non-full GTGD that “regrows” the child’s clone.
+
+• In Lemma A.6, we show that each rootward chase sequence can be transformed to an almost one-pass chase sequence. The main difficulty
+arises due to the fact that steps in a rootward chase sequence can be applied to arbitrary vertices. We address this problem by shuffling
+and regrowing parts of the chase trees.
+
+• Finally, in Lemma A.7, we show that each almost one-pass chase proof can be transformed to a one-pass chase proof by pruning irrelevant
+
+parts of the chase sequence.
+Lemma A.4. For each tree-like chase sequence 𝑇0, . . . ,𝑇𝑛 for 𝐼 and Σ, there exists a local tree-like chase sequence 𝑇 0, . . . ,𝑇 𝑚 for 𝐼 and Σ such
+
+that 𝑇𝑛 ⊆ 𝑇 𝑚.
+
+Proof. Each propagation step in 𝑇0, . . . ,𝑇𝑛 that copies more than one fact can clearly be “expanded” into several steps, each copying just
+one fact. Moreover, due to Claim 1 of Lemma A.1, each propagation step that copies a fact 𝐹 between vertices 𝑣 and 𝑣 ′ that are further apart
+can be “expanded” into several steps that propagate 𝐹 to all vertices on the unique path between 𝑣 and 𝑣 ′.
+□
+
+Lemma A.5. For each local tree-like chase sequence 𝑇0, . . . ,𝑇𝑛 for 𝐼 and Σ, there exists a rootward tree-like chase sequence 𝑇 0, . . . ,𝑇 𝑚 for 𝐼
+
+and Σ such that
+
+(S1) 𝑇𝑛 ⊆ 𝑇 𝑚, and
+(S2) for each vertex 𝑣 in 𝑇𝑛 that is introduced by a chase step with a non-full GTGD 𝜏 ∈ Σ and substitutions 𝜎 and 𝜎 ′, vertex 𝑣 is introduced
+into some 𝑇 𝑘 with 0 ≤ 𝑘 ≤ 𝑚 by a chase step with the same 𝜏, 𝜎, and 𝜎 ′.
+
+Proof. Let 𝑇0, . . . ,𝑇𝑛 be an arbitrary local tree-like chase sequence for 𝐼 and Σ. We prove the claim by induction on 0 ≤ 𝑖 ≤ 𝑛. The
+induction base 𝑖 = 0 holds trivially. For the induction step, we assume that the claim holds for some 𝑖 with 0 ≤ 𝑖 < 𝑛. By the inductive
+assumption, there exists a rootward chase sequence 𝑇 0, . . . ,𝑇 𝑗 for 𝐼 such that 𝑇𝑖 ⊆ 𝑇 𝑗 and property (S2) holds. Let 𝑣 be the vertex of 𝑇𝑖 to
+which a chase or propagation step is applied to derive 𝑇𝑖+1. By Definition A.3, chase tree 𝑇 𝑗 contains vertex 𝑣 and 𝑇𝑖 (𝑣) ⊆ 𝑇 𝑗 (𝑣) holds. We
+now consider ways in which 𝑇𝑖+1 can be derived from 𝑇𝑖 .
+
+Assume that 𝑇𝑖+1 is obtained from 𝑇𝑖 by a chase step with non-full TGD 𝜏 ∈ Σ, and let 𝑣 ′ be the child of 𝑣 introduced by the step. Without
+loss of generality, we can choose 𝑣 ′ and the fresh labeled nulls such that they do not occur in 𝑇 𝑗 . Now let 𝑇 𝑗+1 be obtained from 𝑇 𝑗 by
+adding 𝑣 ′ as a child of 𝑣 and setting 𝑇 𝑗+1 (𝑣 ′) = 𝑇𝑖+1 (𝑣 ′). Clearly, 𝑇 0, . . . ,𝑇 𝑗 ,𝑇 𝑗+1 is a rootward chase sequence such that 𝑇𝑖+1 ⊆ 𝑇 𝑗+1 and
+property (S2) hold, as required.
+
+Assume that 𝑇𝑖+1 is obtained from 𝑇𝑖 by a chase step with a full TGD 𝜏 ∈ Σ deriving a fact 𝐹 , or by a rootward propagation step that copies
+a fact 𝐹 from 𝑇𝑖 (𝑣) to the parent of 𝑣. Let 𝑣 ′ be the recently updated vertex of 𝑇𝑖+1. Chase tree 𝑇 𝑗 clearly contains 𝑣 ′. If 𝐹 ∈ 𝑇 𝑗 (𝑣 ′), then
+sequence 𝑇 0, . . . ,𝑇 𝑗 satisfies the inductive property. If 𝑇𝑖+1 is obtained from 𝑇𝑖 by a propagation step, then 𝐹 is Σ-guarded by 𝑇𝑖 (𝑣 ′). But
+then, 𝑇𝑖 (𝑣 ′) ⊆ 𝑇 𝑗 (𝑣 ′) ensures that 𝐹 is also Σ-guarded by 𝑇 𝑗 (𝑣 ′) and thus the propagation step is applicable to vertices 𝑣 and 𝑣 ′ in 𝑇 𝑗 . Now
+let 𝑇 𝑗+1 to be the same as 𝑇 𝑗 but with 𝑇 𝑗+1 (𝑣 ′) = 𝑇 𝑗 (𝑣 ′) ∪ {𝐹 } and with 𝑣 ′ being the recently updated vertex. Clearly, 𝑇 0, . . . ,𝑇 𝑗 ,𝑇 𝑗+1 is a
+rootward chase sequence satisfying 𝑇𝑖+1 ⊆ 𝑇 𝑗+1, as required. Moreover, property (S2) holds by the induction hypothesis.
+
+The only remaining case is when 𝑇𝑖+1 is obtained from 𝑇𝑖 by applying a propagation step that copies one fact 𝐹 to a child 𝑣 ′ of 𝑣. By
+Definition A.3, chase tree 𝑇 𝑗 contains vertex 𝑣 ′ and 𝑇𝑖 (𝑣 ′) ⊆ 𝑇 𝑗 (𝑣 ′) holds. Sequence 𝑇 0, . . . ,𝑇 𝑗 satisfies the inductive property if 𝐹 ∈ 𝑇 𝑗 (𝑣 ′)
+holds, so we next assume 𝐹 ∉ 𝑇 𝑗 (𝑣 ′). We next show that we can simulate propagation by “replaying” the chase steps that generate 𝑣 ′ and all
+of its descendants. Towards this goal, let 𝑇𝑘 be the chase tree in the original sequence where 𝑣 ′ is first introduced by applying a chase step
+with the non-full GTGD 𝜏 = 𝛽 → ∃(cid:174)𝑦 𝜂 ∈ Σ, and let 𝜎 and 𝜎 ′ be substitutions used in the step. By the inductive property (S2), there exists ℓ0
+with 0 < ℓ0 ≤ 𝑗 such that 𝑣 ′ is introduced in 𝑇 ℓ0 as the result of applying a chase step with the same non-full TGD 𝜏 and substitutions 𝜎 and
+𝜎 ′. Finally, let 𝑇 ℓ0
+, . . . ,𝑇 ℓ𝑚 be the subsequence of 𝑇 0, . . . ,𝑇 𝑗 consisting of precisely those chase trees that were obtained by applying a chase
+or a propagation step to 𝑣 ′ or a descendant of 𝑣 ′. In other words, the chase steps producing 𝑇 ℓ0
+, . . . ,𝑇 ℓ𝑚 are exactly the steps that we need to
+“replay” to simulate the propagation of 𝐹 from 𝑣 to 𝑣 ′.
+Our objective is to “replay” the steps producing 𝑇 ℓ0
+
+, . . . ,𝑇 ℓ𝑚 so that they introduce exactly the same vertices and labeled nulls, which is
+needed because property (S1) talks about exact containment of the final chase trees of the two sequences (rather than containment up to
+isomorphism). A technical issue is that these vertices and labeled nulls already occur in the sequence 𝑇 0, . . . ,𝑇 𝑗 ; thus, if we extended this
+sequence directly, we could not “reapply” the chase steps with non-full GTGDs, which by definition introduce fresh vertices and labeled
+nulls. To get around this, we first perform the following renaming step. Let 𝑁 be the set of labeled nulls introduced by the chase steps
+, . . . ,𝑇 ℓ𝑚 , and let 𝑊 be the set of introduced vertices (thus, 𝑊 contains 𝑣 ′ and all of its descendants).
+with non-full TGDs in subsequence 𝑇 ℓ0
+Moreover, let 𝑈 0, . . . , 𝑈 𝑗 be the chase sequence obtained by uniformly replacing in 𝑇 0, . . . ,𝑇 𝑗 each labeled null in 𝑁 with a distinct, fresh
+labeled null, and by uniformly replacing each vertex 𝑤 ∈ 𝑊 by a fresh vertex.
+
+We next describe the chase trees that will be produced by “replaying” the steps producing the subsequence 𝑇 ℓ0
+
+, . . . ,𝑇 ℓ𝑚 . Intuitively, we
+must “graft” the results of these steps onto 𝑈 𝑗 : for 𝑣 ′ or a descendant of 𝑣 ′ we take the results of the chase steps in the subsequence, and for
+each other vertex we copy the content from 𝑈 𝑗 . Formally, let 𝑉 0, . . . , 𝑉 𝑚 be the sequence obtained from the subsequence 𝑇 ℓ0
+, . . . ,𝑇 ℓ𝑚 using
+the following steps.
+(R1) For each 0 ≤ 𝑝 ≤ 𝑚 and each vertex 𝑤 in 𝑈 𝑗 such that 𝑤 is neither 𝑣 ′ nor a descendant of 𝑣 ′ in 𝑈 𝑗 , we set 𝑉 𝑝 (𝑤) = 𝑈 𝑗 (𝑤).
+(R2) For each 0 ≤ 𝑝 ≤ 𝑚 and each vertex 𝑤 that occurs in 𝑇 ℓ𝑝 such that 𝑤 is 𝑣 ′ or a descendant of 𝑣 ′ in 𝑇 ℓ𝑝 , we set 𝑉 𝑝 (𝑤) = 𝑇 ℓ𝑝 (𝑤).
+(R3) We add to 𝑉 0 (𝑣 ′) each fact 𝐺 ∈ 𝑈 𝑗 (𝑣) that is Σ-guarded by 𝜎 ′ (𝜂).
+(R4) We analogously extend each 𝑉 𝑝 with 1 ≤ 𝑝 ≤ 𝑚 to ensure that each chase step with a non-full GTGD correctly propagates all relevant
+
+facts to a child.
+
+We now argue that 𝑈 0, . . . , 𝑈 𝑗 , 𝑉 0, . . . , 𝑉 𝑚 is a rootward chase sequence that satisfies properties (S1) and (S2). Towards this goal, we make
+
+the following observations.
+• Sequence 𝑈 0, . . . , 𝑈 𝑗 is a rootward chase sequence produced by the same steps as 𝑇 0, . . . ,𝑇 𝑗 , but with the vertices in 𝑊 and labeled nulls
+
+in 𝑁 uniformly renamed. Also, due to step (R4), 𝑉 0, . . . , 𝑉 𝑚 is a rootward chase sequence produced by the same steps as 𝑇 ℓ0
+
+, . . . ,𝑇 ℓ𝑚 .
+
+• Chase tree 𝑉 0 coincides with 𝑈 𝑗 on each vertex that is not 𝑣 ′ or a descendant of 𝑣 ′. Moreover, 𝑈 𝑗 does not contain a labeled null in 𝑁 ,
+and it does not contain 𝑣 ′ or a descendant of 𝑣 ′; thus, 𝑉 0 can be seen as the result of applying to 𝑈 𝑗 a chase step with the non-full GTGD
+𝜏 and substitutions 𝜎 and 𝜎 ′ that introduces vertex 𝑣 ′ as a child of 𝑣.
+
+• We now show that property (S2) is satisfied—that is, that 𝑇𝑖+1 ⊆ 𝑉 𝑚 holds. Towards this goal, consider an arbitrary vertex 𝑤 occurring
+in 𝑇𝑖+1; by the induction assumption, we have 𝑇𝑖 (𝑤) ⊆ 𝑇 𝑗 (𝑤). If 𝑤 is neither 𝑣 ′ nor a descendant thereof, then neither 𝑤 nor a labeled
+null occurring in 𝑇𝑖 (𝑤) was renamed in 𝑈 𝑗 , so we have 𝑇 𝑗 (𝑤) = 𝑈 𝑗 (𝑤) = 𝑉 𝑚 (𝑤), where the last equality is ensured by step (R1); thus,
+𝑇𝑖+1 (𝑤) = 𝑇𝑖 (𝑤) ⊆ 𝑉 𝑚 (𝑤) holds, as required. Now assume that 𝑤 is 𝑣 ′ or a descendant thereof. Then, 𝑇 𝑗 (𝑤) = 𝑇 ℓ𝑚 (𝑤) holds by the fact
+that 𝑇 ℓ𝑚 is the last place in 𝑇 0, . . . ,𝑇 𝑗 where 𝑣 ′ or a descendant of 𝑣 ′ was modified, and 𝑇 ℓ𝑚 (𝑤) = 𝑉 𝑚 (𝑤) holds by step (R2); putting it
+all together, we have 𝑇𝑖 (𝑤) ⊆ 𝑉 𝑚 (𝑤). Now if 𝑤 is not 𝑣 ′ (i.e., 𝑤 is a descendant of 𝑣 ′), then 𝑇𝑖+𝑖 (𝑤) = 𝑇𝑖 (𝑤) ⊆ 𝑉 𝑚 (𝑤) holds, as required.
+We finally consider the case when 𝑤 is 𝑣 ′, so 𝑇𝑖+1 (𝑣 ′) = 𝑇𝑖 (𝑣 ′) ∪ {𝐹 }. Since the propagation step is applicable to 𝑇𝑖 , fact 𝐹 is Σ-guarded by
+𝑇𝑖 (𝑣 ′). By Claim 2 of Lemma A.1, fact 𝐹 is also Σ-guarded by 𝑇𝑘 (𝑣 ′). Finally, by the definition of a chase step with a non-full TGD, fact 𝐹
+is Σ-guarded by 𝜎 ′ (𝜂). But then, step (R3) ensures 𝐹 ∈ 𝑉 0 (𝑣 ′) ⊆ 𝑉 𝑚 (𝑣 ′). Consequently, 𝑇𝑖+𝑖 (𝑣 ′) ⊆ 𝑉 𝑚 (𝑣 ′) holds, as required.
+
+• We now show that property (S2) is satisfied. To this end, consider an arbitrary vertex 𝑤 in 𝑇𝑖+1 introduced by a chase step with a non-full
+GTGD 𝜏 and substitutions 𝜎 and 𝜎 ′. If 𝑤 is not 𝑣 ′ or a descendant thereof, then the labeled nulls introduced by the chase step are not
+renamed in 𝑈 0, . . . , 𝑈 𝑗 , so the claim holds by the induction assumption. Otherwise, the chase steps producing 𝑉 0, . . . , 𝑉 𝑚 are exactly the
+□
+, . . . ,𝑇 ℓ𝑚 , so the claim holds by the induction assumption too.
+same as the chase steps producing 𝑇 ℓ0
+
+Lemma A.6. For each rootward tree-like chase sequence 𝑇0, . . . ,𝑇𝑛 for 𝐼 and Σ, there exists an almost one-pass chase sequence 𝑇 0, . . . ,𝑇 𝑚 for 𝐼
+
+and Σ such that 𝑇𝑛 ⊆ 𝑇 𝑚.
+
+Proof. Let 𝑇0, . . . ,𝑇𝑛 be an arbitrary rootward tree-like chase sequence for 𝐼 and Σ. The induction base 𝑖 = 0 holds trivially. For the
+induction step, we assume that the claim holds for some 𝑖 with 0 ≤ 𝑖 < 𝑛. By the inductive assumption, there exists an almost one-pass chase
+sequence 𝑇 0, . . . ,𝑇 𝑗 for 𝐼 and Σ such that 𝑇𝑖 ⊆ 𝑇 𝑗 holds. Now assume that 𝑇𝑖+1 is obtained by applying a chase or a propagation step to some
+vertex 𝑣 of 𝑇𝑖 , and let 𝑘 be the maximal number such that 0 ≤ 𝑘 ≤ 𝑗 and 𝑣 is recently updated in 𝑇 𝑘 . Such 𝑘 clearly exists since 𝑣 occurs in
+𝑇 𝑗 , and 𝑇𝑖 (𝑣) ⊆ 𝑇 𝑘 (𝑣) holds because 𝑘 is maximal. We now consider ways in which 𝑇𝑖+1 can be derived from 𝑇𝑖 .
+
+Assume that 𝑇𝑖+1 is obtained from 𝑇𝑖 by a chase step with non-full GTGD 𝜏 ∈ Σ and substitutions 𝜎 and 𝜎 ′, and let 𝑣 ′ be the child of 𝑣
+introduced by the step. Without loss of generality, we can choose 𝑣 ′ and the fresh labeled nulls such that they do not occur in 𝑇 𝑗 . We shall
+now “move” this chase step so that it is performed immediately after 𝑇 𝑘 . Towards this goal, we describe the chase trees that are obtained by
+this move. For each 𝑝 with 𝑘 ≤ 𝑝 ≤ 𝑗, let 𝑈 𝑝 be the chase tree obtained from 𝑇 𝑝 by adding vertex 𝑣 ′ and letting 𝑈 𝑝 (𝑣 ′) = 𝑇𝑖+1 (𝑣 ′). We now
+argue that 𝑇 0, . . . ,𝑇 𝑘, 𝑈 𝑘, . . . , 𝑈 𝑗 is an almost one-pass chase sequence satisfying the conditions of the lemma.
+• Chase tree 𝑈 𝑘 can be seen as obtained from 𝑇 𝑘 by a chase step with 𝜏 and substitutions 𝜎 and 𝜎 ′. Moreover, for each 𝑝 with 𝑘 ≤ 𝑝 < 𝑗,
+chase tree 𝑈 𝑝+1 is obtained from 𝑈 𝑝 in the same way as 𝑇 𝑝+1 is obtained from 𝑇 𝑝 . Thus, all preconditions of all chase steps are satisfied.
+• Chase tree 𝑈 𝑘 is obtained from 𝑇 𝑘 by applying the chase step to the recently updated vertex 𝑣 of 𝑇 𝑘 . Moreover, if 𝑘 < 𝑗, then 𝑇 𝑘+1 is
+obtained from 𝑇 𝑘 by applying a step to 𝑣 or an ancestor of 𝑣, and so 𝑈 𝑘+1 is obtained from 𝑈 𝑘 by applying a step to an ancestor of the
+recently updated vertex of 𝑈 𝑘 . Thus, the sequence is almost one-pass.
+
+• The construction clearly satisfies 𝑇𝑖+1 ⊆ 𝑈 𝑗 .
+
+In the rest of this proof we consider the case when 𝑇𝑖+1 is obtained from 𝑇𝑖 by a chase step with a full GTGD 𝜏 ∈ Σ deriving a fact 𝐹 , or
+by a propagation step that copies a fact 𝐹 from 𝑇𝑖 (𝑣) to the parent of 𝑣. Let 𝑣 ′ be the recently updated vertex of 𝑇𝑖+1. Chase tree 𝑇 𝑗 clearly
+
+contains 𝑣 ′. If 𝐹 ∈ 𝑇 𝑘 (𝑣 ′), then sequence 𝑇 0, . . . ,𝑇 𝑗 satisfies the inductive property, so we next assume that 𝐹 ∉ 𝑇 𝑘 (𝑣 ′) holds. We shall now
+transform 𝑇 0, . . . ,𝑇 𝑗 so that this step is applied immediately after 𝑇 𝑘 , and fact 𝐹 is propagated towards the root as far as possible. Since this
+will move the recently updated vertex towards the root, we will then “reapply” all relevant steps from 𝑇 0, . . . ,𝑇 𝑗 to “regrow” the relevant
+part of the sequence. In each case, we specify the structure of the chase trees and discuss the steps that produce these trees.
+
+Let 𝑈 0 be obtained from 𝑇 𝑘 by adding 𝐹 to 𝑇 𝑘 (𝑣). We argue that 𝑈 0 can be seen as being obtained from 𝑇 𝑘 by the same step that produces
+
+𝑇𝑖+1 from 𝑇𝑖 .
+• If 𝑇𝑖+1 is obtained from 𝑇𝑖 by a chase step with a full GTGD, then 𝐹 ∉ 𝑇 𝑘 (𝑣 ′) holds ensures that the same step is applicable to 𝑇 𝑘 (𝑣 ′)
+
+(where 𝑣 ′ = 𝑣).
+
+• If 𝑇𝑖+1 is obtained from 𝑇𝑖 by a propagation step, then 𝐹 is Σ-guarded by 𝑇𝑖 (𝑣 ′). But then, 𝑇𝑖 (𝑣 ′) ⊆ 𝑇 𝑗 (𝑣 ′) ensures that 𝐹 is also Σ-guarded
+by 𝑇 𝑗 (𝑣 ′), and Claim 2 of Lemma A.1 ensures that 𝐹 is Σ-guarded by 𝑇 𝑘 (𝑣 ′). Thus, the propagation step is applicable to vertices 𝑣 and 𝑣 ′
+in 𝑇 𝑘 .
+
+Moreover, let 𝑈 1, . . . , 𝑈 𝑠 be the chase trees obtained by propagating 𝐹 starting from 𝑈 0 towards the root using local steps as long as possible.
+Clearly, 𝑇 0, . . . ,𝑇 𝑘, 𝑈 0, 𝑈 1, . . . , 𝑈 𝑠 is a correctly formed almost one-pass chase sequence. Let 𝑣 ′′ be the recently updated vertex of 𝑈 𝑠 ,
+
+We cannot simply append the step producing 𝑇𝑘+1 after 𝑈 𝑠 because this step might not be applicable to 𝑣 ′′ or an ancestor thereof. Thus,
+to obtain the chase sequence satisfying the claim of the lemma, we shall find a place in sequence 𝑇 0, . . . ,𝑇 𝑗 where vertex 𝑣 ′′ is introduced,
+and we shall “replay” all steps from that point onwards. In doing so, we shall use chase steps that introduce the same vertices and labeled
+nulls, so we will first need to rename these in the sequence 𝑇 0, . . . ,𝑇 𝑘, 𝑈 0, 𝑈 1, . . . , 𝑈 𝑠 .
+
+Let ℓ be the smallest integer such that 𝑇 ℓ contains 𝑣 ′′. Clearly, ℓ ≤ 𝑘 holds. Now let 𝑁 be the set of labeled nulls introduced by
+applying a chase step to 𝑣 ′′ or a descendant thereof, and let 𝑊 the the set of descendants of 𝑣 ′′ in the sequence 𝑇 0, . . . ,𝑇 𝑗 . Moreover, let
+𝑇 ′
+𝑠 be the chase sequence obtained by uniformly replacing in 𝑇 0, . . . ,𝑇 𝑘, 𝑈 0, 𝑈 1, . . . , 𝑈 𝑠 each labeled null in 𝑁 with a
+0
+distinct, fresh labeled null, and by uniformly replacing each vertex 𝑤 ∈ 𝑊 by a fresh vertex.
+
+, . . . , 𝑈 ′
+
+, . . . ,𝑇 ′
+
+𝑘, 𝑈 ′
+0
+
+, 𝑈 ′
+1
+
+We now transform chase trees 𝑇 ℓ+1, . . . ,𝑇 𝑗 into chase tress 𝑉 ℓ+1, . . . , 𝑉 𝑗 that reflect the result of “replaying” after 𝑈 ′
+
+𝑠 the steps producing
+
+the former sequence. Intuitively, each 𝑉 𝑝 is a “union” of 𝑈 𝑠 and 𝑇 𝑝 . Formally, for each 𝑝 with ℓ < 𝑝 ≤ 𝑗, we define 𝑉 𝑝 as follows.
+(S1) The chase tree 𝑉 𝑝 contains the union of the vertices of 𝑈 ′
+(S2) For each vertex 𝑤 occurring only in 𝑈 ′
+(S3) For each vertex 𝑤 occurring in both 𝑈 ′
+(S4) If 𝑇 𝑝 is obtained by applying to a vertex 𝑤 of 𝑇 𝑝 −1 a chase step with a non-full GTGD 𝜏 = ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂] and substitutions 𝜎 and 𝜎 ′,
+then, for 𝑤 ′ the child of 𝑤 introduced by the step, we extend 𝑉 𝑝 (𝑤 ′) with each fact 𝐺 ∈ 𝑉 𝑝 −1 (𝑤) that is Σ-guarded by 𝜎 ′ (𝜂).
+
+𝑠 (resp. 𝑇 𝑝 ), we define 𝑉 𝑝 (𝑤) = 𝑈 ′
+𝑠 and 𝑇 𝑝 , we define 𝑉 𝑝 (𝑤) = 𝑈 ′
+
+𝑠 (𝑤) (resp. 𝑉 𝑝 (𝑤) = 𝑇 𝑝 (𝑤)).
+
+𝑠 (𝑤) ∪ 𝑇 𝑝 (𝑤).
+
+𝑠 and 𝑇 𝑝 .
+
+𝑠, 𝑉 ℓ+1, . . . , 𝑉 𝑗 contains an almost one-pass chase sequence for Σ and 𝐼 that satisfies the
+
+, . . . ,𝑇 ′
+
+We now argue that 𝑇 ′
+0
+conditions of this lemma.
+• Sequence 𝑇 ′
+, 𝑈 ′
+𝑘, 𝑈 ′
+1
+0
+0
+• For ℓ ≤ 𝑝 < 𝑗, either 𝑉 𝑝+1 is obtained from 𝑉 𝑝 (or 𝑈 ′
+
+, . . . , 𝑈 ′
+
+, . . . , 𝑈 ′
+
+, . . . ,𝑇 ′
+
+𝑘, 𝑈 ′
+0
+
+, 𝑈 ′
+1
+
+𝑠 is clearly a valid almost one-pass chase sequence.
+
+𝑠 in case 𝑝 = ℓ) by the same step that produces 𝑇 𝑝+1 from 𝑇 𝑝 , or the step is not
+applicable. In the latter case, we can simply drop such 𝑉 𝑝+1 from the sequence. By dropping all such 𝑉 𝑝+1, we clearly obtain a valid
+almost one-pass chase sequence.
+
+• We have 𝑇𝑖 ⊆ 𝑇 𝑗 by the induction assumption, and steps (S1)–(S3) clearly ensure 𝑇𝑖 ⊆ 𝑉 𝑗 . Moreover, 𝑇𝑖+1 differs from 𝑇𝑖 only in vertex 𝑣 ′,
+𝑠 (𝑣 ′′), and step (S4) ensures that 𝐹 is propagated in
+□
+
+where 𝑇𝑖+1 (𝑣 ′) = 𝑇 (𝑣 ′) ∪ {𝐹 } holds. Our construction, however, clearly ensures 𝐹 ∈ 𝑈 ′
+each chase step with a non-full GTGD introducing a vertex on the unique path from 𝑣 ′′ to 𝑣 ′. Thus, 𝑇𝑖+1 ⊆ 𝑉 𝑗 holds.
+Lemma A.7. For each base fact 𝐹 and each almost one-pass tree-like chase proof of 𝐹 from 𝐼 and Σ, there exists a one-pass tree-like chase proof
+
+of 𝐹 from 𝐼 and Σ.
+
+Proof. Consider an arbitrary base fact 𝐹 and an arbitrary almost one-pass tree-like chase proof 𝑇0, . . . ,𝑇𝑛 of 𝐹 from 𝐼 and Σ. Since 𝐹 is
+a base fact, without loss of generality we can assume that 𝐹 occurs in the facts of the root vertex. Now let 𝑇𝑖 be the first chase tree that
+contains 𝐹 in the root, and let 𝑊 be the set containing each non-root vertex 𝑣 occurring in any of the chase trees such that no propagation
+step is applied to 𝑣. We transform this proof to a one-pass proof as follows. First, we delete each 𝑇𝑗 with 𝑖 < 𝑗 ≤ 𝑛. Next, we delete in each
+remaining 𝑇𝑗 each vertex 𝑣 ∈ 𝑊 and each descendant of 𝑣. Finally, we delete each remaining 𝑇𝑗 that is equal to 𝑇𝑗+1. After this transformation,
+every vertex has a propagation step applied to it. It is straightforward to see that the result is a one-pass tree-like chase sequence. Moreover,
+□
+since 𝐹 occurs in the root, the sequence is a tree-like chase proof of 𝐹 from 𝐼 and Σ.
+
+A.2 Proof of Proposition 4.7: Rewriting Criterion Using One-pass Chase Proofs
+Proposition 4.7. A Datalog program Σ′ is a rewriting of a finite set of GTGDs Σ in head-normal form if
+
+• Σ′ is a logical consequence of Σ,
+
+• each Datalog rule of Σ is a logical consequence of Σ′, and
+• for each base instance 𝐼 , each one-pass tree-like chase sequence 𝑇0, . . . ,𝑇𝑛 for 𝐼 and Σ, and each loop 𝑇𝑖, . . . ,𝑇𝑗 at the root vertex 𝑟 with output
+
+fact 𝐹 , there exist a Datalog rule 𝛽 → 𝐻 ∈ Σ′ and a substitution 𝜎 such that 𝜎 (𝛽) ⊆ 𝑇𝑖 (𝑟 ) and 𝜎 (𝐻 ) = 𝐹 .
+
+Proof. Let Σ and Σ′ be as specified in the proposition, let 𝐼 be an arbitrary base instance, and let 𝐹 be an arbitrary base fact. Since Σ′ is a
+logical consequence of Σ, it is clear that 𝐼, Σ′ |= 𝐹 implies 𝐼, Σ |= 𝐹 . Thus, we assume that 𝐼, Σ |= 𝐹 holds, and we prove that 𝐼, Σ′ |= 𝐹 holds as
+well. By Theorem 4.2, there exists a one-pass tree-like chase proof 𝑇0, . . . ,𝑇𝑛 of 𝐹 from 𝐼 and Σ. Without loss of generality, we can assume
+that 𝐹 is produced in the last step of the proof, and so the recently updated vertex of 𝑇𝑛 is root vertex 𝑟 . Let 𝑖0 < · · · < 𝑖𝑚 be exactly the
+indexes between 0 and 𝑛 such that the recently updated vertex of 𝑇𝑖 𝑗 is 𝑟 . We next construct a tree-like chase sequence 𝑇 0, . . . ,𝑇 𝑘 for 𝐼 and
+Σ′ such that 𝑇𝑛 (𝑟 ) ⊆ 𝑇 𝑘 (𝑟 ). To formalize our inductive construction of this chase sequence, we shall also construct a sequence of indexes
+ℓ0, . . . , ℓ𝑚 such that ℓ𝑚 = 𝑘 and, for each 𝑗 with 0 ≤ 𝑗 ≤ 𝑚, we have 𝑇𝑖 𝑗 (𝑟 ) ⊆ 𝑇 ℓ𝑗 (𝑟 ); in other words, each index ℓ𝑗 helps us establish the
+inductive property by relating 𝑇𝑖 𝑗 and 𝑇 ℓ𝑗 . For the base case, 𝑖0 = 0 holds by the definition of a tree-like chase proof; thus, we set 𝑇 0 = 𝑇0 and
+ℓ0 = 0, and the required property clearly holds. For the inductive step, we consider arbitrary 0 < 𝑗 ≤ 𝑚 such that the claim holds for 𝑗 − 1,
+and assume that the sequence constructed thus far is 𝑇 ℓ0
+• The recently updated vertex of 𝑇𝑖 𝑗 −1 is 𝑟 . Thus, 𝑖 𝑗 − 1 = 𝑖 𝑗 −1, and 𝑇𝑖 𝑗 is obtained from 𝑇𝑖 𝑗 −1 by a chase step with a full GTGD 𝛽 → 𝐻 ∈ Σ
+producing a fact 𝐺 ∈ 𝑇𝑖 𝑗 (𝑟 ). The second condition of the proposition ensures that 𝛽 → 𝐻 is a logical consequence of Σ′, so 𝐺 can be
+derived from 𝑇 ℓ1 (𝑟 ) and the Datalog rules of Σ′ using ℘ steps. We then define ℓ𝑗 = ℓ𝑗 −1 + ℘, and we append the corresponding steps to
+obtain the sequence 𝑇 0, . . . ,𝑇 ℓ𝑗 −1
+
+, . . . ,𝑇 ℓ𝑗 −1 . We have the following two cases.
+
+, . . . ,𝑇 ℓ𝑗 .
+
+• Otherwise, 𝑇𝑖 𝑗 −1
+
+, . . . ,𝑇𝑖 𝑗 is a loop at the root vertex 𝑟 with some output fact 𝐺 ∈ 𝑇𝑖 𝑗 (𝑟 ). The third condition of the proposition ensures
+that there exists a Datalog rule 𝛽 → 𝐻 ∈ Σ′ and a substitution 𝜎 such that 𝜎 (𝛽) ⊆ 𝑇𝑖 (𝑟 ) and 𝜎 (𝐻 ) = 𝐺. We define ℓ𝑗 = ℓ𝑗 −1 + 1, and we
+define 𝑇 ℓ𝑗 as the the chase tree containing just the root vertex 𝑟 such that 𝑇 ℓ𝑗 (𝑟 ) = 𝑇 ℓ𝑗 −1 (𝑟 ) ∪ {𝐺 }; thus, 𝑇 ℓ𝑗 is obtained from 𝑇 ℓ𝑗 −1 by
+applying the Datalog rule 𝛽 → 𝐻 ∈ Σ′ to the root vertex 𝑟 . Moreover, 𝑇𝑖 𝑗 (𝑟 ) ⊆ 𝑇 ℓ𝑗 (𝑟 ) clearly holds, as required.
+□
+
+A.3 Proof of Proposition A.8: Properties of One-Pass Chase Proofs
+We finally prove a property that will be needed in the proofs in Appendices B–E. This property intuitively ensures that, as soon as a fact 𝐹 is
+derived in the child vertex of a loop such that 𝐹 does not contain any null values introduced by the child, the loop is completed and 𝐹 is
+propagated to the parent vertex.
+
+Proposition A.8. For each loop 𝑇𝑖, . . . ,𝑇𝑗 at a vertex 𝑣 in a one-pass tree-like chase proof for some 𝐼 and Σ, for 𝑖 < 𝑘 ≤ 𝑗, and for 𝑣 ′ the vertex
+
+introduced in 𝑇𝑖+1, set terms(cid:0)𝑇𝑘 (𝑣 ′)(cid:1) \ nulls(cid:0)𝑇𝑖+1 (𝑣 ′)(cid:1) is Σ-guarded by 𝑇𝑖 (𝑣).
+
+Proof. Consider an arbitrary loop 𝑇𝑖, . . . ,𝑇𝑗 at a vertex 𝑣 in a one-pass tree-like chase proof for some 𝐼 and Σ, and let 𝑣 ′ be the child of
+𝑣 introduced by the chase step producing 𝑇𝑖+1. We prove the claim by induction on 𝑘 with 𝑖 < 𝑘 ≤ 𝑗. For the induction base 𝑘 = 𝑖 + 1, the
+definition of a chase step with a non-full GTGD clearly ensures this claim for 𝑇𝑖+1 (𝑣 ′). For the induction step, consider an arbitrary 𝑘 such
+that the claim holds. Our claim holds trivially if 𝑇𝑘+1 (𝑣 ′) = 𝑇𝑘 (𝑣 ′), so we assume that 𝑇𝑘+1 (𝑣 ′) \ 𝑇𝑘 (𝑣 ′) contains exactly one fact 𝐹 , which
+can be derived in one of the following two ways.
+• Assume 𝐹 is obtained by a propagation step to vertex 𝑣 ′. Then, 𝐹 is Σ-guarded by 𝑇𝑘 (𝑣 ′), so terms(𝐹 ) ⊆ terms(cid:0)𝑇𝑘 (𝑣 ′)(cid:1) ∪ consts(Σ) holds.
+• Assume 𝐹 is obtained by applying a full GTGD 𝜏 ∈ Σ to 𝑇𝑘 (𝑣 ′) using a substitution 𝜎. Then, 𝜏 contains a guard atom 𝐴 in the body such
+
+that 𝜎 (𝐴) ⊆ 𝑇𝑘 (𝑣 ′); moreover, the head 𝜏 contains all variables of 𝐴, and so we have terms(𝐹 ) ⊆ terms(cid:0)𝑇𝑘 (𝑣 ′)(cid:1) ∪ consts(Σ).
+
+Either way, we have terms(cid:0)𝑇𝑘+1 (𝑣 ′)(cid:1) ⊆ terms(cid:0)𝑇𝑘 (𝑣 ′)(cid:1) ∪ consts(Σ). By the induction assumption, set terms(cid:0)𝑇𝑘 (𝑣 ′)(cid:1) \ nulls(𝑇𝑖+1 (𝑣 ′)) is
+Σ-guarded by 𝑇𝑖 (𝑣), and so set terms(cid:0)𝑇𝑘1
+□
+
+(𝑣 ′)(cid:1) \ nulls(𝑇𝑖+1 (𝑣 ′)) is also Σ-guarded by 𝑇𝑖 (𝑣), as required.
+
+B PROOFS FOR ExbDR
+B.1 Proof of Proposition 5.7: Properties of ExbDR
+
+Proposition 5.7. Each application of the ExbDR inference rule to 𝜏, 𝜏 ′, and 𝜃 as in Definition 5.5 satisfies the following properties.
+
+1. Some atom 𝐴′
+2. For each 1 ≤ 𝑖 ≤ 𝑛 such that 𝐴′
+
+𝑖 with 1 ≤ 𝑖 ≤ 𝑛 is a guard in 𝜏 ′.
+
+case that vars(cid:0)𝜎 (𝐴′
+
+𝑗 )(cid:1) ∩ (cid:174)𝑦 ≠ ∅ for each 1 ≤ 𝑗 ≤ 𝑛.
+
+𝑖 is a guard of 𝜏 ′, and for 𝜎 the (cid:174)𝑦-MGU of 𝐴′
+
+𝑖 and the corresponding atom 𝐴𝑖 such that 𝜎 ( (cid:174)𝑥) ∩ (cid:174)𝑦 = ∅, it is the
+
+3. The result is a GTGD whose body and head width are at most bwidth(Σ) and hwidth(Σ), respectively.
+
+Proof of Claim 1. Let 𝐺 be a guard for 𝜏 ′. For the sake of a contradiction, assume that 𝐺 is not one of the atoms 𝐴′
+1
+
+𝐺 ∈ 𝛽′. Since 𝑛 ≥ 1, atom 𝐴′
+variable 𝑦 ∈ (cid:174)𝑦. Moreover, the conditions of the ExbDR inference rule ensure 𝜃 (𝑦) = 𝑦. Since 𝑦 does not occur in 𝐴′
+
+𝑛—that is,
+1 in the body of 𝜏 ′ is matched to 𝐴1 in the head of 𝜏. Since 𝜏 is in head-normal form, 𝐴1 contains at least one
+1 and
+
+1 and 𝜃 unifies 𝐴′
+
+, . . . , 𝐴′
+
+𝐴1, atom 𝐴′
+vars(𝜃 (𝐺)) ∩ (cid:174)𝑦 ≠ ∅, which contradicts the requirement vars(𝜃 (𝛽′)) ∩ (cid:174)𝑦 = ∅ of the ExbDR inference rule.
+
+1 contains at some position a variable 𝑧 such that 𝜃 (𝑧) = 𝑦. Since 𝐺 is a guard for 𝜏 ′, variable 𝑧 occurs in 𝐺. Therefore, we have
+□
+
+Proof of Claim 2. Consider arbitrary 𝑖 such that 1 ≤ 𝑖 ≤ 𝑛 and 𝐴′
+
+𝑖 and the corresponding
+atom 𝐴𝑖 of 𝜏. Since 𝜃 is a unifier of 𝐴′
+𝑖 and 𝐴𝑖 as well as of other pairs of atoms, there clearly exists a substitution 𝜌 such that 𝜃 = 𝜌 ◦ 𝜎.
+Now consider an arbitrary 𝐴′
+𝑗 to the corresponding atom 𝐴𝑗 in the head of 𝜏. Since TGD 𝜏
+is in head-normal form, atom 𝐴𝑗 contains at least one variable 𝑦 ∈ (cid:174)𝑦. Since 𝜃 (𝑦) = 𝑦, we necessarily have 𝑦 ∈ vars(𝜃 (𝐴′
+𝑗 )). Consequently,
+atom 𝐴′
+𝑖 . Now assume for the sake of a
+contradiction that 𝜎 (𝑧) ≠ 𝑦. Then 𝜎 (𝑧) = 𝜎 (𝑥) for some 𝑥 ∈ vars(𝐴𝑖 ) and 𝑦 = 𝜃 (𝑧) = 𝜌 (𝜎 (𝑧)) = 𝜌 (𝜎 (𝑥)) = 𝜃 (𝑥). However, this contradicts
+□
+the requirement 𝜃 ( (cid:174)𝑥) ∩ (cid:174)𝑦 = ∅ of the ExbDR inference rule.
+
+𝑗 contains some variable 𝑧 such that 𝜃 (𝑧) = 𝑦. Since 𝐴′
+
+𝑗 with 1 ≤ 𝑗 ≤ 𝑛 in 𝜏 ′. Substitution 𝜃 matches 𝐴′
+
+𝑖 is a guard for 𝜏 ′, variable 𝑧 occurs in 𝐴′
+
+𝑖 is a guard of 𝜏 ′, and let 𝜎 be an MGU of 𝐴′
+
+Proof of Claim 3. By Claim 1, there exists 𝑖 with 1 ≤ 𝑖 ≤ 𝑛 such that atom 𝐴′
+
+𝑖 is a guard for 𝜏 ′. Thus, vars(𝛽′) ∪ vars(𝐻 ′) ⊆ vars(𝐴′
+𝑖 ).
+The ExbDR inference rule ensures vars(𝜃 (𝛽′)) ∩ (cid:174)𝑦 = ∅, which in turn ensures vars(𝜃 (𝛽′)) ⊆ vars(𝜃 (𝐴′
+𝑖 )) \ (cid:174)𝑦. Now let 𝐺 be a guard for 𝜏.
+We clearly have vars(𝜃 (𝛽)) ⊆ vars(𝜃 (𝐺)). Moreover, 𝜃 (𝑦𝑖 ) = 𝑦𝑖 and 𝜃 (𝑥) ∩ (cid:174)𝑦 = ∅ ensure vars(𝜃 (𝜂)) ∪ vars(𝜃 (𝐴𝑖 )) ⊆ vars(𝜃 (𝐺)) ∪ (cid:174)𝑦. Thus,
+𝜃 (𝐺) is a guard for the TGD produced by the ExbDR inference rule. Finally, since 𝐺 contains all variables of 𝜏, the widths of the resulting
+□
+TGD and 𝜏 are equal.
+
+B.2 Proof of Theorem 5.8: Correctness and Complexity of ExbDR
+
+Theorem 5.8. Program ExbDR(Σ) is a Datalog rewriting of a finite set of GTGDs Σ. Moreover, the rewriting can be computed in time
+) for 𝑟 the number of relations in Σ, 𝑎 the maximum relation arity in Σ, 𝑤𝑏 = bwidth(Σ), 𝑤ℎ = hwidth(Σ),
+
+𝑂 (𝑏𝑟 𝑑 · (𝑤𝑏 +𝑐 )𝑑𝑎 ·𝑟 𝑑 · (𝑤ℎ+𝑐 )𝑑𝑎
+𝑐 = |consts(Σ)|, and some 𝑏 and 𝑑.
+
+Proof of Correctness. Let Σ′ be the set Σ closed under the ExbDR inferences rule as specified in Definition 5.3. It is straightforward to
+see that Σ′ is a logical consequence of Σ, so ExbDR(Σ) is also a logical consequence of Σ. Moreover, ExbDR(Σ) contains each full GTGD of Σ
+up to redundancy, so each full GTGD of Σ is logically entailed by ExbDR(Σ). We next consider an arbitrary base instance 𝐼 and a one-pass
+tree-like chase sequence for 𝐼 and Σ, and we show the following property:
+
+(♦) for each loop 𝑇𝑖, . . . ,𝑇𝑗 in the sequence at some vertex 𝑣 with output fact 𝐹 , there exist a full GTGD 𝛽 → 𝐻 ∈ Σ′ and a
+substitution 𝜎 such that 𝜎 (𝛽) ⊆ 𝑇𝑖 (𝑣) and 𝐹 = 𝜎 (𝐻 ).
+
+Since ExbDR(Σ) contains all full TGDs of Σ′ and this property holds for the root vertex 𝑟 , Proposition 4.7 ensures that ExbDR(Σ) is a
+rewriting of Σ.
+
+Our proof is by induction on the length of the loop. The base case and the inductive step have the same structure, so we consider them
+jointly. Thus, consider an arbitrary loop 𝑇𝑖,𝑇𝑖+1, . . . ,𝑇𝑗 −1,𝑇𝑗 at vertex 𝑣 in the sequence, and assume that the claim holds for all shorter
+loops in the sequence. By the definition of the loop, chase tree 𝑇𝑖+1 is obtained from 𝑇𝑖 by applying a chase step to some non-full TGD
+0)) \ nulls(rng(𝜎0)), let 𝑣 ′ be the child
+∀(cid:174)𝑥 [𝛽0 → ∃(cid:174)𝑦 𝜂0] ∈ Σ. Let 𝜎0 and 𝜎 ′
+0 be the substitutions used in this chase step, let 𝑁 = nulls(rng(𝜎 ′
+of 𝑣 introduced in 𝑇𝑖+1, and let 𝑆 ⊆ 𝑇𝑖 (𝑣) be the facts that are copied to 𝑇𝑖+1 (𝑣 ′) because they are Σ-guarded by 𝜎 ′
+0 (𝜂0). Thus, we have
+𝑇𝑖+1 (𝑣 ′) = 𝑆 ∪ 𝜎 ′
+0 (𝜂0). By Proposition A.8 and the fact that a chase step is applied only if propagation to the parent is not applicable, the
+output fact of the loop is added to 𝑇𝑗 −1 (𝑣 ′) in step 𝑗 − 1, and in 𝑇𝑗 this fact is propagated back to 𝑇𝑗 (𝑣). In other words, for each 𝑘 with
+𝑖 < 𝑘 < 𝑗 − 1, each fact in 𝑇𝑘 (𝑣 ′) \ 𝑆 contains at least one labeled null from 𝑁 , or the fact would be Σ-guarded by 𝑇𝑖 (𝑣) and thus propagated
+back to vertex 𝑣. We show that, in the loop 𝑇𝑖,𝑇𝑖+1, . . . ,𝑇𝑗 −1,𝑇𝑗 fixed above, the following property holds for each 𝑘 with 𝑖 < 𝑘 < 𝑗 − 1:
+
+(♢) there exist a GTGD ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂] ∈ Σ′, a substitution 𝜎 such that 𝜎 (𝛽) ⊆ 𝑇𝑖 (𝑣), and a substitution 𝜎 ′ that extends 𝜎 by
+mapping (cid:174)𝑦 to fresh labeled nulls such that 𝑇𝑘 (𝑣 ′) ⊆ 𝑆 ∪ 𝜎 ′ (𝜂).
+
+We prove (♢) by induction on 𝑘. We have already proved the base case 𝑘 = 𝑖 + 1 above. For the inductive step, assume that (♢) holds for
+some 𝑘, so there exists a GTGD ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂] ∈ Σ′ and substitutions 𝜎 and 𝜎 ′ satisfying (♢) for 𝑘. Now consider 𝑇𝑘+1. Property (♢) holds by
+the inductive hypothesis if 𝑇𝑘+1 (𝑣 ′) = 𝑇𝑘 (𝑣 ′)—that is, if the step involves a descendant of 𝑣 ′. Otherwise, 𝑇𝑘+1 (𝑣 ′) = 𝑇𝑘 (𝑣 ′) ∪ {𝐺 } where fact
+𝐺 is obtained in one of the following two ways.
+• A full GTGD in Σ derives 𝐺 from 𝑇𝑘 (𝑣 ′). Set Σ′ contains this GTGD up to redundancy, so by Definition 5.1 there exist a full GTGD
+
+𝛽′′ → 𝐻 ′ ∈ Σ′ and a substitution 𝜌 such that 𝜌 (𝛽′′) ⊆ 𝑇𝑘 (𝑣 ′) and 𝜌 (𝐻 ′) = 𝐺.
+
+• Fact 𝐺 is the output of a loop at vertex 𝑣 ′. But then, this loop is shorter than 𝑇𝑖, . . . ,𝑇𝑗 so, by property (♦), there exists a full GTGD
+
+𝛽′′ → 𝐻 ′ ∈ Σ′ and a substitution 𝜌 such that 𝜌 (𝛽′′) ⊆ 𝑇𝑘 (𝑣 ′) and 𝜌 (𝐻 ′) = 𝐺.
+
+1 ∧ · · · ∧ 𝐴′
+
+Since 𝜂 is in head-normal form, each atom in 𝜎 ′ (𝜂) contains at least one labeled null of 𝑁 . Now let 𝐴′
+𝑛 be the atoms of 𝛽′′ that
+1
+are matched to the atoms in 𝜎 ′ (𝜂). Atom 𝜌 (𝐻 ′) contains at least one labeled null of 𝑁 , so 𝑛 ≥ 1. Thus, we can assume that 𝛽′′ → 𝐻 ′ is of
+𝑛)} ⊆ 𝜎 ′ (𝜂) and 𝜌 (𝛽′) ⊆ 𝑆. Also, since 𝛽′′ → 𝐻 ′ is guarded, at least one of 𝐴′
+the form 𝐴′
+𝑖
+is a guard for 𝛽′′ → 𝐻 ′. Let 𝐴1, . . . , 𝐴𝑛 be the atoms of 𝜂 such that 𝜎 ′ (𝐴𝑖 ) = 𝜌 (𝐴′
+𝑖 ) for 1 ≤ 𝑖 ≤ 𝑛. Since 𝜎 ′ maps each 𝑦 ∈ (cid:174)𝑦 to a distinct
+labeled null that does not occur in 𝑇𝑖 , we have 𝜎 ′ ( (cid:174)𝑥) ∩ 𝜎 ′ ( (cid:174)𝑦) = ∅. Thus, there exists a (cid:174)𝑦-MGU 𝜃 of 𝐴1, . . . , 𝐴𝑛 and 𝐴′
+𝑛 satisfying
+1
+𝜃 ( (cid:174)𝑥) ∩ (cid:174)𝑦 = ∅. Conjunction 𝜌 (𝛽′) does not contain a labeled null of 𝑁 , so vars(𝜃 (𝛽′)) ∩ (cid:174)𝑦 = ∅ holds. Thus, the preconditions of the ExbDR
+𝑛 ∧ 𝛽′ → 𝐻 ′, so the ExbDR rule derives 𝜏 = 𝜃 (𝛽) ∧ 𝜃 (𝛽′) → ∃(cid:174)𝑦 𝜃 (𝜂) ∧ 𝜃 (𝐻 ′).
+inference rule are satisfied for ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂] and 𝐴′
+
+𝑛 ∧ 𝛽′ → 𝐻 ′ where {𝜌 (𝐴′
+
+1), . . . , 𝜌 (𝐴′
+
+, . . . , 𝐴′
+
+, . . . , 𝐴′
+
+1 ∧ · · · ∧ 𝐴′
+
+1 ∧ · · · ∧ 𝐴′
+
+𝑖 is a guard so all variables of 𝐴′
+
+Moreover, some 𝐴′
+𝑛 ∧ 𝛽′ → 𝐻 ′ participate in unification, and thus we can extend 𝜎 and 𝜎 ′ to
+substitutions 𝜁 and 𝜁 ′, respectively, covering these variables such that 𝜁 (𝜃 (𝛽)) ∪ 𝜁 (𝜃 (𝛽′)) ⊆ 𝑇𝑖 (𝑣) and 𝑇𝑘+1 (𝑣 ′) ⊆ 𝑆 ∪ 𝜁 ′ (𝜃 (𝜂)) ∪ 𝜁 ′ (𝜃 (𝐻 ′)).
+Set Σ′ contains 𝜏 up to redundancy. Since 𝐺 ∉ 𝑇𝑘 (𝑣 ′), GTGD 𝜏 is not a syntactic tautology, so there exists a GTGD ∀(cid:174)𝑥1 [𝛽1 → ∃(cid:174)𝑦1 𝜂1] ∈ Σ′ and
+substitution 𝜇 such that dom(𝜇) = (cid:174)𝑥1 ∪ (cid:174)𝑦1, 𝜇 ( (cid:174)𝑥1) ⊆ (cid:174)𝑥2, 𝜇 ( (cid:174)𝑦1) ⊆ (cid:174)𝑦1 ∪ (cid:174)𝑦2 and 𝜇 (𝑦) ≠ 𝜇 (𝑦′) for distinct 𝑦 and 𝑦′ in (cid:174)𝑦1, and 𝜇 (𝛽1) ⊆ 𝜃 (𝛽) ∧ 𝜃 (𝛽′)
+and 𝜇 (𝜂1) ⊇ 𝜃 (𝜂) ∧ 𝜃 (𝐻 ′). Now let 𝜎1 be the substitution defined as 𝜎1 (𝑥) = 𝜁 (𝜇 (𝑥)) on each 𝑥 ∈ (cid:174)𝑥, and let 𝜎 ′
+1 be the extension of 𝜎1 to (cid:174)𝑦1
+such that 𝜎 ′
+
+1 (𝑦) = 𝜁 ′ (𝜇 (𝑦)) for each 𝑦 ∈ (cid:174)𝑦. Clearly, 𝜎1 (𝛽1) ⊆ 𝑇𝑘 (𝑣 ′) and 𝑇𝑘+1 (𝑣 ′) ⊆ 𝑆 ∪ 𝜎 ′
+
+1 (𝜂1) hold, so property (♢) is satisfied.
+
+To complete the proof, consider now the derivation of 𝑇𝑗 −1. By property (♢), there exists a GTGD ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂] ∈ Σ′ and substitutions 𝜎
+𝑛 ∧ 𝛽′ → 𝐻 ′ that
+and 𝜎 ′ such that 𝜎 (𝛽) ⊆ 𝑇𝑖 (𝑣) and 𝑇𝑗 −2 (𝑣 ′) = 𝑆 ∪ 𝜎 ′ (𝜂). Then, as above, Σ′ contains a full TGD of the form 𝐴′
+𝑛) ⊆ 𝜎 ′ (𝜂) and 𝜌 (𝛽′) ⊆ 𝑆 for some substitution 𝜌. A minor difference is that 𝜌 (𝐻 ′) does not contain a labeled
+satisfies 𝜌 (𝐴′
+null introduced by 𝜎 ′ (𝜂0), so 𝑛 = 0 is possible; however, in such a case, this TGD immediately satisfies property (♦). Moreover, if 𝑛 > 0, then
+𝛽 → ∃(cid:174)𝑦 𝜂 can again be resolved with 𝐴′
+
+𝑛 ∧ 𝛽′ → 𝐻 ′ to produce
+𝜃 (𝛽) ∧ 𝜃 (𝛽′) → ∃(cid:174)𝑦 𝜃 (𝜂) ∧ 𝜃 (𝐻 ′) ∈ Σ′
+satisfying vars(𝜃 (𝐻 ′)) ∩ (cid:174)𝑦 = ∅. This TGD is transformed into head-normal form by Definition 5.3, so ∀(cid:174)𝑥 [𝜃 (𝛽) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′)] is contained
+in Σ′ up to redundancy. But then, Σ′ contains a full GTGD that satisfies property (♦) by the same argument as above.
+□
+
+1) ∪ · · · ∪ 𝜌 (𝐴′
+
+1 ∧ · · · ∧ 𝐴′
+
+1 ∧ · · · ∧ 𝐴′
+
+Proof of Complexity. Fix Σ, 𝑟 , 𝑤𝑏 , 𝑤ℎ, 𝑐, and 𝑎 as stated in the theorem. The number of different body atoms of arity 𝑎 constructed using
+𝑟 relations, 𝑤𝑏 variables, and 𝑐 constants is clearly bounded by ℓ𝑏 = 𝑟 · (𝑤𝑏 + 𝑐)𝑎. Moreover, by the third claim of Proposition 5.7, the number
+of variables in the head of each TGD is bounded by 𝑤ℎ, so the number of head atoms is bounded by ℓℎ = 𝑟 · (𝑤ℎ + 𝑐)𝑎. The body (resp. head)
+of each GTGD corresponds to a subset of these atoms, so number of different GTGDs up to variable renaming is bounded by ℘ = 2ℓ𝑏 · 2ℓℎ .
+Thus, the ExbDR inference rule needs to be applied to at most ℘2 = 22(ℓ𝑏 +ℓℎ ) pairs of GTGDs. For each such pair, one might need to consider
+each possible way to match the ℓ𝑏 body atoms of 𝜏 ′ to ℓℎ head atoms of 𝜏, and there are at most (ℓℎ)ℓ𝑏 ≤ 2ℓ𝑏 ·ℓℎ of these. Consequently, unifier
+𝜃 may need to be computed at most 22(ℓ𝑏 +ℓℎ ) · 2ℓ𝑏 ·ℓℎ ≤ 25·ℓ𝑏 ·ℓℎ = 32ℓ𝑏 ·ℓℎ times. To check whether TGD 𝜏1 = ∀(cid:174)𝑥1 [𝛽1 → (cid:174)𝑦1 𝜂1] is subsumed
+by 𝜏2 = ∀(cid:174)𝑥2 [𝛽2 → (cid:174)𝑦2 𝜂2], we can proceed as follows. First, we consider all possible ways to match an atom of 𝛽1 to an atom of 𝛽2; since both
+such matchings. Second, we analogously consider each of at most 2(ℓℎ ) 2
+conjunctions contain at most ℓ𝑏 atoms, there are at most ℓ𝑏
+ways to match an atom of 𝜂2 to an atom of 𝜂1. Once all atoms have been matched, we try to find a substitution 𝜇 satisfying Definition 5.1 in
+linear time. Thus, a subsumption check for pairs of TGDs takes at most 2ℓ𝑏 2 · 2ℓℎ 2
+steps. Finally, unification of atoms requires time that is
+□
+linear in 𝑎, and all other steps require linear time too.
+
+ℓ𝑏 ≤ 2ℓ𝑏 2
+
+C PROOFS FOR SkDR
+C.1 Proof of Proposition 5.12: Properties of SkDR
+We reuse results by de Nivelle [19] about unification of atoms in guarded rules. The variable depth [19, Definition 3] of an atom is defined as
+−1 if the atom is ground, or as the maximum number of nested function symbols that contain a variable of the atom. Moreover, an atom is
+weakly covering [19, Definition 6] if each nonground functional subterm of the atom contains all variables of the atom. Finally, de Nivelle [19,
+Theorem 1] says that, for 𝜃 an MGU of weakly covering atoms 𝐴 and 𝐵, atom 𝐶 = 𝜃 (𝐴) = 𝜃 (𝐵) is also weakly covering, the variable depth of
+𝐶 is bounded by the variable depth of 𝐴 and 𝐵, and the number of variables of 𝐶 is bounded by the number of variables of 𝐴 and 𝐵 too.
+
+Proposition 5.12. Each application of the SkDR inference rule to rules 𝜏 and 𝜏 ′ as in Definition 5.10 produces a guarded rule.
+Proof. Consider arbitrary rules 𝜏 = 𝛽 → 𝐻 and 𝜏 ′ = 𝐴′ ∧ 𝛽′ → 𝐻 ′ and an MGU 𝜃 of 𝐻 and 𝐴′ satisfying the preconditions of the SkDR
+inference rule. Atom 𝐻 thus contains a Skolem symbol, and rule 𝜏 is guarded; consequently, atom 𝐻 is weakly covering, it contains a term of
+the form 𝑓 ((cid:174)𝑡) where (cid:174)𝑡 consists of constants and all variables of the rule, and the variable depth of 𝐻 is at most one. The corresponding atom
+𝐴′ can be of the following two forms.
+• Atom 𝐴′ is Skolem-free. But then, 𝐴′ contains all variables of 𝜏 ′, and it is clearly weakly covering. By de Nivelle [19, Theorem 1], atom
+𝜃 (𝐴′) is weakly covering and has variable depth at most one; consequently, each atom in rule 𝜃 (𝐴′) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′) is weakly covering
+and has variable depth at most one. Moreover, the variable depth of 𝜃 (𝐻 ) is also at most one, which can be only if 𝜃 maps each variable
+in 𝐻 to another variable or a constant. Thus, each atom in rule 𝜃 (𝛽) → 𝜃 (𝐻 ) is weakly covering and has variable depth at most one;
+moreover, 𝜃 (𝛽) contains an atom that contains all variables of the rule. But then, rule 𝜃 (𝛽) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′) is guarded, as required.
+• Atom 𝐴′ contains a Skolem symbol. But then, 𝐴′ is weakly covering by the definition of guarded rules, and its variable depth is at most
+one. By de Nivelle [19, Theorem 1], atom 𝜃 (𝐻 ) = 𝜃 (𝐴′) is weakly covering and has variable depth at most one, which can be the case only
+if 𝜃 maps all variables to other variables or constants. Consequently, rules 𝜃 (𝛽) → 𝜃 (𝐻 ) and 𝜃 (𝐴′) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′) are both guarded.
+But then, rule 𝜃 (𝛽) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′) is guarded, as required.
+□
+
+C.2 Proof of Theorem 5.13: Correctness and Complexity of SkDR
+
+Theorem 5.13. Program SkDR(Σ) is a Datalog rewriting of a finite set of GTGDs Σ. Moreover, the rewriting can be computed in time
+) for 𝑟 the number of relations in Σ, 𝑎 the maximum relation arity in Σ, 𝑒 the number of existential quantifiers in Σ,
+
+𝑂 (𝑏𝑟 𝑑 · (𝑒+𝑤𝑏 +𝑐 )𝑑𝑎
+𝑤𝑏 = bwidth(Σ), 𝑐 = |consts(Σ)|, and some 𝑏 and 𝑑.
+
+Proof of Correctness. Let Σ be an arbitrary finite set of GTGDs, and let Σ′ be the set of rules obtained from Σ as specified in
+Definition 5.3. It is straightforward to see that Σ′ is a logical consequence of the Skolemization of Σ, so SkDR(Σ) is also a logical consequence
+of Σ. Moreover, SkDR(Σ) contains each full TGD of Σ up to redundancy, so each full TGD of Σ is logically entailed by SkDR(Σ). We next
+consider an arbitrary base instance 𝐼 and a one-pass tree-like chase sequence for 𝐼 and Σ, and we show the following property:
+
+(♦) for each loop 𝑇𝑖, . . . ,𝑇𝑗 in the sequence at some vertex 𝑣 with output fact 𝐹 , there exist a Skolem-free rule 𝛽 → 𝐻 ∈ Σ′
+and a substitution 𝜎 such that 𝜎 (𝛽) ⊆ 𝑇𝑖 (𝑣) and 𝐹 = 𝜎 (𝐻 ).
+
+Since SkDR(Σ) contains all Skolem-free rules of Σ′ and this property holds for the root vertex 𝑟 , Proposition 4.7 ensures that SkDR(Σ) is a
+rewriting of Σ.
+
+Our proof is by induction in the length of the loop. The base case and the inductive step have the same structure, so we consider them
+jointly. Thus, consider an arbitrary loop 𝑇𝑖,𝑇𝑖+1, . . . ,𝑇𝑗 −1,𝑇𝑗 at vertex 𝑣 in the sequence, and assume that the claim holds for all shorter loops
+in the sequence. By the definition of a loop, chase tree 𝑇𝑖+1 is obtained from 𝑇𝑖 by applying a chase step to some non-full GTGD 𝜏 ∈ Σ and
+substitution 𝛾. Let 𝑣 ′ be the child of 𝑣 introduced in 𝑇𝑖+1, let 𝑆 ⊆ 𝑇𝑖 (𝑣) be the facts that are copied to 𝑇𝑖+1 (𝑣 ′) because they are Σ-guarded
+by the instantiated head of 𝜏, let 𝑁 = {𝑛1, . . . , 𝑛𝑚 } be the set of labeled nulls introduced in the chase step for the existentially quantified
+variables 𝑦1, . . . , 𝑦𝑚 of 𝜏, let 𝜈 be a function that maps each labeled null 𝑛𝑖 to the ground term 𝑓𝑖 (𝛾 ( (cid:174)𝑥)) where 𝑓𝑖 is the symbol used in the
+Skolemization of 𝑦𝑖 . For 𝑈 a set of facts, let 𝜈 (𝑈 ) be the result of replacing each occurrence of a labeled null 𝑛 ∈ dom(𝜈) in 𝑈 with 𝜈 (𝑛) and
+eliminating any duplicate facts in the result. Clearly, the inverse function 𝜈 − is well-defined, and we define 𝜈 − (𝑈 ) for 𝑈 a set of facts in the
+obvious way. By Proposition A.8 and the fact that propagation is applied eagerly, the output fact of the loop is added to 𝑇𝑗 −1 (𝑣 ′) in step
+𝑗 − 1, and in 𝑇𝑗 this fact is propagated back to 𝑇𝑗 (𝑣). In other words, for each 𝑘 with 𝑖 < 𝑘 < 𝑗 − 1, each fact in 𝑇𝑘 (𝑣 ′) \ 𝑆 contains at least
+one labeled null from 𝑁 , or the fact would be Σ-guarded by 𝑇𝑖 (𝑣) and would thus be propagated back to vertex 𝑣. We now show that the
+following property holds for each 𝑘 with 𝑖 < 𝑘 ≤ 𝑗 − 1:
+
+(♢) for each fact 𝐺 ∈ 𝑇𝑘 (𝑣 ′) \ 𝑆, there exist a rule 𝛽 → 𝐻 ∈ Σ′ and a substitution 𝜎 such that 𝛽 is Skolem-free, 𝜎 (𝛽) ⊆ 𝜈 (𝑇𝑖 (𝑣)),
+and 𝜎 (𝐻 ) = 𝜈 (𝐺).
+
+Property (♢) implies (♦): fact 𝐹 does not contain a labeled null from 𝑁 , so the rule 𝛽 → 𝐻 ∈ Σ′ whose existence is implied by (♢) for 𝑘 = 𝑗 − 1
+is actually a Skolem-free rule that satisfies (♦).
+
+We next prove property (♢) by a nested induction on 𝑘. For the base case 𝑘 = 𝑖 + 1, property (♢) holds due to the fact that Σ′ contains the
+rules obtained by Skolemizing GTGD 𝜏. For the inductive step, assume that (♢) holds for some 𝑘 and consider the possible ways to obtain
+𝑇𝑘+1 from 𝑇𝑘 . Property (♢) holds by the inductive hypothesis if 𝑇𝑘+1 (𝑣 ′) = 𝑇𝑘 (𝑣 ′)—that is, if the step involves a descendant of 𝑣 ′. Otherwise,
+𝑇𝑘+1 (𝑣 ′) = 𝑇𝑘 (𝑣 ′) ∪ {𝐺 } where fact 𝐺 is obtained in one of the following two ways.
+• A full TGD in Σ derives 𝐺 from 𝑇𝑘 (𝑣 ′). Set Σ′ contains this TGD up to redundancy, so by Definition 5.1 there exist a Skolem-free rule
+
+𝛽′′ → 𝐻 ′ ∈ Σ′ and a substitution 𝜎 ′ such that 𝜎 ′ (𝛽′′) ⊆ 𝜈 (𝑇𝑘 (𝑣 ′)) and 𝜎 ′ (𝐻 ′) = 𝜈 (𝐺).
+
+• Fact 𝐺 is the output of a loop at vertex 𝑣 ′. But then, this loop is shorter than 𝑇𝑖, . . . ,𝑇𝑗 so, by property (♦), there exist a Skolem-free rule
+
+𝛽′′ → 𝐻 ′ ∈ Σ′ and a substitution 𝜎 ′ such that 𝜎 ′ (𝛽′′) ⊆ 𝜈 (𝑇𝑘 (𝑣 ′)) and 𝜎 ′ (𝐻 ′) = 𝜈 (𝐺).
+
+Now let 𝑊 = {𝐵′ ∈ 𝛽′′ | 𝜎 ′ (𝐵′) ∉ 𝑆 }. We next show that set Σ′ contains up to redundancy the result of “resolving away” each atom 𝐵′ ∈ 𝑊 .
+A slight complication arises due to the fact that the SkDR inference rule considers only two rules at a time, and that the result of each
+inference is contained in Σ′ up to redundancy. Thus, we will achieve our goal by showing that the SkDR inference rule can be applied up to
+𝑛 = |𝑊 | times. Our proof is by induction on 1 ≤ ℓ ≤ 𝑛. Towards this goal, we shall define 𝑛 rules 𝛽′′
+ℓ , and sets of
+atoms 𝑊 = 𝑊0 ⊋ · · · ⊋ 𝑊𝑛 for ℓ with 0 ≤ ℓ ≤ 𝑛 satisfying the following invariant:
+
+ℓ , substitutions 𝜎 ′
+
+ℓ → 𝐻 ′
+
+(∗) 𝜎 ′
+
+ℓ ) = 𝜎 ′ (𝐻 ′).
+For ℓ = 𝑛, we have 𝑊𝑛 = ∅, and so property (∗) implies property (♢), as required. Our construction proceeds as follows.
+
+ℓ ) ⊆ 𝑆 ∪ {𝜎 ′ (𝐵′) | 𝐵′ ∈ 𝑊ℓ } and 𝜎 ′
+
+ℓ (𝛽′′
+
+ℓ (𝐻 ′
+
+For the base case ℓ = 0, property (∗) clearly holds for 𝛽′′
+ℓ , 𝜎 ′
+
+ℓ → 𝐻 ′
+
+0 = 𝛽′′, 𝜎 ′
+
+ℓ , and 𝑊ℓ satisfying (∗) have been defined. First, assume that there exists 𝐵′ ∈ 𝑊ℓ such that 𝜎 ′ (𝐵′) ∉ 𝜎 ′
+
+0 = 𝜎 ′, and let 𝑊0 = 𝑊 . For the induction step, assume that (∗) holds for
+ℓ (𝛽′
+ℓ ).
+ℓ , and 𝑊ℓ+1 = 𝑊ℓ \ {𝐵′}. Otherwise, we consider the following possibilities.
+ℓ → 𝐻 ′
+
+ℓ contains all variables of the rule.
+
+ℓ where 𝐴′
+
+ℓ , 𝜎 ′
+ℓ+1 = 𝛽′′
+ℓ is Skolem-free, the rule is of the form 𝐴′
+
+ℓ+1 = 𝐻 ′
+
+ℓ , 𝐻 ′
+
+ℓ+1 = 𝜎 ′
+ℓ ∧ 𝛽′
+
+ℓ is of the form 𝐴′
+
+ℓ ∧ 𝛽′
+
+ℓ → 𝐻 ′
+
+ℓ where atom 𝐴′
+
+ℓ contains a Skolem symbol, in which case this atom contains all
+
+some 0 ≤ ℓ < 𝑛, so 𝛽′′
+Then, property (∗) clearly holds for 𝛽′′
+• If rule 𝛽′′
+• Otherwise, rule 𝛽′′
+variables of the rule.
+
+ℓ → 𝐻 ′
+
+ℓ → 𝐻 ′
+
+ℓ (𝐴′
+
+Either way, there exists 𝐵′ ∈ 𝑊ℓ such that 𝜎 ′
+ℓ ) = 𝜎 ′ (𝐵′) where 𝜎 ′ (𝐵′) ∈ 𝑇𝑘 (𝑣 ′) \ 𝑆. Thus, by property (♢), these exist a rule 𝛽ℓ → 𝐻ℓ ∈ Σ′
+and a substitution 𝜎ℓ such that 𝛽ℓ is Skolem-free, 𝜎ℓ (𝛽ℓ ) ⊆ 𝜈 (𝑇𝑖 (𝑣)), and 𝜎ℓ (𝐻ℓ ) = 𝜎 ′ (𝐵′); the last observation ensures that 𝐻ℓ contains a
+Skolem symbol. Moreover, there exists an MGU 𝜃ℓ of 𝐻ℓ and 𝐴′
+ℓ , and Σ′
+ℓ → 𝐻 ′
+contains rule 𝜃ℓ (𝛽ℓ ) ∧ 𝜃ℓ (𝛽′
+ℓ and 𝜃 ; note that substitu-
+ℓ do not share variables. Moreover, let 𝑊ℓ+1 = 𝑊ℓ \ {𝐵′}. We clearly
+tion 𝜎ℓ ∪ 𝜎 ′
+have 𝜁ℓ (𝜃ℓ (𝛽ℓ )) ⊆ 𝑆, 𝜁ℓ (𝜃ℓ (𝛽′
+ℓ ) → 𝜃ℓ (𝐻ℓ ) is not
+ℓ+1) ⊆ 𝜃ℓ (𝛽ℓ ) ∪ 𝜃ℓ (𝛽′
+a syntactic tautology. Thus, by Definition 5.1, there exist a rule 𝛽′′
+ℓ )
+and 𝜇ℓ+1 (𝐻 ′
+ℓ+1) = 𝜃ℓ (𝐻 ′
+ℓ+1 (𝑥) = 𝜁ℓ (𝜇ℓ+1 (𝑥)). Then,
+property (∗) clearly holds for 𝛽′′
+□
+
+ℓ+1 ∈ Σ′ and substitution 𝜇ℓ+1 such that 𝜇ℓ+1 (𝛽′′
+ℓ+1 → 𝐻 ′
+
+ℓ )) ⊆ 𝑆 ∪ {𝜎 ′ (𝐶′) | 𝐶′ ∈ 𝑊ℓ+1}, and 𝜁ℓ (𝜃ℓ (𝐻 )) = 𝜎 ′ (𝐻 ′). Since 𝐺 ∉ 𝑇𝑘 (𝑣 ′), rule 𝜃ℓ (𝛽ℓ ) ∧ 𝜃ℓ (𝛽′
+
+ℓ+1 be the substitution defined on each variable 𝑥 in 𝛽′′
+
+ℓ , so the SkDR inference rule is applicable to 𝛽ℓ → 𝐻ℓ and 𝐴′
+
+ℓ ) → 𝜃ℓ (𝐻ℓ ) up to redundancy. Now let 𝜁ℓ = (𝜎ℓ ∪ 𝜎 ′
+
+ℓ is correctly defined because rules 𝛽ℓ → 𝐻ℓ and 𝐴′
+
+ℓ ) ◦ 𝜃 be the composition of 𝜎ℓ ∪ 𝜎 ′
+
+ℓ+1 such that 𝜎 ′
+
+ℓ ). Now let 𝜎 ′
+
+ℓ+1 → 𝐻 ′
+
+ℓ → 𝐻 ′
+
+ℓ ∧ 𝛽′
+
+ℓ ∧ 𝛽′
+
+ℓ+1 → 𝐻 ′
+
+ℓ+1, 𝜎 ′
+
+ℓ+1, and 𝑊ℓ+1, as required.
+
+Proof of Complexity. Fix Σ, 𝑟 , 𝑤𝑏 , 𝑒, 𝑐, and 𝑎 as stated in the theorem. Skolemizing a GTGD ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂] produces guarded rules
+in which each atom is of the form 𝑅(𝑡1, . . . , 𝑡𝑛) such that each 𝑡𝑖 is a constant, a variable from (cid:174)𝑥, or a term of the form 𝑓 ( (cid:174)𝑥) where 𝑓 is a
+Skolem symbol. Moreover, each atom obtained from 𝑅(𝑡1, . . . , 𝑡𝑛) by the SkDR inference rule is obtained by replacing a variable in (cid:174)𝑥 with
+another variable or a constant. Thus, atom 𝑅(𝑡1, . . . , 𝑡𝑛) cannot contain more than | (cid:174)𝑥 | variables. Since the number of different symbols
+obtained by Skolemization is clearly bounded by 𝑒, the number of different atoms of such form is bounded by ℓ = 𝑟 · (𝑤𝑏 + 𝑒 + 𝑐)𝑎. The
+body of each guarded rule corresponds to a subset of these atoms, so the number of different rules up to variable remaining is bounded
+by 2ℓ · ℓ ≤ 2ℓ · 2ℓ = 22ℓ = ℘. By Definition 5.3, the result of applying the SkDR inference rule is retained in set Σ′ only if the set does not
+contain a variable renaming of the result. Thus, the SkDR inference rule needs to be applied to at most ℘2 = 24ℓ pairs of rules. For each pair,
+one might need to unify at most ℓ body atoms of one rule with the head atom of the other rule, so the unifier 𝜃 may need to be computed at
+most ℘2 · ℓ ≤ ℘2 · 2ℓ = 25ℓ = 32ℓ times. We can check subsumption between a pair of rules analogously to Theorem 5.8: for each of at most
+2ℓ 2
+ways to match the body atoms of one rule to the body atoms of another rule, we try to find a substitution 𝜇 satisfying Definition 5.1.
+□
+Finally, unification of atoms requires time that is linear in 𝑎, and all other steps require linear time too.
+
+D PROOFS FOR HypDR
+D.1 Proof of Proposition 5.18: Properties of HypDR
+
+Proposition 5.18. Each application of the HypDR inference rule to rules 𝜏1, . . . , 𝜏𝑛 and 𝜏 ′ as in Definition 5.16 produces a guarded rule.
+
+1 ∧ · · · ∧ 𝐴′
+
+𝑛 ∧ 𝛽′ → 𝐻 ′, and an MGU 𝜃 of 𝐻1, . . . , 𝐻𝑛 and 𝐴′
+1
+
+Proof. Consider arbitrary rules 𝜏𝑖 = 𝛽𝑖 → 𝐻𝑖 with 1 ≤ 𝑖 ≤ 𝑛 such that 𝛽𝑖 is Skolem-free and 𝐻𝑖 contains a Skolem symbol, a Skolem-free
+rule 𝜏 ′ = 𝐴′
+𝑛 satisfying the preconditions of the HypDR inference rule.
+Rule 𝜏1 contains a term with a Skolem symbol in the head, and this term is unified with a variable, say 𝑥, occurring in a Skolem-free body
+atom 𝐴′
+1 of rule 𝜏 ′. Moreover, rule 𝜏 ′ is guarded, so the body of the rule contains a Skolem-free atom 𝐺 that contains all variables of the rule;
+thus, 𝐺 also contains 𝑥. Since 𝜃 (𝑥) contains a Skolem symbol, 𝜃 (𝐺) contains a Skolem symbol too. However, 𝜃 (𝛽′) is Skolem-free, so 𝐺 must
+𝑛 from the body of rule 𝜏 ′ that are participating in the HypDR inference rule. But then, we can show that the
+be one of the atoms 𝐴′
+1
+□
+result of the inference is guarded analogously to the proof of Proposition 5.12.
+
+, · · · 𝐴′
+
+, . . . , 𝐴′
+
+D.2 Proof of Theorem 5.19: Correctness and Complexity of HypDR
+
+Theorem 5.19. Program HypDR(Σ) is a Datalog rewriting of a finite set of GTGDs Σ. Moreover, the rewriting can be computed in time
+) for 𝑟 the number of relations in Σ, 𝑎 the maximum relation arity in Σ, 𝑒 the number of existential quantifiers in Σ,
+
+time 𝑂 (𝑏𝑟 𝑑 · (𝑒+𝑤𝑏 +𝑐 )𝑑𝑎
+𝑤𝑏 = bwidth(Σ), 𝑐 = |consts(Σ)|, and some 𝑏 and 𝑑.
+
+, . . . , 𝐴′
+
+𝑛 be precisely the atoms of 𝛽′′ such that 𝜎 ′ (𝐴′
+
+Proof of Correctness. The correctness proof for HypDR is almost identical to the correctness proof in Theorem 5.13, so we outline
+just the difference. In particular, we wish to prove properties (♦) and (♢) exactly as stated in Theorem 5.13 using the same proof structure. In
+the proof of property (♢), we establish existence of a Skolem-free rule 𝛽′′ → 𝐻 ′ ∈ Σ′ and a substitution 𝜎 ′ such that 𝜎 ′ (𝛽′′) ⊆ 𝜈 (𝑇𝑘 (𝑣 ′)) and
+𝜎 ′ (𝐻 ′) = 𝜈 (𝐺) in exactly the same way. The difference to the proof of Theorem 5.13 is that we “resolve away” all relevant body atoms of 𝛽′′
+in one step. To this end, let 𝐴′
+𝑖 ) ∉ 𝑆 for each 1 ≤ 𝑖 ≤ 𝑛. Thus, we can assume that the rule
+1
+𝑛 ∧ 𝛽′ → 𝐻 ′, and 𝜎 ′ (𝛽′) ⊆ 𝑆 clearly holds. By property (♢), for each 1 ≤ ℓ ≤ 𝑛, there exist a rule 𝛽ℓ → 𝐻ℓ ∈ Σ′
+1 ∧ · · · ∧ 𝐴′
+is of the form 𝐴′
+and substitution 𝜎ℓ such that 𝛽ℓ is Skolem-free and 𝜎ℓ (𝐻ℓ ) = 𝜎 ′ (𝐴′
+ℓ ); the last observation ensures that 𝐻ℓ contains a Skolem symbol.
+𝑛. Since 𝜎 ′ (𝛽′) ⊆ 𝑆, conjunction 𝜃 (𝛽′) is Skolem-free. Thus, the HypDR inference
+Finally, there exists an MGU 𝜃 of 𝐻1, . . . , 𝐻𝑛 and 𝐴′
+1
+𝑛 ∧ 𝛽′ → 𝐻 ′, so set Σ′ contains rule 𝜃 (𝛽1) ∧ · · · ∧ 𝜃 (𝛽𝑛) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′)
+rule is applicable to 𝛽1 → 𝐻1, . . . , 𝛽𝑛 → 𝐻𝑛 and 𝐴′
+up to redundancy. Since no premises share variables, substitution 𝜎1 ∪ · · · ∪ 𝜎𝑛 ∪ 𝜎 ′ is correctly defined, so let 𝜁 be the composition of
+𝜎1 ∪ · · · ∪ 𝜎𝑛 ∪ 𝜎 ′ and 𝜃 . Clearly, we have 𝜁 (𝜃 (𝛽1)) ∪ · · · ∪ 𝜁 (𝜃 (𝛽𝑛)) ∪ 𝜁 (𝜃 (𝛽′)) ⊆ 𝑆 and 𝜁 (𝜃 (𝐻 ′)) = 𝜎 ′ (𝐻 ′) = 𝜈 (𝐺). Since 𝐺 ∉ 𝑇𝑘 (𝑣 ′), rule
+𝜃 (𝛽1) ∧ · · · ∧ 𝜃 (𝛽𝑛) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′) is not a syntactic tautology so, by Definition 5.1, there exist a rule 𝛽 → 𝐻 ∈ Σ′ and substitution 𝜇
+such that 𝜇 (𝛽) ⊆ 𝜃 (𝛽1) ∪ · · · ∪ 𝜃 (𝛽𝑛) ∪ 𝜃 (𝛽′) and 𝜇 (𝐻 ) = 𝜃 (𝐻 ′). Let 𝜎 be the substitution defined on each variable 𝑥 in 𝛽 → 𝐻 such that
+𝜎 (𝑥) = 𝜁 (𝜇 (𝑥)). Then, 𝜎 (𝛽) ⊆ 𝑆 and 𝜎 (𝐻 ) = 𝜎 ′ (𝐻 ′) = 𝜈 (𝐺), as required for property (♢).
+□
+
+, . . . , 𝐴′
+1 ∧ · · · ∧ 𝐴′
+
+Proof of Complexity. Fix Σ, 𝑟 , 𝑤𝑏 , 𝑒, 𝑐, and 𝑎 as stated in the theorem. In the same way as in the complexity proof of Theorem 5.13, the
+number of different atoms can be bounded by ℓ = 𝑟 · (𝑤𝑏 + 𝑒 + 𝑐)𝑎, and the number of different rules can be bounded by ℘ = 22ℓ . Now we
+can apply the HypDR inference rule as follows: we choose one of the ℘ rules that plays the role of 𝜏 ′ and then, for each of the at most ℓ body
+atoms in 𝜏 ′, we select one of the ℘ rules that play the role of rules 𝜏𝑖 . Hence, there are at most ℘ · ℘ℓ = ℘ℓ+1 different applications of the
+HypDR inference rule. Thus, we may need to compute the unifier 𝜃 at most (22ℓ )ℓ+1 = 22ℓ 2+2ℓ ≤ 23ℓ 2
+times. Finally, the times needed for
+□
+subsumption checking, unification, and all other steps can be bounded analogously as in the complexity proof of Theorem 5.13.
+
+E THE FullDR ALGORITHM: CREATING DATALOG RULES DIRECTLY
+The algorithms presented in the body of the paper all create the Datalog rules needed for the final rewriting as well as intermediate non-full
+TGDs or rules that are discarded after all inferences are performed. We now present an algorithm that produces only Datalog rules. Similar
+algorithms have appeared in the prior literature [4]. After presenting such an algorithm, we explain the shortcomings of this approach.
+
+Definition E.1. The Full Datalog Rewriting inference rule FullDR can be applied in two ways, depending on the types of TGDs it takes.
+• The (COMPOSE) variant of the FullDR inference rule takes full TGDs
+
+𝜏 = ∀(cid:174)𝑥 [𝛽 → 𝐴]
+
+and
+
+𝜏 ′ = ∀(cid:174)𝑧 [𝐴′ ∧ 𝛽′ → 𝐻 ′]
+
+and a substitution 𝜃 such that
+– 𝜃 (𝐴) = 𝜃 (𝐴′),
+– dom(𝜃 ) = (cid:174)𝑥 ∪ (cid:174)𝑧, and
+– rng(𝜃 ) ⊆ (cid:174)𝑤 ∪ consts(𝜏) ∪ consts(𝜏 ′) where (cid:174)𝑤 is a vector of hwidth(Σ) + |consts(Σ)| variables different from (cid:174)𝑥 ∪ (cid:174)𝑦 ∪ (cid:174)𝑧,
+and it derives
+
+𝜃 (𝛽) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′).
+
+• The (PROPAGATE) variant of the FullDR inference rule takes TGDs
+
+𝜏 = ∀(cid:174)𝑥 [𝛽 → ∃(cid:174)𝑦 𝜂 ∧ 𝐴1 ∧ · · · ∧ 𝐴𝑛]
+
+and
+
+𝜏 ′ = ∀(cid:174)𝑧 [𝐴′
+
+1 ∧ · · · ∧ 𝐴′
+
+𝑛 ∧ 𝛽′ → 𝐻 ′]
+
+𝑖 ) for each 𝑖 with 1 ≤ 𝑖 ≤ 𝑛,
+
+and a substitution 𝜃 such that
+– 𝜃 (𝐴𝑖 ) = 𝜃 (𝐴′
+– dom(𝜃 ) = (cid:174)𝑥 ∪ (cid:174)𝑧,
+– rng(𝜃 ) ⊆ (cid:174)𝑤 ∪ (cid:174)𝑦 ∪ consts(𝜏) ∪ consts(𝜏 ′) where (cid:174)𝑤 is a vector of hwidth(Σ) + |consts(Σ)| variables different from (cid:174)𝑥 ∪ (cid:174)𝑦 ∪ (cid:174)𝑧,
+– 𝜃 ( (cid:174)𝑥) ∩ (cid:174)𝑦 = ∅, and
+– vars(𝜃 (𝛽′)) ∩ (cid:174)𝑦 = ∅ and vars(𝜃 (𝐻 ′)) ∩ (cid:174)𝑦 = ∅,
+and it derives
+
+𝜃 (𝛽) ∧ 𝜃 (𝛽′) → 𝜃 (𝐻 ′).
+
+Theorem E.2. Program FullDR(Σ) is a Datalog rewriting of a finite set of GTGDs Σ. Moreover, the rewriting can be computed in time
+
+𝑂 (𝑏𝑟 𝑑 · (𝑤+𝑐 )𝑑𝑎
+
+) for 𝑟 the number of relations in Σ, 𝑎 the maximum relation arity in Σ, 𝑤 = width(Σ), 𝑐 = |consts(Σ)|, and some 𝑏 and 𝑑.
+
+Proof of Correctness. The proof follows the same structure as the correctness proof of Theorem 5.8: we show that property (♦) holds
+for each loop on a one-pass tree-like chase sequence for 𝐼 and Σ; a minor difference is that the TGD whose existence is implied by (♦) is not
+necessarily guarded, but has width bounded by hwidth(𝜎). To this end, we consider an arbitrary loop 𝑇𝑖,𝑇𝑖+1, . . . ,𝑇𝑗 −1,𝑇𝑗 at vertex 𝑣 in the
+sequence, and assume that the claim holds for all shorter loops in the sequence. By the definition of the loop, chase tree 𝑇𝑖+1 is obtained
+from 𝑇𝑖 by applying a chase step to some non-full TGD ∀(cid:174)𝑥 [𝛽0 → ∃(cid:174)𝑦 𝜂0] ∈ Σ. Let 𝜎0 and 𝜎 ′
+0 be the substitutions used in this chase step, and
+let 𝑣 ′ be the child of 𝑣 introduced in 𝑇𝑖+1. Note that 𝑇𝑖+1 (𝑣 ′) contains at most hwidth(Σ) + |consts(Σ)| distinct terms. We show by another
+induction on 𝑘 that the following property holds for each 𝑘 with 𝑖 < 𝑘 ≤ 𝑗 − 1:
+
+(♢) for each fact 𝐺 ∈ 𝑇𝑘 (𝑣 ′) \ 𝑇𝑖+1 (𝑣 ′), there exist a full TGD ∀(cid:174)𝑥 [𝛽 → 𝐻 ] ∈ Σ′ of width at most width(Σ) and a substitution
+𝜎 such that 𝜎 (𝛽) ⊆ 𝑇𝑖+1 (𝑣 ′) and 𝜎 (𝐻 ) = 𝐺.
+
+For the base case 𝑘 = 𝑖 + 1, property (♢) holds vacuously because 𝑇𝑘 (𝑣 ′) \ 𝑇𝑖+1 (𝑣 ′) = ∅. For the inductive step, assume that (♢) holds for
+some 𝑘 and consider the possible ways to obtain 𝑇𝑘+1 from 𝑇𝑘 . Property (♢) holds by the inductive hypothesis if 𝑇𝑘+1 (𝑣 ′) = 𝑇𝑘 (𝑣 ′)—that is, if
+the step involves a descendant of 𝑣 ′. Otherwise, 𝑇𝑘+1 (𝑣 ′) = 𝑇𝑘 (𝑣 ′) ∪ {𝐺 } where fact 𝐺 is obtained in one of the following two ways.
+• A full TGD in Σ derives 𝐺 from 𝑇𝑘 (𝑣 ′). Set Σ′ contains this TGD up to redundancy, so by Definition 5.1 there exist a full TGD 𝛽′′ → 𝐻 ′ ∈ Σ′
+
+and a substitution 𝜎 such that 𝜎 (𝛽′′) ⊆ 𝑇𝑘 (𝑣 ′) and 𝜎 (𝐻 ′) = 𝐺.
+
+• Fact 𝐺 is the output of a loop at vertex 𝑣 ′. But then, this loop is shorter than 𝑇𝑖, . . . ,𝑇𝑗 so, by property (♦), there exists a full TGD
+
+𝛽′′ → 𝐻 ′ ∈ Σ′ and a substitution 𝜎 such that 𝜎 (𝛽′′) ⊆ 𝑇𝑘 (𝑣 ′) and 𝜎 (𝐻 ′) = 𝐺.
+
+Either way, the width of rule 𝛽′′ → 𝐻 ′ is bounded by width(Σ), and we can assume that 𝛽′′ → 𝐻 ′ is of the form 𝐴′
+𝑛 ∧ 𝛽′ → 𝐻 ′
+ℓ ) ∈ 𝑇𝑘 (𝑣 ′) \ 𝑇𝑖+1 (𝑣 ′) for each 1 ≤ ℓ ≤ 𝑛, and 𝜎 (𝛽′) ⊆ 𝑇𝑖+1 (𝑣 ′). By property (♢), for each 1 ≤ ℓ ≤ 𝑛 there exist a full TGD
+where 𝜎 (𝐴′
+𝛽ℓ → 𝐻ℓ ∈ Σ′ and a substitution 𝜎ℓ such that 𝜎ℓ (𝛽ℓ ) ⊆ 𝑇𝑖+1 (𝑣 ′) and 𝜎ℓ (𝐻ℓ ) = 𝛾 (𝐴′
+ℓ ). Moreover, set rng(𝜎ℓ ) clearly contains at most
+hwidth(Σ) + |consts(Σ)| distinct terms. But then, there exist substitutions 𝜃1, . . . , 𝜃𝑛 that allow us to iteratively compose each 𝛽ℓ → 𝐻ℓ with
+𝐴′
+1 ∧ · · · ∧ 𝐴′
+𝑛 ∧ 𝛽′ → 𝐻 ′ to obtain a full TGD subsumed by some 𝜏 ∈ Σ′ and substitution 𝜎1 such that 𝜏 and 𝜎1 satisfy property (♢).
+To complete the proof, consider an arbitrary fact 𝐹 ∈ 𝑇𝑗 −1 (𝑣 ′) \ 𝑇𝑖+1 (𝑣 ′) that is propagated from 𝑣 ′ to 𝑣 in 𝑇𝑗 , and let 𝛽′′ → 𝐻 ′ ∈ Σ′ and 𝜎
+0 (𝜂0), then TGD 𝛽′′ → 𝐻 ′ satisfies
+0 (𝜂0) for each 1 ≤ 𝑖 ≤ 𝑛,
+0 (𝜂0). Moreover, rng(𝜎) clearly contains at most hwidth(Σ) + |consts(Σ)| distinct terms. But then, there exists a
+𝑛 ∧ 𝛽′ → 𝐻 ′
+□
+
+be the TGD and substitution whose existence is guaranteed by property (♢). Now if 𝜎 (𝛽′′) ⊆ 𝑇𝑖+1 (𝑣 ′) \ 𝜎 ′
+property (♦). Otherwise, we can assume that the rule is of the form 𝐴′
+and 𝜎 (𝛽′) ⊆ 𝑇𝑖+1 (𝑣 ′) \ 𝜎 ′
+substitution 𝜃 that allows us to apply the (PROPAGATE) variant of the FullDR inference rule to 𝛽0 → ∃(cid:174)𝑦 𝜂0 and 𝐴′
+to obtain a full TGD subsumed by some TGD 𝜏 ∈ Σ′ and substitution 𝜎1 such that 𝜏 and 𝜎1 satisfy property (♦).
+
+𝑛 ∧ 𝛽′ → 𝐻 ′ where 𝜎 (𝐴′
+
+1 ∧ · · · ∧ 𝐴′
+
+1 ∧ · · · ∧ 𝐴′
+
+1 ∧ · · · ∧ 𝐴′
+
+𝑖 ) ∈ 𝜎 ′
+
+Proof of Complexity. The proof is analogous to the proof of complexity of Theorem 5.8. In particular, the (PROPAGATE) variant of the
+FullDR inference rule is analogous to the ExbDR inference rule, so we can bound in the same way the number of candidate rule pairs and
+possible ways to match body atoms of 𝜏 ′ to head atoms of 𝜏 by 32ℓ 2
+, where ℓ = 𝑟 · (𝑤 + 𝑐)𝑎. Once a candidate pair of 𝜏 and 𝜏 ′ has been selected,
+we need to consider all possible substitutions 𝜃 . Each such 𝜃 is defined on at most 2𝑤 variables (cid:174)𝑥 ∪ (cid:174)𝑧. Moreover, each variable is mapped to
+one of the 𝑤 + 𝑐 variables or to one of the 𝑐 constants in consts(Σ). Hence, there are at most (𝑤 + 2𝑐)2𝑤 ≤ 4(𝑤+2𝑐 ) ·𝑤 ≤ 4(𝑤+𝑐 ) 2
+different
+substitutions 𝜃 . Consequently, the (PROPAGATE) variant of the FullDR inference rule can be applied at most 32ℓ 2 · 4(𝑤+𝑐 ) 2 < 32𝑛· (𝑤+𝑐 ) 2𝑎+1
+times. Applications of the (COMPOSE) variant can be bounded analogously. Finally, the times needed for subsumption checking, unification,
+and all other steps can be bounded analogously as in the complexity proof of Theorem 5.8, with a minor difference that only body atoms
+□
+need to be matched in the subsumption checks.
+
+The FullDR algorithm has several obvious weak points. First, it considers all possible ways to compose Datalog rules as long as this
+produces a rule with at most hwidth(Σ) + |consts(Σ)| variables. This may seem unnecessary, but the (COMPOSE) variant of the FullDR
+inference rule cannot be simply dropped while retaining completeness. To understand why, consider an arbitrary loop 𝑇𝑖, . . . ,𝑇𝑗 at vertex 𝑣
+with output fact 𝐹 in a one-pass chase proof: the (PROPAGATE) variant of the FullDR inference reflects only the chase step that derives
+the loop’s output 𝐹 , so the (COMPOSE) variant is needed to reflects the chase steps that produce facts derived in the child of 𝑣 that are
+not propagated back to 𝑣. Second, it is not clear how one efficiently obtains the atoms 𝐴1, . . . , 𝐴𝑛 and 𝐴′
+𝑛 participating in the
+1
+(PROPAGATE) variant. Third, the number of substitutions 𝜃 in the (COMPOSE) and (PROPAGATE) variants of the FullDR inference rule
+can be very large. Example E.3 illustrates this problem for the (COMPOSE) variant, but one can show analogously that the (PROPAGATE)
+variant suffers from the same issues.
+
+, . . . , 𝐴′
+
+(46)
+
+(47)
+
+Example E.3. Consider the steps of the FullDR algorithm on GTGDs (46)–(48).
+
+𝑅(𝑥1, 𝑥2) → ∃𝑦1, 𝑦2 𝑆 (𝑥1, 𝑥2, 𝑦1, 𝑦2) ∧ 𝑇 (𝑥1, 𝑥2, 𝑦2)
+
+𝑆 (𝑥1, 𝑥2, 𝑥3, 𝑥4) → 𝑈 (𝑥4)
+𝑇 (𝑧1, 𝑧2, 𝑧3) ∧ 𝑈 (𝑧3) → 𝑃 (𝑧1)
+
+(48)
+The (COMPOSE) variant of the FullDR inference rule should be applied to GTGDs (47) and (48), but it is not clear which unifier 𝜃 , identifying
+variables 𝑧𝑖 in the latter with variables 𝑥𝑖 in the former, one should use. The standard resolution inference rule from first-order theorem
+proving would consider only the MGU 𝜃 that maps 𝑧3 to 𝑥4; however, this would produce the resolvent 𝑆 (𝑥1, 𝑥2, 𝑥3, 𝑥4) ∧ 𝑇 (𝑧1, 𝑧2, 𝑥4) → 𝑃 (𝑧1)
+containing more than hwidth(Σ) = 4 variables, so this rule is not derived by the (COMPOSE) variant. Eliminating the upper bound on the
+number of variables is not a solution: doing so would allow the derivation of full TGDs with an unbounded number of variables, which
+would prevent termination. Instead, the (COMPOSE) variant requires us to consider every possible substitution 𝜃 that maps variables
+𝑥1, . . . , 𝑥4, 𝑧1, . . . , 𝑧3 to at most hwidth(Σ) variables. Consequently, 74 = 2401 substitutions deriving rules such as
+
+𝑆 (𝑥1, 𝑥2, 𝑥3, 𝑥4) ∧ 𝑇 (𝑥1, 𝑥2, 𝑥4) → 𝑃 (𝑥1),
+𝑆 (𝑥1, 𝑥2, 𝑥3, 𝑥4) ∧ 𝑇 (𝑥2, 𝑥1, 𝑥4) → 𝑃 (𝑥2),
+𝑆 (𝑥1, 𝑥2, 𝑥3, 𝑥4) ∧ 𝑇 (𝑥1, 𝑥3, 𝑥4) → 𝑃 (𝑥1),
+𝑆 (𝑥1, 𝑥2, 𝑥3, 𝑥4) ∧ 𝑇 (𝑥3, 𝑥1, 𝑥4) → 𝑃 (𝑥3),
+
+need to be considered, which is clearly infeasible in practice.
+
+(49)
+
+(50)
+
+(51)
+
+(52)
+⊳
+
+Nevertheless, we implemented FullDR using the subsumption and indexing techniques described in Section 6. Unsurprisingly, we did not
+find FullDR competitive in our experiments. In fact, FullDR timed out on 173 ontologies, and there are only three ontologies where another
+algorithm reached the timeout but FullDR did not. For this reason, we do not discuss the results with FullDR in Section 7.
+
+

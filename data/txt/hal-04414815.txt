@@ -1,0 +1,3395 @@
+Eﬀicient and robust active learning methods for
+interactive database exploration
+Enhui Huang, Yanlei Diao, Anna Liu, Liping Peng, Luciano Di Palma
+
+To cite this version:
+
+Enhui Huang, Yanlei Diao, Anna Liu, Liping Peng, Luciano Di Palma. Eﬀicient and robust active
+learning methods for interactive database exploration. The VLDB Journal, 2023, ￿10.1007/s00778-
+023-00816-x￿. ￿hal-04414815￿
+
+HAL Id: hal-04414815
+
+https://inria.hal.science/hal-04414815
+
+Submitted on 24 Jan 2024
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Distributed under a Creative Commons Attribution 4.0 International License
+
+Noname manuscript No.
+(will be inserted by the editor)
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database
+Exploration
+
+Enhui Huang† · Yanlei Diao∗,† · Anna Liu∗ · Liping Peng∗ · Luciano Di Palma†
+
+Received: date / Accepted: date
+
+Abstract There is an increasing gap between fast growth of
+data and the limited human ability to comprehend data. Con-
+sequently, there has been a growing demand of data man-
+agement tools that can bridge this gap and help the user
+retrieve high-value content from data more effectively. In
+this work, we propose an interactive data exploration sys-
+tem as a new database service, using an approach called
+“explore-by-example.” Our new system is designed to as-
+sist the user in performing highly effective data exploration
+while reducing the human effort in the process. We cast the
+explore-by-example problem in a principled “active learn-
+ing” framework. However, traditional active learning suf-
+fers from two fundamental limitations: slow convergence
+and lack of robustness under label noise. To overcome the
+slow convergence and label noise problems, we bring the
+properties of important classes of database queries to bear
+on the design of new algorithms and optimizations for ac-
+tive learning-based database exploration. Evaluation results
+using real-world datasets and user interest patterns show that
+our new system, both in the noise-free case and in the label
+noise case, signiﬁcantly outperforms state-of-the-art active
+learning techniques and data exploration systems in accu-
+
+Enhui Huang
+E-mail: enhui.huang@polytechnique.edu
+
+Yanlei Diao
+E-mail: yanlei.diao@polytechnique.edu
+
+Anna Liu
+E-mail: anna@math.umass.edu
+
+Liping Peng
+E-mail: lppeng@cs.umass.edu
+
+Luciano Di Palma
+E-mail: luciano.di-palma@polytechnique.edu
+
+†École Polytechnique, France
+∗University of Massachusetts Amherst, USA
+
+racy while achieving the desired efﬁciency for interactive
+data exploration.
+
+Keywords Interactive Data Exploration · Active Learning ·
+Label Noise
+
+1 Introduction
+
+Today data is being generated at an unprecedented rate.
+However, the human ability to comprehend data remains as
+limited as before. Consequently, there has been a growing
+demand of data management tools that can bridge the gap
+between the data growth and limited human ability, and help
+retrieve high-value content from data more effectively.
+
+In this framework,
+
+To respond to such needs, we build a new database
+service for interactive exploration in a framework called
+“explore-by-example” [23, 24].
+the
+database content is considered as table, and the user is inter-
+ested in a subset of its tuples but not all. In the data explo-
+ration process, the system allows the user to interactively la-
+bel tuples as “interesting” or “not interesting,” so that it can
+construct an increasingly-more-accurate model of the user
+interest. Eventually, the model is turned into a user inter-
+est query1 that will run the model as a user deﬁned function
+(UDF) on the database to retrieve all relevant tuples.
+
+In this work, we consider several target applications.
+First, when a scientist comes to explore a large sky survey
+database such as the Sloan Digital Sky Survey (SDSS) [69],
+he/she may not be able to express his/her data interest pre-
+cisely. Instead, the scientist may prefer to navigate through a
+region of the sky, see a few examples of sky objects, provide
+yes or no feedback, and ask the system to ﬁnd all other (po-
+tentially many more) relevant sky objects from the database.
+
+1 In our work we use the term, user interest query, to refer to the ﬁnal
+query that represents the user interest, and user interest model to refer
+to an immediate model before it converges to the true user interest.
+
+2
+
+Enhui Huang† et al.
+
+Second, consider many web applications backed by a large
+database, such as E-commerce websites and housing web-
+sites, which provide a simple search interface but leave the
+job of ﬁltering through a long list of returned objects to the
+user. The new database service in the explore-by-example
+framework will provide these applications with a new way
+to interact with the user and, more importantly, help the user
+ﬁlter through numerous objects more efﬁciently.
+
+To build an explore-by-example system, our approach
+is to cast it in an “active learning” framework: We treat
+the modeling of the user interest as a classiﬁcation prob-
+lem where all the user labeled examples thus far are used to
+train a classiﬁcation model. Then active learning [13,66,73]
+decides how to choose a new example, from the unlabeled
+database, for the user to label next so that the system can
+learn the user interest efﬁciently. The active learning based
+explore-by-example approach offers potential beneﬁts over
+alternative methods such as faceted search [45, 61, 62] and
+semantic windows [44] for the following reasons.
+
+b2
+
+)2 + ( colc−a2
+
+First, the user interest may include varying degrees of
+complexity, or the user does not have prior knowledge about
+the complexity and expects the system to learn a model as
+complex as necessary for his/her interest. For example, the
+user interest may involve more complex constraints, e.g.,
+“( rowc−a1
+)2 < c” , from the SDSS exam-
+b1
+ple query set [68], where rowc and colc refer to the row
+and column center positions of each photometric object, or
+“length ∗ width > c” from our Car User Study. If the user
+knows the function shape and constants in advance, some
+of the above examples (e.g., the ellipse pattern) can be sup-
+ported by semantic windows [44] as pre-deﬁned patterns.
+However, if the user does not have such knowledge, nei-
+ther faceted search nor semantic windows can be applied,
+but explore-by-example still works regardless of how com-
+plex the predicates are, which functions and constants are
+used in the predicates, etc.
+
+Second, increased dimensionality makes it harder for se-
+mantic windows to scale. For example, when the interest of
+the SDSS user involves both an ellipse pattern based on the
+location and a log pattern based on brightness, it will be
+more difﬁcult for the system and the user to handle multi-
+ple semantic windows in data exploration (if such patterns
+can be predeﬁned). In contrast, as the dimensionality in-
+creases, explore-by-example can keep the same user inter-
+face for data exploration and handles increased complexity
+via its learning algorithm “behind the scenes.”
+
+While prior work on explore-by-example has employed
+active learning [24], a main issue is the large number of
+labeled examples needed to achieve high accuracy. For in-
+stance, in the use case studied in [24], 300-500 labeled ex-
+amples were needed to reach 80% accuracy, which is un-
+desirable in many applications. This problem, referred to as
+slow convergence, is exacerbated when the user interest cov-
+
+ers only a small fraction of the database (i.e., low selectiv-
+ity) or the number of the attributes chosen for exploration
+is large (i.e., high dimensionality). Another major issue is
+that most existing active learning methods assume the la-
+bels provided by the user to be uncorrupted [14]. In prac-
+tice, label noise often occurs in the user labeling process
+due to two main reasons. First, the user does not fully un-
+derstand his/her interest and may have trouble classifying
+some examples correctly, especially those close to the deci-
+sion boundary. Second, some examples are mislabeled ac-
+cidentally. As stated in the survey [31], the occurrence of
+label noise may lead to (i) deterioration of prediction per-
+formance, (ii) requirement of more labeled examples and
+more complex learned models, and (iii) distortion of ob-
+served class distribution. Although a few pioneering efforts
+have considered the label noise problem in the context of
+active learning [3, 14, 41, 48, 71, 82, 83], they often focus on
+random classiﬁcation noise. It is challenging to deal with
+more general and realistic label noise models.
+
+In this work, we take a new approach to active learning-
+based database exploration. Instead of improving active
+learning in isolation from the database, we treat it as an in-
+ternal module of the database system and ask the question:
+what query and data properties from the database can we
+leverage to address the slow convergence problem and the
+label noise problem? Based on the common properties that
+we observed in query traces from the SDSS [68] and a car
+database (described more in Section 6), we can indeed de-
+sign new techniques that overcome or alleviate the slow con-
+vergence and label noise problems. Some of the key query
+and data properties we explore include:
+
+Subspatial Convexity: Consider the database attributes
+as dimensions of a data space D and map the tuples to the
+space based on the values of their attributes. Then all the tu-
+ples that match the user interest form the positive region in
+D; others form the negative region. We observe that in some
+lower-dimensional subspaces of D, the projected positive or
+negative region is a convex object. For example, the SDSS
+query trace [68] includes 116 predicates, among which 107
+predicates deﬁne a convex positive region in the subspace
+formed by the attributes used in the predicate, and 3 predi-
+cates deﬁne a convex negative region in their subspaces. For
+the car database, the 70 predicates deﬁned on numerical at-
+tributes all form a convex positive region. Figure 2 shows a
+range of predicates from these two databases and their posi-
+tive and negative regions.
+
+Conjunctivity: Conjunctive queries are a major class of
+database queries that have been used in numerous applica-
+tions. For data exploration, we are interested in the “con-
+junctive” property of the set of predicates that characterize
+the user interest. Among 45 queries provided by SDSS [68],
+40 queries are conjunctive queries. For the car database, all
+user queries use the conjunctive property.
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+3
+
+In this paper, we bring the subspatial convexity and con-
+junctivity of database queries, treated as true (yet unknown)
+user interest queries, to bear on the design of new algorithms
+and optimizations for active learning-based database explo-
+ration. These techniques allow the database system to over-
+come fundamental limitations of traditional active learning,
+i.e., the slow convergence problem when data exploration is
+performed with high dimensionality and low selectivity of
+the user interest query, and the label noise problem when
+the labels given by the user are corrupted. More speciﬁcally,
+our paper makes the following contributions.
+
+1. Dual-Space Model (Section 3): By leveraging the
+subspatial convex property, we propose a new “dual-space
+model" (DSM) that builds not only a classiﬁcation model,
+FV , from labeled examples, but also a polytope model of
+the data space, FD. On one hand, active learning theory im-
+proves FV by choosing the next example that enables reduc-
+tion of the version space V (the space of all classiﬁcation
+models consistent with labeled data). On the other hand,
+our polytope model offers a more direct description of the
+data space D including the areas known to be positive, areas
+known to be negative, and areas with unknown labels. We
+use both models to predict unlabeled examples and choose
+the best example to label next. In addition, DSM allows us
+to prove exact and approximate lower bounds on the model
+accuracy in terms of the F1-score. To the best of our knowl-
+edge, this is the ﬁrst provable result of an active learning
+method in the F1-score, while existing learning theory offers
+bounds only on classiﬁcation errors [16, 27, 35–37], which
+treats positive and negative classes equally and hence does
+not suit queries of very low selectivity.
+
+2. High-dimensional Exploration (Section 4): When
+the user interest involves a large number of attributes, by
+leveraging the conjunctive and subspatial convexity proper-
+ties of user interest queries, we factorize a high-dimensional
+data space into low-dimensional subspaces, in some of
+which the projections of user positive or negative regions
+are convex. Our dual-space model with factorization, DSMF ,
+runs the polytope model in each subspace where the convex
+property holds. We formally deﬁne the class of queries that
+DSMF supports, the decision function it utilizes, and prove
+that it achieves a better lower bound of the F1-score than
+DSM without factorization.
+
+3. Learning with Label Noise (Section 5): To han-
+dle noisy labels with minimum labeled examples, we de-
+velop a new active learner called Robust Dual-Space Model
+(RDSM), which is a seamless integration of a recently pro-
+posed automatic noise distillation method (auto-cleansing)
+[17] and our proposed DSM-based denoising methods. Re-
+garding the user labeling process, we propose an adaptive
+method to strategically trade off the savings in user label-
+ing effort against the risk of introducing more label noise.
+We also extend RDSM with factorization (RDSMF ) for data
+
+exploration in high dimensional space, and design optimiza-
+tion strategies, such as distributed computing and hyperpa-
+rameter tuning, to improve our system in accuracy, interac-
+tive performance, and generality.
+
+4. Evaluation (Section 6): We evaluated our system us-
+ing two real datasets. The SDSS dataset [69] includes 190M
+tuples, for which the user interests are selective and their
+decision boundaries present varied complexity for detec-
+tion. Without knowing these queries in advance, DSMF can
+achieve the F1-score of 95% within 10 labeled examples if
+the decision boundary B falls in a sparse region, and other-
+wise requires 40-160 labeled examples for up to 6D queries
+while maintaining per-iteration time within 1-2 seconds.
+For these queries, DSMF signiﬁcantly outperforms learning
+methods including Active Learning (AL) [13,28] and Active
+Search [33], as well as recent explore-by-example systems,
+Aide [23, 24] and LifeJoin [19].
+
+Our user study of a 5622-tuple car database validates the
+subspatial convexity and conjunctivity properties of user in-
+terest queries. It also shows the beneﬁts of DSMF (a median
+of 10 labeled examples to reach high accuracy) over manual
+exploration (where the user wrote 12 queries and reviewed
+98 tuples as the median), as well as over other AL methods.
+In the face of label noise, evaluation using SDSS and
+car datasets shows the following results: (1) Our algorithm
+substantially outperforms alternative algorithms in accuracy
+for all label noise levels while maintaining per-iteration time
+within 1-3 seconds. In particular, compared to traditional ac-
+tive learning, our algorithm achieves 0.88x-22.14x higher
+accuracy for SDSS 4D-6D queries, and 0.14x-3.72x higher
+accuracy for the car queries obtained in our user study.
+(2) When the noise rate increases, while all algorithms de-
+crease performance, our algorithm reduces at the slowest
+pace. (3) All of our techniques, auto-cleansing, RDSM, and
+factorization, contribute to alleviate the label noise problem.
+(4) Our distributed computing method improves the time per
+iteration from 20-30 seconds without parallelism to a few
+seconds, which improves the scalability of our system.
+
+2 Background
+
+In this section, we review our design of an explore-by-
+example system and present background on active learning.
+
+2.1 System Overview
+
+Our data exploration system is depicted in Figure 1. In the
+following discussion, we use the query QF , "price ≤ 30000
+and length ∗ width > 10.1," extracted from our Car user
+study to exemplify the main concepts and core workﬂow.
+Suppose that the user has an implicit exploration goal QI :
+purchasing a spacious car at an affordable price. Since there
+
+4
+
+Enhui Huang† et al.
+
+space model. We present the main idea below while defer-
+ring the details to Section 3. At the high level, our model
+builds a partitioning of the data space based on all avail-
+able labeled examples. The data space is divided into three
+disjoint regions: the positive region, negative region, and un-
+known region. With the increase of labeled examples, both
+positive and negative regions expand while the uncertain re-
+gion shrinks. With sufﬁcient data, the uncertain region will
+eventually become empty and the positive region will con-
+verge to the user interest region. Based on the volumes of
+these regions, a lower bound of the F1-score can be obtained
+as the estimated accuracy for the classiﬁcation model. If the
+estimated accuracy exceeds the user-deﬁned threshold, the
+exploration will be terminated automatically by our system.
+3. Space Exploration. The trained model is explored to
+retrieve a new example for user labeling which, among all
+unlabeled examples, best expedites the model convergence.
+4. Request of User Feedback. The user labels the new
+example as positive or negative. Such feedback can be col-
+lected explicitly through a graphical interface as in our past
+work [22]. The newly labeled example is added to the la-
+beled dataset. For our example QI , the user provides feed-
+back based on the price, length, and width of a speciﬁc car
+in display. Note that although our ﬁnal learned query is writ-
+ten as "QF : price ≤ 30000 and length ∗ width > 10.1,"
+the user does not need to do such calculation. Instead, the
+user just looks at a particular car and decides whether it is a
+good tradeoff between space and price. It is our system that
+will learn the query QF to enclose all positive examples in
+a user interest region; that is, the boundary of the region is
+a learned concept and does not necessarily reﬂect how the
+user makes a decision. Our system also has an extension for
+the user to label the example for its subspaces, which we
+will defer to Section 4 when we introduce factorization.
+
+The above process repeats until the model reaches a
+user-speciﬁed accuracy level or the maximum level of iter-
+ations (labeled examples) that the user can tolerate. At this
+point, the model for the positive class is translated to a user
+interest query, which encodes the model in a UDF and re-
+trieves from the database all the tuples that the model clas-
+siﬁes as relevant. In the car query example, the implicit goal
+QI is eventually characterized by the output of QF .
+
+2.2 Active Learning for Data Exploration
+
+The problem of seeking the next example for labeling from
+a database of unlabeled tuples is closely related to active
+learning (AL). Its recent results are surveyed in [66]. Below,
+we summarize the results most relevant to our work.
+
+Pool-Based Sampling. Many real-world problems ﬁt the
+following scenario: there is a small set of labeled data L and
+a large pool of unlabeled data U available. In active learning,
+
+Fig. 1: System architecture for explore by example.
+
+is a tradeoff between spaciousness and price, the user cannot
+come up with the query QF directly, but when presented
+with a concrete example, the user can determine if this car
+meets the expectations or not.
+
+Initial Sampling. When exploring the database, the user
+is ﬁrst presented with the database schema for browsing.
+Based on his/her best understanding of the implicit explo-
+ration goal, the user chooses an initial set of attributes, {Ai},
+i = 1, . . . , d, from the database. They form a superset of
+the relevant attributes that will eventually be discovered by
+the system. Let us consider the projection of the underlying
+database table2 to {Ai}, and pivot the projected table such
+that each Ai becomes a dimension and the projected tuples
+are mapped to points in this d-dimensional space – the re-
+sulting space is called a data space where the user explo-
+ration will take place. For our example QI above, the data
+space involves attributes price, length, and width, as well
+as other irrelevant attributes that will be eventually ﬁltered
+out in the data exploration process3.
+
+To bootstrap data exploration, the user is asked to give
+a positive example and a negative example. If the user does
+not have such examples, the system can run initial sampling
+over the data space to help ﬁnd such examples. Since the
+initial sampling problem has been studied before [23, 49],
+our work in this paper focuses on data exploration after such
+initial examples are identiﬁed.
+
+Iterative Learning and Exploration starts with a posi-
+tive example and a negative example, which form the labeled
+dataset. In each iteration, four steps are executed in order,
+resulting in a new example labeled, as shown in Figure 1.
+
+1. Classiﬁcation. The labeled dataset is used to train a
+user interest model. Here, training is fast due to the small
+number of labeled examples.
+
+2. Convergence Test. Our system assesses the current
+model to decide whether more iterations are needed. This
+unique feature, which was not available in earlier data ex-
+ploration systems [23, 24], is enabled by our advanced data
+
+2 This work considers a dataset that consists of a single table. It is
+
+left to our future work to study the extension for join queries.
+
+3 Feature selection to ﬁlter irrelevant attributes is addressed in our
+previous paper [40]. Due to space constraints, in this paper we assume
+that feature selection is performed the same as [40] and focus on other
+data exploration issues.
+
+positive samplesnegative samplesUser FeedbackClassiﬁcationConvergence Space Explorationclassiﬁcation model classiﬁcation modeltrend detectionaccuracy estimationdimensionality reductionactive learningnext sampleDatabaseInitial Samplinginitial  samplesretrieval query NYoptimizationsFinal retrieval optimizationEfﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+5
+
+an example is chosen from the pool U in a greedy fashion,
+according to a utility measure used to evaluate all instances
+in the pool (or, if U is large, a subsample thereof). In our
+setting of database exploration, the labeled data L is what
+the user has provided thus far. The pool U is a subsample
+of size m of the unlabeled part of the database. The utility
+measure depends on the classiﬁer in use, as discussed below.
+Classiﬁcation Model. Previous explore-by-example sys-
+tems [23, 24] used decision trees to build a classiﬁcation
+model. It works well if the user interest pattern is a hyper-
+rectangle in the data space, whereas real-world applications
+may use more complex predicates. To support higher com-
+plexity, our system uses more powerful classiﬁers such as
+Support Vector Machines (SVM) or Gradient Boosting. The
+new techniques proposed in our work do not depend on the
+speciﬁc classiﬁer; they can work with most existing classi-
+ﬁers. But the implementation of active learning does depend
+on the classiﬁer in use. For ease of composition, in this paper
+we use SVM as an example classiﬁer.
+
+Active Learning Strategies have been studied to deter-
+mine which examples should be labeled next to expedite
+model convergence, which are also called "query strate-
+gies" in the AL literature. Some of the most popular strate-
+gies [66] include: Uncertainty sampling queries the exam-
+ples for which the current model is least certain of its pre-
+diction. For binary classiﬁcation, the examples selected are
+those closest to the decision boundary. Query by commit-
+tee maintains a committee of models trained on the cur-
+rent labeled dataset, allows all models to vote on the predic-
+tions for unlabeled data, and queries the examples on which
+the committee disagrees the most. Expected error reduc-
+tion queries the examples that would minimize the model’s
+generalization error. Variance reduction selects the exam-
+ples that would minimize output variance. Density-weighted
+methods take into account not only the most uncertain exam-
+ples but also the most representative ones of the underlying
+distribution (e.g. in dense regions) in the query strategy.
+
+It is important to note that our work aims to develop
+a new approach that overcomes the slow convergence ob-
+served for many of the above AL methods [57,66] by adding
+new insights from the data and user interest patterns in
+database exploration. Our solution combines a new data
+space model and any AL method to work in parallel, where
+the data space model is orthogonal to the AL method used.
+As such, our approach is tailored for database exploration
+while being general with respect to the AL method in use.
+
+More speciﬁcally, our implementation of the AL method
+is uncertainty sampling due to its wide use [66] and high ef-
+ﬁciency in execution. A ﬁnal note is that a formal descrip-
+tion of uncertainty sampling is through the notion of version
+space, which is the space of all conﬁgurations of the classi-
+ﬁcation model consistent with labeled data. For SVM clas-
+siﬁers, for example, the version space includes all possible
+
+Fig. 2: Positive region (green) and negative region (red) of 6 example
+predicates from SDSS queries, where one of the two regions is convex
+
+decision boundaries of the SVM that lead to correct clas-
+siﬁcation of the training examples. Uncertainty sampling is
+known to be an approximation of an optimal algorithm that
+bisects the version space with each selected example [73].
+For the above reason, we call the learning algorithm in un-
+certainty sampling version space-based as they are designed
+to reduce the version space, and we will further augment it
+with a new data space model.
+
+3 Dual-Space Model
+
+With the goal to provide a service for database exploration,
+our work takes a new, a database-centric approach to tackle
+the slow convergence problem of existing active learning
+methods. We observe from existing query traces that in
+lower-dimensional subspaces, the projected positive or neg-
+ative region of user interest query is often a convex object.
+Figure 2 shows 6 examples from the SDSS query trace [68],
+where 107 out of 116 predicates used deﬁne a convex posi-
+tive region (colored in green) in the subspace formed by the
+attributes in the predicate, and 3 predicates deﬁne a convex
+negative region (colored in red) in their subspaces.
+
+In this section, we utilize such subspatial convex-
+ity and introduce a dual-space (data and version space)
+model, which enables improved accuracy and provable
+lower bounds on the model accuracy. We begin with the sim-
+ple case that the convex property holds for the user interest
+query over the entire data space D, without factorization,
+and defer the extension to subspaces to Section 4. We refer
+to this class of queries as “convex pattern queries”, Qc ≡
+Q+
+c and Q−
+c denote those queries whose
+positive and negative regions are convex, respectively.
+
+c , where Q+
+
+c ∪ Q−
+
+3.1 A Polytope Model in Data Space
+
+The key idea behind our data space model is that at each it-
+eration we use all available labeled examples to build a par-
+titioning of the data space. It divides the data space into the
+
+(a) rowc>480androwc<885(b) (rowc−682.5)4+(colc−1022.5)4<904(c) rowc>617.5androwc<747.5andcolc>925andcolc<1120line segmentellipserectangle(d) rowv4+colv4>0.24(f) length∗width>=10.1(e)petroMag_ext_r+2.5∗logFGpetroR50_r2<23.3outside an ellipselog patternhyperbola pattern6
+
+Enhui Huang† et al.
+
+∅}. Given n− negative examples, the negative region R− is
+the union of the negative region for each negative example,
+
+i.e., R− =
+
+n−(cid:83)
+i=1
+
+R−
+i .
+
+From the deﬁnition, we know that R−
+i
+
+is a convex cone
+generated by the conical combination of the vectors from the
+−−−→
+j e−
+e+
+positive examples to the given negative example, i.e.,
+i
+(j = 1, . . . , n+). The red triangle in Figure 3(a) depicts such
+a convex cone. However, the union of R−
+i , i = 1, 2, . . . is
+non-convex. For example, the union of the ﬁve red polygons
+in Figure 3(b) is non-convex. Given more labeled examples,
+the result of the union will be more accurate for approximat-
+ing the true negative region, which is outside the ellipse. We
+prove the following property of the negative region:
+
+Proposition 2 All points in the negative region R− are neg-
+ative.
+
+Deﬁnition 3 (Uncertain Region) Denote the data space as
+Rd, the uncertain region Ru = Rd − R+ − R−.
+
+Formally, the polytope model makes a decision about an
+example x based on the following decision function, which
+takes values in {−1, 0, 1} corresponding to R−, Ru, and R+
+deﬁned above:
+
+FD(x) = 1 · 1(x ∈ R+) − 1 · 1(x ∈ R−).
+
+(1)
+
+Our work also supports the case that the negative re-
+gion of the query is convex (Q−
+c ). We can simply switch
+the above deﬁnitions such that we build a convex polytope
+for the negative region, and a union of convex cones for the
+positive region, one for each positive example. We also of-
+fer a test at the beginning of the data exploration process to
+c or Q ∈ Q−
+choose between two polytope models, Q ∈ Q+
+c .
+The details are deferred to Section 4 where we offer a test
+procedure for all the assumptions made in the work.
+
+Three-Set Metric. Our goal is not only to provide a
+new data space model, as described above, but also to de-
+sign a new learning algorithm that enables a provable bound
+on the model accuracy. As stated before, our accuracy mea-
+sure is the F1-score. Formally, the F1-score is evaluated on
+a test set Dtest = {(xi, yi)}, where xi denotes a database
+object and yi denotes its label according to the classiﬁca-
+tion model. Then the F1-score is deﬁned as, F1-score =
+2 · precision·recall
+precision+recall , where precision is the fraction of points
+returned by the model from Dtest that are truly positive, and
+recall is the fraction of positive points in Dtest that are ac-
+tually returned by the model.
+
+However, capturing the F1-score in our data exploration
+procedure is difﬁcult because we do not have such a la-
+beled test set, Dtest, available. We cannot afford to ask
+the user to label more to produce one since the user labor
+
+(a) A positive region (green)
+with 3 examples, and a nega-
+tive region (red) with 1 nega-
+tive and 2 positive examples
+
+(b) A positive region (green) and
+5 negative regions (red) built
+from 5 positive examples and 5
+negative examples.
+
+Fig. 3: Positive and negative regions in the polytope model.
+
+positive region (any point inside which is known to be pos-
+itive), the negative region (any point inside which is known
+to be negative) and the uncertain region. As more examples
+are labeled, we have more knowledge about the uncertain
+region, so part of it will be converted to either the positive
+or the negative region in later iterations. Eventually, with
+enough training data, the uncertain region becomes empty,
+and the positive region converges to the query region.
+
+For simplicity, we begin with queries whose positive re-
+gion is convex (Q+
+c ). When the query region Q is convex,
+any point on the line segment between two points x1 ∈ Q
+and x2 ∈ Q is also in Q. Then we have the following:
+
+Deﬁnition 1 (Positive Region) Denote the examples that
+have been labeled as “positive" as L+ = {e+
+i | i =
+1, . . . , n+}. The convex hull of L+ is known to be the small-
+est convex set that contains L+ [46] and is called the positive
+region, denoted as R+.
+
+It is known that the convex hull of a ﬁnite number of
+points is a convex polytope [34]. For example, the green tri-
+angle in Figure 3(a) and the green tetragon in Figure 3(b)
+are the positive regions formed by three and four positive
+examples, respectively, which are an approximation of the
+query region marked by the green ellipse. We can prove the
+following property of the positive region for convex queries,
+assuming that user labels are consistent with her interest:
+
+Proposition 1 All points in the positive region R+ are pos-
+itive.
+
+All the proofs in this section and the next are left to our
+
+tech report [39] due to space limitations.
+
+Deﬁnition 2 (Negative Region) For a negative example
+e−
+i , we can deﬁne a corresponding negative region R−
+i such
+that the line segment connecting any point x ∈ R−
+i and e−
+i
+does not overlap with the positive region R+, but the ray that
+i and passes through e−
+starts from x ∈ R−
+i will overlap with
+−−→
+R+. More formally, R−
+i = {x|xe−
+xe−
+i ∩R+ (cid:54)=
+
+i ∩R+ = ∅∧
+
++"+"+"_"+"+"`+++_++____Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+7
+
+is an important concern. To bound the F1-score with lim-
+ited labeled data, our idea is to run our polytope model,
+FD : Rd → {−1, 0, 1}, on an evaluation set. We deﬁne
+the evaluation set Deval as the projection of Dtest without
+labels yi’s. Then for each data point in Deval, depending on
+which region it falls into, Deval can be partitioned into three
+sets accordingly, denoted as D+, D− and Du. We can com-
+pute a metric from the number of data points in the three
+sets, as follows.
+
+Deﬁnition 4 (Three-Set Metric) Denote D+ = Deval ∩
+R+, D− = Deval ∩ R−, Du = Deval ∩ Ru, and |S| means
+the size of set S. At a speciﬁc iteration of exploration, the
+three-set metric is deﬁned to be
+
+|D+|
+|D+|+|Du| .
+
+We will prove shortly that this metric is a lower bound of
+the F1-score evaluated on Dtest. As more labeled examples
+are provided, data points will be moved from Du to either
+D+ or D−. Eventually, with enough training data the un-
+certain set shrinks to an empty set and the Three-Set Metric
+rises to 100%, reaching convergence.
+
+3.2 Dual-Space Model and Algorithm
+
+We now propose a new algorithm for interactive data explo-
+ration by exploiting models from two spaces, including our
+data space model FD with the Three-Set Metric, and a clas-
+siﬁcation model FV with uncertainty sampling derived from
+the version space.
+
+We ﬁrst deﬁne the dual-space model (DSM) by consider-
+
+ing two functionalities of a model for data exploration.
+
+(1) Prediction: Given an unlabeled example, DSM pre-
+dicts the class label ﬁrst based on the data space model FD.
+If the example falls in the positive region R+, it is predicted
+to be positive; if it falls in the negative region R−, it is pre-
+dicted to be negative. If the example falls in the unknown
+region Ru, then the classiﬁcation model FV is used to pre-
+dict the example to be positive or negative.
+
+(2) Sampling: In the AL framework, the model is also
+used to guide the choice of the next example for labeling
+to expedite model convergence. As discussed in Section 2,
+active learning can use an uncertainty sampling method, SV ,
+for a given classiﬁcation model to choose the next example.
+However, direct application of uncertainty sampling to our
+dual-space model raises a problem: the example chosen by
+SV may fall in the known positive or negative region of our
+data space model FD, hence wasting computing resources
+on such examples. In our work, we propose a new sampling
+method that is restricted to the unknown region of our data
+space model, denoted as SD. However, if we sample only
+from our data space model, we may not get a representative
+sample to train the classiﬁer. Therefore, we use a sampling
+ratio, γ, to alternate between the sampling methods, SD and
+
+Algorithm 1 Dual-Space Algorithm for Convex Queries
+Input: database D, initial labeled data set D0, accuracy threshold λ,
+sampling ratio γ, unlabeled pool size m
+1: Dlabeled ← D0, Dunlabeled ← D \ D0
+2: R+ ← ∅, R− ← ∅
+3: D+ ← ∅, D− ← ∅, Du ← D
+4: D ← (D+, D−, Du)
+5: Dlu ← D0, Dld ← ∅
+6: repeat
+
+(R+, R−) ← updateRegion(R+, R−, x)
+
+// building the Dual-Space model:
+for x ∈ Dlu do
+
+7:
+8:
+9: D ← threeSets(R+, R−, D)
+accu ← threeSetMetric(D)
+10:
+11: Dlabeled.append(Dlu ∪ Dld)
+12: Dunlabeled.remove(Dlu ∪ Dld)
+13:
+
+classif ier ← trainClassifier(Dlabeled)
+// uncertainty sampling:
+
+else
+
+pool ← subsample(Du, m)
+x ← getNextToLabel(pool, classif ier)
+Dlu ← getUserLabel(x)
+
+14: Dlu ← ∅, Dld ← ∅
+if rand() ≤ γ then
+15:
+16:
+17:
+18:
+19:
+20:
+21:
+22:
+23:
+24:
+25:
+26:
+Dlu ← getUserLabel(x)
+27:
+28: until accu ≥ λ or reachedMaxNum()
+29: finalRetrieval(D, (R+, R−), classif ier)
+
+pool ← subsample(Dunlabeled, m)
+x ← getNextToLabel(pool, classif ier)
+if x ∈ R+ then
+Dld ← (x, 1)
+else if x ∈ R− then
+Dld ← (x, −1)
+
+// auto-labeling
+
+// auto-labeling
+
+else
+
+SV . For instance, when γ = 1/3, in each iteration we use
+SD with probability 1/3 and use SV otherwise.
+
+Now we present the full algorithm for interactive data
+exploration, as shown in Algorithm 1. The input is the
+database D, the initial labeled data set D0 (a positive ex-
+ample x+, a negative example x−), a user-deﬁned accuracy
+threshold λ, the sampling ratio γ, and the size of unlabeled
+pool m. First, we assign the initial labeled and unlabeled
+datasets (line 1). In particular, we assume the evaluation set
+Deval to be the entire database D, which can be replaced
+with a sample of D if D is too large. More details can be
+found in Section 3.4. Then we initialize data structures, in-
+cluding setting the data space model (R+, R−) as empty
+sets, setting the partitions D, and assigning the user-labeled
+set Dlu and the DSM-labeled set Dld as empty sets. The al-
+gorithm next goes through iterative exploration.
+
+Lines 7-13 update our DSM model. The data space
+model, R+ and R−, is updated with the newly labeled ex-
+ample(s) by the user (lines 7-8). This step incrementally up-
+dates our convex polytope for R+ and the union of convex
+polytopes for R− based on computational geometry [9]. Af-
+terwards, the corresponding partitions D are incrementally
+updated (line 9). In this step, some examples are removed
+
+8
+
+Enhui Huang† et al.
+
+from the unknown partition Du and placed to the positive
+partition D+ or the negative partition D−. The accuracy
+is then estimated using the Three-Set Metric. We also keep
+track of the labeled and unlabeled examples using Dlabeled
+and Dunlabeled. We use the labeled examples to train a clas-
+siﬁer, that is, the version space model in our DSM.
+
+Then lines 14-27 implement uncertainty sampling using
+DSM. With probability γ, we perform uncertainty sampling
+from a pool restricted to the unknown partition of the evalu-
+ation set, Du. Then the example chosen randomly is labeled
+by the user. With probability 1 − γ, we perform uncertainty
+sampling from a pool that is a subsample of all unlabeled
+examples in the database. Then the example chosen by un-
+certainty sampling is ﬁrst run through our data space model,
+(R+, R−), to see if it falls in the positive or negative re-
+gion and hence can be labeled directly by the model (we
+call this functionality auto-labeling from DSM). Otherwise,
+it will be labeled by the user. Note that auto-labeling can re-
+duce the number of user-labeled examples required to reach
+high accuracy, achieving faster convergence. Due to auto-
+labeling, our labeled set includes both user-labeled examples
+and DSM-labeled examples.
+
+Then the algorithm repeats until it has met the user ac-
+curacy requirement based on the lower bound offered by our
+Three-Set Metric, or reached the maximum of iterations al-
+lowed (line 28). Finally, we run the DSM model over the
+database to retrieve all tuples predicated to be positive.
+
+3.3 Lower Bounds of the F1-score
+
+Given how the DSM algorithm works, we now present for-
+mal results on the model accuracy achieved by DSM.
+
+Exact Lower Bound. We begin with an exact lower
+
+bound of our accuracy measure, the F1-score.
+
+Theorem 1 The Three-Set Metric evaluated on Deval is a
+lower bound of the F1-score if DSM is evaluated on Dtest.
+
+The lower bound of DSM has several features. First, it is
+an exact lower bound throughout the exploration process for
+any evaluation set Deval. Second, the metric is monotonic
+in the sense that points in the uncertain region Du can be
+moved to the positive or negative region later, but not vice
+versa, and the metric goes to 1 when Du = ∅. If the metric is
+above the desired accuracy threshold at some iteration, it is
+guaranteed to be greater than the threshold in later iterations,
+so we can safely stop the exploration.
+
+Approximate Lower Bound. When Deval is too large,
+we employ a sampling method to reduce the time to evaluate
+the Three-Set Metric. Let p and q be the true proportions of
+the positive and negative examples in Deval, i.e., p = |D+|
+|Deval|
+p
+and q = |D−|
+|Deval| . Then the Three-Set Metric is b =
+.
+1 − q
+
+Let ˆp and ˆq be the observed proportions of the positive and
+negative examples in a random draw of n examples from
+
+ˆp
+1 − ˆq
+
+Deval, and let Xn =
+
+. Our goal is to ﬁnd the smallest
+
+sample size n such that the error of the estimation Xn from
+the exact Three-Set Metric is less than δ with probability no
+less than λ. That is, Pr(|Xn − b| < δ) ≥ λ.
+
+The following theorem helps ﬁnd the lower bound of n.
+
+Theorem 2 sup(cid:15)(cid:107)P r(
+
+√
+
+(cid:32)
+
+n|Xn−b| < (cid:15))−
+
+2Φ(
+
+(cid:15)(1−q)
+(cid:112)p(1−p−q)
+
+)
+
+(cid:33)
+
+−1
+
+(cid:107) = O(1/
+
+√
+
+n) for any (cid:15), where Φ is the cumulative
+
+distribution function of the standard Normal distribution.
+
+With the theorem, we can approximate the sample size by
+
+√
+
+nδ(1 − q)
+(cid:112)p(1 − p − q)
+
+2Φ(
+
+) − 1 ≥ λ.
+
+Since p(1 − p − q)/(1 − q)2 ≤ 1/4, it is sufﬁcient for
+n to satisfy 2Φ(2
+nδ) − 1 ≥ λ and therefore n ≥
+(cid:0)Φ−1 (cid:0) λ+1
+
+/(4δ2).
+
+(cid:1)(cid:1)2
+
+√
+
+2
+
+3.4 Optimization
+
+We improve time efﬁciency by designing new sampling
+methods and leveraging distributed computing. We begin
+by considering the sampling procedures in Algorithm 1. We
+present their implementation and optimization as follows.
+
+Sampling for creating the evaluation set (OPT1). In
+line 1 of Algorithm 1, we assign the evaluation set Deval
+to be the entire database D, to develop a lower bound of
+the DSM model. Ideally, we want Deval
+to be as large
+as possible. However, for efﬁciency, we can only afford
+to have a memory-resident sample. The analysis in Theo-
+rem 2 indicates that we can choose a sample of size n from
+the database, and achieve an approximate lower bound of
+the F1-score of our DSM algorithm when evaluated on the
+database. The sample, denoted as ˜Deval, will expedite line
+9 of Algorithm 1. For example, the SDSS database used
+in our experiments contains 190 million tuples. Denote the
+true lower bound as b. When n = 50k, our approximate
+lower bound ˆb approximates b by (cid:15) ≤ .005 with probability
+0.975 or higher. When n = 1.9 million, ˆb approximates b by
+(cid:15) ≤ .001 with probability 0.994 or higher.
+
+Sampling for pool-based active learning. Algorithm 1
+contains two subsample procedures for pool-based uncer-
+tainty sampling, i.e., choosing the most uncertain example
+from the pool for labeling next. The subsample routine
+in line 16 creates a pool of unlabeled examples from the un-
+certain partition of the evaluation set, Du, which is memory-
+resident. This can be implemented using reservoir sampling.
+The subsample routine in line 20, however, creates a pool,
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+9
+
+from the unlabeled portion of the entire database, which is
+large and not materialized. We devise a sampling-based op-
+timization to avoid scanning the unlabeled database in each
+iteration. Due to space constraints, the interested reader is
+referred to [39] for details.
+
+Distributed computing (OPT2). Given a large dataset,
+it is time-consuming to update the data space model by
+building the three (positive, negative, and uncertain) parti-
+tions for the entire dataset every time a user-labeled exam-
+ple is received. We apply an open-source system Ray4 to
+parallelize our code, by splitting the entire dataset into sev-
+eral subsets evenly and building the partitions within each
+subset. As such, we divide the partition-building task for the
+entire dataset into multiple independent sub-tasks, reducing
+the time per iteration from 20-30 seconds to a few seconds.
+
+4 Factorized Dual-Space Model
+
+Although DSM can reduce user labeling effort and offer
+better accuracy than traditional active learning, increased
+dimensionality will make the volume of its uncertain re-
+gion grow fast and degrade its performance. To handle this
+issue, we leverage the property of conjunctive queries to
+factorize a high-dimensional data space into a set of low-
+dimensional spaces. By running the polytope model in each
+low-dimensional space, we can “simulate” DSM in the high-
+dimensional space with improved performance.
+
+This extension, denoted as DSMF , may require the user
+to label examples in some subspaces. Revisit our example
+query QI from Section 2. We observe that often when a user
+labels an example, the decision making process can be bro-
+ken into a set of smaller questions, whose answers are then
+combined, through conjunctivity, to derive the ﬁnal answer.
+In the example of QI , the user asks two smaller questions:
+one concerns price (P ) and the other concerns length and
+width (LW ) for spaciousness. If a car is labeled positive,
+then its partial labels on P and LW are inferred to be pos-
+itive. Otherwise, the user will be asked which values are
+not satisfactory. For example, if the user thinks the price is
+too high, through clicking a "dislike" button in the GUI, the
+price P will receive a negative partial label for the given car.
+As the user has gone through thinking to derive the overall
+negative label, specifying a subset of attributes that lead to
+the negative decision will not incur much more work.
+
+4.1 Factorization
+
+Formally, factorization concerns a user interest query Q that
+is deﬁned on an attribute set A of size d and can be written in
+the conjunctive form, Q1 ∧. . .∧Qm. Each Qi, i ∈ [1 . . . m],
+
+4 Ray provides fast distributed computing at https://ray.io/
+
+uses a subset of attributes Ai = {Ai1, · · · , Aidi}. The fam-
+ily of attribute sets, A = (A1, · · · , Am), is pairwise dis-
+
+joint with d =
+
+di, and called the factorization structure.
+
+m
+(cid:80)
+i=1
+
+In practice, we can derive the factorization structure
+from available data in a database. If a query trace is avail-
+able to show how attributes are used in predicates, e.g., indi-
+vidually or in a pair, we can run a simple algorithm over the
+query trace: Initially assign each attribute to its own parti-
+tion. As the query trace is scanned, two partitions are merged
+if a predicate uses attributes from the two partitions. At the
+end, all the remaining partitions become the factorization
+structure A. Even if a query trace is not available, it is still
+possible to work with domain experts and extract a factor-
+ization structure that reﬂects how attributes are used based
+on their semantics, e.g., length and width are often used in
+the same predicate to capture the spaciousness of the car.
+
+DSC Queries. We next deﬁne a class of user interest
+queries that DSMF supports with beneﬁts over active learn-
+ing: that is, ∀i = 1, . . . , m, either the positive region in
+the ith subspace, deﬁned as {xi ∈ R|Ai||Qi(xi) > 0},
+is convex (in the Q+
+c class), or the negative region, {xi ∈
+R|Ai||Qi(xi) < 0} is convex (in Q−
+c ). We call such queries
+Decomposable Subspatial Convex (DSC) queries.
+
+DSC allows us to combine a subspace whose positive
+region is convex with another subspace whose negative re-
+gion is convex. However, the global query is not necessarily
+convex in either the positive or negative region. Figure 4(a)
+shows an example query, Q = x2 + y2 > 0.22 ∧ 480 < z <
+885, which combines the ellipse pattern in Fig. 2(d), whose
+negative region is convex, with the line pattern in Fig. 2(a),
+whose positive region is convex. In the 3D space, the nega-
+tive region (marked in red) is the union of the red cylinder in
+the middle of the ﬁgure and the red rectangles above and be-
+low the cylinder, while the positive region (in green) is the
+complement of it. Neither of the positive nor the negative
+region of Q is convex although it belongs to DSC.
+
+p-DSC Queries. We also support a superset of DSC
+queries where the convex assumption holds only in some
+subspaces. We call this set partial factorization or p-DSC.
+
+As a special case, if none of the subspaces permits the
+convexity property, we call such queries Zero DSC or 0-DSC.
+
+4.2 Factorized DSM Model
+
+We next extend our DSM model with factorization, denoted
+as DSMF . The new model is composed of a factorized poly-
+tope model and a factorized classiﬁcation model.
+
+Factorized polytope model. Given the factorization
+structure, the polytope model runs in each subspace where
+the subspatial convexity holds. In the ith subspace deﬁned
+by Ai, Qi’s positive and negative regions, denoted as R+
+i
+and R−
+i , are built according to Deﬁnition 3.1 and 3.2, but
+
+10
+
+Enhui Huang† et al.
+
+(a) A query in the DSC family is not con-
+vex in either the positive region (green) or
+the negative region (red).
+
+(b) A positive region built from 4 positive
+points, {A, B, C, D}
+
+(c) 4 positive points {A, B, C, D}, and 1 nega-
+tive point e− that is negative in the (x-y) sub-
+space and positive in the (z) subspace
+
+Fig. 4: Illustration of factorization when 3D space (x-y-z) is factorized into two subspaces (x-y) and (z).
+
+based on the “positive” and “negative” labels of projected
+examples for Qi, as mentioned above. Then we build the
+positive and negative regions of Q from the positive and neg-
+ative regions in the subspaces via the conjunctive property:
+
+R+
+
+f = ×m
+
+i=1R+
+
+i , R−
+
+f = (cid:0)×m
+
+i=1(R−
+
+i )c(cid:1)c
+
+(2)
+
+where × denotes the Cartesian product between two sets,
+and Rc denotes the complement of set R. Then the uncertain
+region of Q is, Ru
+
+f = Rd − R+
+
+f − R−
+f .
+
+Next we formally deﬁne the decision function for the
+polytope model with factorization. In each subspace deﬁned
+on Ai, let FAi : R|Ai| → {−1, 0, 1} be the decision func-
+tion that divides the subspace into three disjoint regions cor-
+responding to the negative, unknown, and positive regions,
+respectively. As in (Eq. 1),
+FAi(x) = 1 · 1(x ∈ R+
+
+i ) − 1 · 1(x ∈ R−
+
+i ).
+
+(3)
+
+For p-DSC queries, if the subspatial convexity does not hold
+in a subspace, the value of its decision function is set to zero.
+The global decision function for the polytope model
+
+with factorization over the entire data space is then
+
+FDf (x) =
+
+m
+min
+i=1
+
+FAi (xi)
+
+(4)
+
+where x = (x1, . . . , xd), and xi denotes the projection of
+x on the ith subspace deﬁned by Ai.
+
+Factorized classiﬁcation model. To apply factorization
+to the classiﬁer, we train a classiﬁer in each subspace hi :
+R|Ai| → {−1, 1}, i = 1, · · · , m, and combine them to be
+a classiﬁer FVf : Rd → {−1, 1} over the entire data space.
+According to the conjunctive property, we have
+
+FVf =
+
+m
+min
+i=1
+
+hi(xi)
+
+(5)
+
+We call FVf a factorized classiﬁer.
+
+We further propose a new sample acquisition method for
+
+FVf . The sample acquisition criterion can be deﬁned as:
+(cid:16) m
+(cid:88)
+
+(cid:17)
+
+next_sample = arg min
+
+|d(hi, xi)|
+
+x
+
+i=1
+
+(6)
+
+The example selected from the unlabeled data by the above
+criterion has, on average, the shortest distance to each de-
+cision boundary on subspaces. The reason behind using L1
+(Manhattan) distance metric to combine the distance infor-
+mation from all subspaces is that for the commonly used
+Lk norm, lower values of k are preferable in high dimen-
+sional space as shown in [4]. In addition, we observe from
+empirical results that when the sample acquisition methods
+are performed with high dimensionality, the examples se-
+lected by our criterion are usually closer to the true decision
+boundary, compared to the traditional uncertainty sampling.
+Finally, consider the dual-space model. Let DSMF be the
+combination of DSM in §3.2 with the polytope data space
+model FD replaced by the polytope model with factorization
+FDf , and the classiﬁcation model FV replaced by the factor-
+ized classiﬁer FVf . Then the dual-space decision function of
+DSMF , H : Rd → {−1, 1}, is:
+
+H(x) =
+
+(cid:26) FDf (x), FDf (x) (cid:54)= 0
+FVf (x), otherwise
+
+(7)
+
+H is our ﬁnal prediction model returned to approximate the
+user interest query. For 0-DSC queries, DSMF simply runs
+the classiﬁcation model.
+
+f , R−
+
+Illustration. Before presenting the formal results, we il-
+lustrate the intuition that factorization allows us to construct
+the positive and negative regions (R+
+f ) as supersets of
+(R+, R−), hence reducing the unknown region and offer-
+ing better accuracy. Figure 4(b) shows four positive points
+A, B, C, D when the 3D space (x-y-z) is factorized into two
+subspaces (x-y) and (z). It depicts the positive region R+ as
+the pyramid shaded in grey and marked by the green lines.
+When we factorize R+ into (x-y) and (z) planes, we have
+xy as a triangle marked ABC and R+
+R+
+z as a line segment
+projected onto z. Then we construct R+
+f from the triangle
+and the line segment based on Eq. 2, we obtain a prism
+marked by the blue lines, which is much bigger than R+.
+
+Figure 4(c) shows a negative point e− and the negative
+region built for it. R− is a convex cone shaded in grey and
+bounded by the solid purple rays emitting from e−. When
+
+A D C B A D ​"↑−  C B (a)Case1A D ​"↑−  C B (b)Case2A D ​"↑−  C B (c)Case3Figure5:Illustrationofpositiveandnegativeregionsinfactorizedspace.anexample,thelabeliscertainlypositiveineachsubspace.How-ever,iftheuserlabelisnegativeforanexample,shewillbeaskedtohighlightthespeciﬁcsetofattributes(andthesubspacesthereof)thatleadtothenegativelabel.Thiscanbeeasilyachievedthroughagraphicalinterfacesuchasin[12].Positiveandnegativeregionsinfactorizedspace.Formally,factorizationconcernsauserinterestqueryQthatinvolvedat-tributesandcanbewrittenintheconjunctiveform,Q1^···^Qm,whereeachQIisconvexinthepositiveregion6andcontainsanattributesetAI={AI1,···,AIdI},withAIjrepresentingthejthattributeintheIthpartition.Afamilyofattributesets,A=(A1,···,Am),ispairwisedisjoint.Thetotaldimensionisd=PmI=1dI.ThenintheIthsubspacedeﬁnedbyAI,thepositiveandnegativeregionsofQIcanbedeﬁnedasinDeﬁnition3.1and3.2,butbasedonthe“positive”and“negative”exampleslabeledforQI.WedenotethesepositiveandnegativeregionsintheIthsubspaceasR+IandR I,respectively.WenotethatapositiveexamplewithrespecttoQimpliesthatitsprojectionineveryIthsubspacesatisﬁesQi.However,anegativeexamplewithrespecttoQimpliesthatthereexistsatleastonesubspace,I,wheretheexample’sprojectionisnegativeforQI,whiletheremaystillothersubspaces,I06=I,wheretheexample’sprojectionsatisﬁesQI0.NextwebuildthepositiveandnegativeregionsofthequeryQfromthepositiveandnegativeregionsinthesubspaces:R+f=⇥mI=1R+I,R f=⇥mI=1(R I)c(1)whereeachR+I(orR I)isinterpretedequallyasageometricobjectorthesetofallpossiblepointsenclosedintheobject,⇥representstheCartesianproductbetweentwosets,andRcrepresentsthecom-plementofsetR.Therefore,theuncertainregionofQisRuf=Rd R+f R fFinally,denotetheentiredatasetasDandtheevaluationsetasDeval.Thedeﬁnitionsofpositive,negative,anduncertainparti-tionsofDevalarethesameasinDeﬁnition3.4withthethreere-gionsreplacedbyR+f,R f,andRuf.Formalresultsonfactorization.Whenthetruequeryiscon-junctive,takingadvantageofthefactorizationpropertyofthedataspaceprovestobeeffectiveforenlargingthepositiveandnega-tiveregionsknowntotheDSMalgorithmandhencereducingtheuncertainregion.Formally,wehavethefollowingresults.Proposition4.1AllpointsinthepositiveregionR+farepositiveandR+✓R+fateachiterationofthedataexplorationprocess.6[Asmentionedbefore,eachQIcanalsobeconvexinthenegativeregion.However,intheinterestspaceourdiscussionfocusesonthecaseofconvexpositiveregions.]PROOF.Foreachpointx=(x1,···,xm)2R+fwherexIdenotesthevaluesofxonattributesAI,wehavexI2R+I,8I2Z\[1,m].Accordingtoproposition3.1,allpointsinR+IarepositiveforQI.Therefore,xispositiveforQ=Q1^···^Qm.Toprovethesecondpartoftheproposition,weseethattheCartesianproductofconvexsetsisconvex,soR+fisconvexbydeﬁnition.Ateachiteration,givenaﬁnitesetofpositivepoints{x},R+andR+fareconstructedon{x}.SinceR+asaconvexpolytopeisthesmallestconvexsetthatcontains{x},weconcludeR+✓R+f.Proposition4.2AllpointsinthenegativeregionR farenegativeandR ✓R fateachiterationofthedataexplorationprocess.PROOF.Ifapointx=(x1,···,xm)2R f,thenthereexistssomesubspacespannedbyattributesAIsuchthatxI2R I.SinceallpointsinR IarenegativeforQIbasedonproposition3.2,andthetargetqueryQisinaconjunctiveform,xisnegativeforQ.ToproveR ✓R f,itissufﬁcienttoprovethateveryarbitraryconvexconethatR isbuiltupon,iscontainedbyR f.Lete betheapexofaconvexconeR e inDeﬁnition3.2.Sincee isnegativeforQ,thereexistsIsuchthatitsfactorizationvectore IisnegativeforQI.Let⇡I(R e )betheprojectionoftheconeR e ontothesubspacespannedbyAI.Thenforapointx2R e ,xI2⇡I(R e ).NowdeﬁnetheconvexconeconstructioninthesubspacespannedbyAIwithe IasapexasR e I={xI2RdI|xIe I\R+I=;^   !xIe I\R+I6=;}.Wewillnowshowthat⇡I(R e )✓R e I.Wehave⇡I(R e )={xI2RdI|xIe I\⇡I(R+)=;^   !xIe I\⇡I(R+)6=;}.SincexI2⇡I(R e )and⇡I(R e )isanegativeconvexcone,xIe I\R+I=;istrue.Ontheotherhand,since⇡I(R+)✓R+I,   !xIe I\⇡I(R+)6=;implies   !xIe I\R+I6=;.Thisshows⇡I(R e )✓R e I.ThereforexI2⇡I(R e )✓R e I✓R I,andx2R f.Finally,R e ✓R fforanye ,andhenceR ✓R f.Proposition4.3FactorizedDSMimprovestheThree-SetMetric,thelowerboundofthemodelaccuracyinF1-score.A D ​"↑−  C B (a)Case1A D ​"↑−  C B (b)Case2A D ​"↑−  C B (c)Case3Figure5:Illustrationofpositiveandnegativeregionsinfactorizedspace.anexample,thelabeliscertainlypositiveineachsubspace.How-ever,iftheuserlabelisnegativeforanexample,shewillbeaskedtohighlightthespeciﬁcsetofattributes(andthesubspacesthereof)thatleadtothenegativelabel.Thiscanbeeasilyachievedthroughagraphicalinterfacesuchasin[12].Positiveandnegativeregionsinfactorizedspace.Formally,factorizationconcernsauserinterestqueryQthatinvolvedat-tributesandcanbewrittenintheconjunctiveform,Q1^···^Qm,whereeachQIisconvexinthepositiveregion6andcontainsanattributesetAI={AI1,···,AIdI},withAIjrepresentingthejthattributeintheIthpartition.Afamilyofattributesets,A=(A1,···,Am),ispairwisedisjoint.Thetotaldimensionisd=PmI=1dI.ThenintheIthsubspacedeﬁnedbyAI,thepositiveandnegativeregionsofQIcanbedeﬁnedasinDeﬁnition3.1and3.2,butbasedonthe“positive”and“negative”exampleslabeledforQI.WedenotethesepositiveandnegativeregionsintheIthsubspaceasR+IandR I,respectively.WenotethatapositiveexamplewithrespecttoQimpliesthatitsprojectionineveryIthsubspacesatisﬁesQi.However,anegativeexamplewithrespecttoQimpliesthatthereexistsatleastonesubspace,I,wheretheexample’sprojectionisnegativeforQI,whiletheremaystillothersubspaces,I06=I,wheretheexample’sprojectionsatisﬁesQI0.NextwebuildthepositiveandnegativeregionsofthequeryQfromthepositiveandnegativeregionsinthesubspaces:R+f=⇥mI=1R+I,R f=⇥mI=1(R I)c(1)whereeachR+I(orR I)isinterpretedequallyasageometricobjectorthesetofallpossiblepointsenclosedintheobject,⇥representstheCartesianproductbetweentwosets,andRcrepresentsthecom-plementofsetR.Therefore,theuncertainregionofQisRuf=Rd R+f R fFinally,denotetheentiredatasetasDandtheevaluationsetasDeval.Thedeﬁnitionsofpositive,negative,anduncertainparti-tionsofDevalarethesameasinDeﬁnition3.4withthethreere-gionsreplacedbyR+f,R f,andRuf.Formalresultsonfactorization.Whenthetruequeryiscon-junctive,takingadvantageofthefactorizationpropertyofthedataspaceprovestobeeffectiveforenlargingthepositiveandnega-tiveregionsknowntotheDSMalgorithmandhencereducingtheuncertainregion.Formally,wehavethefollowingresults.Proposition4.1AllpointsinthepositiveregionR+farepositiveandR+✓R+fateachiterationofthedataexplorationprocess.6[Asmentionedbefore,eachQIcanalsobeconvexinthenegativeregion.However,intheinterestspaceourdiscussionfocusesonthecaseofconvexpositiveregions.]PROOF.Foreachpointx=(x1,···,xm)2R+fwherexIdenotesthevaluesofxonattributesAI,wehavexI2R+I,8I2Z\[1,m].Accordingtoproposition3.1,allpointsinR+IarepositiveforQI.Therefore,xispositiveforQ=Q1^···^Qm.Toprovethesecondpartoftheproposition,weseethattheCartesianproductofconvexsetsisconvex,soR+fisconvexbydeﬁnition.Ateachiteration,givenaﬁnitesetofpositivepoints{x},R+andR+fareconstructedon{x}.SinceR+asaconvexpolytopeisthesmallestconvexsetthatcontains{x},weconcludeR+✓R+f.Proposition4.2AllpointsinthenegativeregionR farenegativeandR ✓R fateachiterationofthedataexplorationprocess.PROOF.Ifapointx=(x1,···,xm)2R f,thenthereexistssomesubspacespannedbyattributesAIsuchthatxI2R I.SinceallpointsinR IarenegativeforQIbasedonproposition3.2,andthetargetqueryQisinaconjunctiveform,xisnegativeforQ.ToproveR ✓R f,itissufﬁcienttoprovethateveryarbitraryconvexconethatR isbuiltupon,iscontainedbyR f.Lete betheapexofaconvexconeR e inDeﬁnition3.2.Sincee isnegativeforQ,thereexistsIsuchthatitsfactorizationvectore IisnegativeforQI.Let⇡I(R e )betheprojectionoftheconeR e ontothesubspacespannedbyAI.Thenforapointx2R e ,xI2⇡I(R e ).NowdeﬁnetheconvexconeconstructioninthesubspacespannedbyAIwithe IasapexasR e I={xI2RdI|xIe I\R+I=;^   !xIe I\R+I6=;}.Wewillnowshowthat⇡I(R e )✓R e I.Wehave⇡I(R e )={xI2RdI|xIe I\⇡I(R+)=;^   !xIe I\⇡I(R+)6=;}.SincexI2⇡I(R e )and⇡I(R e )isanegativeconvexcone,xIe I\R+I=;istrue.Ontheotherhand,since⇡I(R+)✓R+I,   !xIe I\⇡I(R+)6=;implies   !xIe I\R+I6=;.Thisshows⇡I(R e )✓R e I.ThereforexI2⇡I(R e )✓R e I✓R I,andx2R f.Finally,R e ✓R fforanye ,andhenceR ✓R f.Proposition4.3FactorizedDSMimprovestheThree-SetMetric,thelowerboundofthemodelaccuracyinF1-score.A D ​"↑−  C B (a)Case1A D ​"↑−  C B (b)Case2A D ​"↑−  C B (c)Case3Figure5:Illustrationofpositiveandnegativeregionsinfactorizedspace.anexample,thelabeliscertainlypositiveineachsubspace.How-ever,iftheuserlabelisnegativeforanexample,shewillbeaskedtohighlightthespeciﬁcsetofattributes(andthesubspacesthereof)thatleadtothenegativelabel.Thiscanbeeasilyachievedthroughagraphicalinterfacesuchasin[12].Positiveandnegativeregionsinfactorizedspace.Formally,factorizationconcernsauserinterestqueryQthatinvolvedat-tributesandcanbewrittenintheconjunctiveform,Q1^···^Qm,whereeachQIisconvexinthepositiveregion6andcontainsanattributesetAI={AI1,···,AIdI},withAIjrepresentingthejthattributeintheIthpartition.Afamilyofattributesets,A=(A1,···,Am),ispairwisedisjoint.Thetotaldimensionisd=PmI=1dI.ThenintheIthsubspacedeﬁnedbyAI,thepositiveandnegativeregionsofQIcanbedeﬁnedasinDeﬁnition3.1and3.2,butbasedonthe“positive”and“negative”exampleslabeledforQI.WedenotethesepositiveandnegativeregionsintheIthsubspaceasR+IandR I,respectively.WenotethatapositiveexamplewithrespecttoQimpliesthatitsprojectionineveryIthsubspacesatisﬁesQi.However,anegativeexamplewithrespecttoQimpliesthatthereexistsatleastonesubspace,I,wheretheexample’sprojectionisnegativeforQI,whiletheremaystillothersubspaces,I06=I,wheretheexample’sprojectionsatisﬁesQI0.NextwebuildthepositiveandnegativeregionsofthequeryQfromthepositiveandnegativeregionsinthesubspaces:R+f=⇥mI=1R+I,R f=⇥mI=1(R I)c(1)whereeachR+I(orR I)isinterpretedequallyasageometricobjectorthesetofallpossiblepointsenclosedintheobject,⇥representstheCartesianproductbetweentwosets,andRcrepresentsthecom-plementofsetR.Therefore,theuncertainregionofQisRuf=Rd R+f R fFinally,denotetheentiredatasetasDandtheevaluationsetasDeval.Thedeﬁnitionsofpositive,negative,anduncertainparti-tionsofDevalarethesameasinDeﬁnition3.4withthethreere-gionsreplacedbyR+f,R f,andRuf.Formalresultsonfactorization.Whenthetruequeryiscon-junctive,takingadvantageofthefactorizationpropertyofthedataspaceprovestobeeffectiveforenlargingthepositiveandnega-tiveregionsknowntotheDSMalgorithmandhencereducingtheuncertainregion.Formally,wehavethefollowingresults.Proposition4.1AllpointsinthepositiveregionR+farepositiveandR+✓R+fateachiterationofthedataexplorationprocess.6[Asmentionedbefore,eachQIcanalsobeconvexinthenegativeregion.However,intheinterestspaceourdiscussionfocusesonthecaseofconvexpositiveregions.]PROOF.Foreachpointx=(x1,···,xm)2R+fwherexIdenotesthevaluesofxonattributesAI,wehavexI2R+I,8I2Z\[1,m].Accordingtoproposition3.1,allpointsinR+IarepositiveforQI.Therefore,xispositiveforQ=Q1^···^Qm.Toprovethesecondpartoftheproposition,weseethattheCartesianproductofconvexsetsisconvex,soR+fisconvexbydeﬁnition.Ateachiteration,givenaﬁnitesetofpositivepoints{x},R+andR+fareconstructedon{x}.SinceR+asaconvexpolytopeisthesmallestconvexsetthatcontains{x},weconcludeR+✓R+f.Proposition4.2AllpointsinthenegativeregionR farenegativeandR ✓R fateachiterationofthedataexplorationprocess.PROOF.Ifapointx=(x1,···,xm)2R f,thenthereexistssomesubspacespannedbyattributesAIsuchthatxI2R I.SinceallpointsinR IarenegativeforQIbasedonproposition3.2,andthetargetqueryQisinaconjunctiveform,xisnegativeforQ.ToproveR ✓R f,itissufﬁcienttoprovethateveryarbitraryconvexconethatR isbuiltupon,iscontainedbyR f.Lete betheapexofaconvexconeR e inDeﬁnition3.2.Sincee isnegativeforQ,thereexistsIsuchthatitsfactorizationvectore IisnegativeforQI.Let⇡I(R e )betheprojectionoftheconeR e ontothesubspacespannedbyAI.Thenforapointx2R e ,xI2⇡I(R e ).NowdeﬁnetheconvexconeconstructioninthesubspacespannedbyAIwithe IasapexasR e I={xI2RdI|xIe I\R+I=;^   !xIe I\R+I6=;}.Wewillnowshowthat⇡I(R e )✓R e I.Wehave⇡I(R e )={xI2RdI|xIe I\⇡I(R+)=;^   !xIe I\⇡I(R+)6=;}.SincexI2⇡I(R e )and⇡I(R e )isanegativeconvexcone,xIe I\R+I=;istrue.Ontheotherhand,since⇡I(R+)✓R+I,   !xIe I\⇡I(R+)6=;implies   !xIe I\R+I6=;.Thisshows⇡I(R e )✓R e I.ThereforexI2⇡I(R e )✓R e I✓R I,andx2R f.Finally,R e ✓R fforanye ,andhenceR ✓R f.Proposition4.3FactorizedDSMimprovestheThree-SetMetric,thelowerboundofthemodelaccuracyinF1-score.x-y z A D C B A D ​"↑−  C B (a)Case1A D ​"↑−  C B (b)Case2A D ​"↑−  C B (c)Case3Figure5:Illustrationofpositiveandnegativeregionsinfactorizedspace.anexample,thelabeliscertainlypositiveineachsubspace.How-ever,iftheuserlabelisnegativeforanexample,shewillbeaskedtohighlightthespeciﬁcsetofattributes(andthesubspacesthereof)thatleadtothenegativelabel.Thiscanbeeasilyachievedthroughagraphicalinterfacesuchasin[12].Positiveandnegativeregionsinfactorizedspace.Formally,factorizationconcernsauserinterestqueryQthatinvolvedat-tributesandcanbewrittenintheconjunctiveform,Q1^···^Qm,whereeachQIisconvexinthepositiveregion6andcontainsanattributesetAI={AI1,···,AIdI},withAIjrepresentingthejthattributeintheIthpartition.Afamilyofattributesets,A=(A1,···,Am),ispairwisedisjoint.Thetotaldimensionisd=PmI=1dI.ThenintheIthsubspacedeﬁnedbyAI,thepositiveandnegativeregionsofQIcanbedeﬁnedasinDeﬁnition3.1and3.2,butbasedonthe“positive”and“negative”exampleslabeledforQI.WedenotethesepositiveandnegativeregionsintheIthsubspaceasR+IandR I,respectively.WenotethatapositiveexamplewithrespecttoQimpliesthatitsprojectionineveryIthsubspacesatisﬁesQi.However,anegativeexamplewithrespecttoQimpliesthatthereexistsatleastonesubspace,I,wheretheexample’sprojectionisnegativeforQI,whiletheremaystillothersubspaces,I06=I,wheretheexample’sprojectionsatisﬁesQI0.NextwebuildthepositiveandnegativeregionsofthequeryQfromthepositiveandnegativeregionsinthesubspaces:R+f=⇥mI=1R+I,R f=⇥mI=1(R I)c(1)whereeachR+I(orR I)isinterpretedequallyasageometricobjectorthesetofallpossiblepointsenclosedintheobject,⇥representstheCartesianproductbetweentwosets,andRcrepresentsthecom-plementofsetR.Therefore,theuncertainregionofQisRuf=Rd R+f R fFinally,denotetheentiredatasetasDandtheevaluationsetasDeval.Thedeﬁnitionsofpositive,negative,anduncertainparti-tionsofDevalarethesameasinDeﬁnition3.4withthethreere-gionsreplacedbyR+f,R f,andRuf.Formalresultsonfactorization.Whenthetruequeryiscon-junctive,takingadvantageofthefactorizationpropertyofthedataspaceprovestobeeffectiveforenlargingthepositiveandnega-tiveregionsknowntotheDSMalgorithmandhencereducingtheuncertainregion.Formally,wehavethefollowingresults.Proposition4.1AllpointsinthepositiveregionR+farepositiveandR+✓R+fateachiterationofthedataexplorationprocess.6[Asmentionedbefore,eachQIcanalsobeconvexinthenegativeregion.However,intheinterestspaceourdiscussionfocusesonthecaseofconvexpositiveregions.]PROOF.Foreachpointx=(x1,···,xm)2R+fwherexIdenotesthevaluesofxonattributesAI,wehavexI2R+I,8I2Z\[1,m].Accordingtoproposition3.1,allpointsinR+IarepositiveforQI.Therefore,xispositiveforQ=Q1^···^Qm.Toprovethesecondpartoftheproposition,weseethattheCartesianproductofconvexsetsisconvex,soR+fisconvexbydeﬁnition.Ateachiteration,givenaﬁnitesetofpositivepoints{x},R+andR+fareconstructedon{x}.SinceR+asaconvexpolytopeisthesmallestconvexsetthatcontains{x},weconcludeR+✓R+f.Proposition4.2AllpointsinthenegativeregionR farenegativeandR ✓R fateachiterationofthedataexplorationprocess.PROOF.Ifapointx=(x1,···,xm)2R f,thenthereexistssomesubspacespannedbyattributesAIsuchthatxI2R I.SinceallpointsinR IarenegativeforQIbasedonproposition3.2,andthetargetqueryQisinaconjunctiveform,xisnegativeforQ.ToproveR ✓R f,itissufﬁcienttoprovethateveryarbitraryconvexconethatR isbuiltupon,iscontainedbyR f.Lete betheapexofaconvexconeR e inDeﬁnition3.2.Sincee isnegativeforQ,thereexistsIsuchthatitsfactorizationvectore IisnegativeforQI.Let⇡I(R e )betheprojectionoftheconeR e ontothesubspacespannedbyAI.Thenforapointx2R e ,xI2⇡I(R e ).NowdeﬁnetheconvexconeconstructioninthesubspacespannedbyAIwithe IasapexasR e I={xI2RdI|xIe I\R+I=;^   !xIe I\R+I6=;}.Wewillnowshowthat⇡I(R e )✓R e I.Wehave⇡I(R e )={xI2RdI|xIe I\⇡I(R+)=;^   !xIe I\⇡I(R+)6=;}.SincexI2⇡I(R e )and⇡I(R e )isanegativeconvexcone,xIe I\R+I=;istrue.Ontheotherhand,since⇡I(R+)✓R+I,   !xIe I\⇡I(R+)6=;implies   !xIe I\R+I6=;.Thisshows⇡I(R e )✓R e I.ThereforexI2⇡I(R e )✓R e I✓R I,andx2R f.Finally,R e ✓R fforanye ,andhenceR ✓R f.Proposition4.3FactorizedDSMimprovestheThree-SetMetric,thelowerboundofthemodelaccuracyinF1-score.A D ​"↑−  C B (a)Case1A D ​"↑−  C B (b)Case2A D ​"↑−  C B (c)Case3Figure5:Illustrationofpositiveandnegativeregionsinfactorizedspace.anexample,thelabeliscertainlypositiveineachsubspace.How-ever,iftheuserlabelisnegativeforanexample,shewillbeaskedtohighlightthespeciﬁcsetofattributes(andthesubspacesthereof)thatleadtothenegativelabel.Thiscanbeeasilyachievedthroughagraphicalinterfacesuchasin[12].Positiveandnegativeregionsinfactorizedspace.Formally,factorizationconcernsauserinterestqueryQthatinvolvedat-tributesandcanbewrittenintheconjunctiveform,Q1^···^Qm,whereeachQIisconvexinthepositiveregion6andcontainsanattributesetAI={AI1,···,AIdI},withAIjrepresentingthejthattributeintheIthpartition.Afamilyofattributesets,A=(A1,···,Am),ispairwisedisjoint.Thetotaldimensionisd=PmI=1dI.ThenintheIthsubspacedeﬁnedbyAI,thepositiveandnegativeregionsofQIcanbedeﬁnedasinDeﬁnition3.1and3.2,butbasedonthe“positive”and“negative”exampleslabeledforQI.WedenotethesepositiveandnegativeregionsintheIthsubspaceasR+IandR I,respectively.WenotethatapositiveexamplewithrespecttoQimpliesthatitsprojectionineveryIthsubspacesatisﬁesQi.However,anegativeexamplewithrespecttoQimpliesthatthereexistsatleastonesubspace,I,wheretheexample’sprojectionisnegativeforQI,whiletheremaystillothersubspaces,I06=I,wheretheexample’sprojectionsatisﬁesQI0.NextwebuildthepositiveandnegativeregionsofthequeryQfromthepositiveandnegativeregionsinthesubspaces:R+f=⇥mI=1R+I,R f=⇥mI=1(R I)c(1)whereeachR+I(orR I)isinterpretedequallyasageometricobjectorthesetofallpossiblepointsenclosedintheobject,⇥representstheCartesianproductbetweentwosets,andRcrepresentsthecom-plementofsetR.Therefore,theuncertainregionofQisRuf=Rd R+f R fFinally,denotetheentiredatasetasDandtheevaluationsetasDeval.Thedeﬁnitionsofpositive,negative,anduncertainparti-tionsofDevalarethesameasinDeﬁnition3.4withthethreere-gionsreplacedbyR+f,R f,andRuf.Formalresultsonfactorization.Whenthetruequeryiscon-junctive,takingadvantageofthefactorizationpropertyofthedataspaceprovestobeeffectiveforenlargingthepositiveandnega-tiveregionsknowntotheDSMalgorithmandhencereducingtheuncertainregion.Formally,wehavethefollowingresults.Proposition4.1AllpointsinthepositiveregionR+farepositiveandR+✓R+fateachiterationofthedataexplorationprocess.6[Asmentionedbefore,eachQIcanalsobeconvexinthenegativeregion.However,intheinterestspaceourdiscussionfocusesonthecaseofconvexpositiveregions.]PROOF.Foreachpointx=(x1,···,xm)2R+fwherexIdenotesthevaluesofxonattributesAI,wehavexI2R+I,8I2Z\[1,m].Accordingtoproposition3.1,allpointsinR+IarepositiveforQI.Therefore,xispositiveforQ=Q1^···^Qm.Toprovethesecondpartoftheproposition,weseethattheCartesianproductofconvexsetsisconvex,soR+fisconvexbydeﬁnition.Ateachiteration,givenaﬁnitesetofpositivepoints{x},R+andR+fareconstructedon{x}.SinceR+asaconvexpolytopeisthesmallestconvexsetthatcontains{x},weconcludeR+✓R+f.Proposition4.2AllpointsinthenegativeregionR farenegativeandR ✓R fateachiterationofthedataexplorationprocess.PROOF.Ifapointx=(x1,···,xm)2R f,thenthereexistssomesubspacespannedbyattributesAIsuchthatxI2R I.SinceallpointsinR IarenegativeforQIbasedonproposition3.2,andthetargetqueryQisinaconjunctiveform,xisnegativeforQ.ToproveR ✓R f,itissufﬁcienttoprovethateveryarbitraryconvexconethatR isbuiltupon,iscontainedbyR f.Lete betheapexofaconvexconeR e inDeﬁnition3.2.Sincee isnegativeforQ,thereexistsIsuchthatitsfactorizationvectore IisnegativeforQI.Let⇡I(R e )betheprojectionoftheconeR e ontothesubspacespannedbyAI.Thenforapointx2R e ,xI2⇡I(R e ).NowdeﬁnetheconvexconeconstructioninthesubspacespannedbyAIwithe IasapexasR e I={xI2RdI|xIe I\R+I=;^   !xIe I\R+I6=;}.Wewillnowshowthat⇡I(R e )✓R e I.Wehave⇡I(R e )={xI2RdI|xIe I\⇡I(R+)=;^   !xIe I\⇡I(R+)6=;}.SincexI2⇡I(R e )and⇡I(R e )isanegativeconvexcone,xIe I\R+I=;istrue.Ontheotherhand,since⇡I(R+)✓R+I,   !xIe I\⇡I(R+)6=;implies   !xIe I\R+I6=;.Thisshows⇡I(R e )✓R e I.ThereforexI2⇡I(R e )✓R e I✓R I,andx2R f.Finally,R e ✓R fforanye ,andhenceR ✓R f.Proposition4.3FactorizedDSMimprovestheThree-SetMetric,thelowerboundofthemodelaccuracyinF1-score.A D ​"↑−  C B (a)Case1A D ​"↑−  C B (b)Case2A D ​"↑−  C B (c)Case3Figure5:Illustrationofpositiveandnegativeregionsinfactorizedspace.anexample,thelabeliscertainlypositiveineachsubspace.How-ever,iftheuserlabelisnegativeforanexample,shewillbeaskedtohighlightthespeciﬁcsetofattributes(andthesubspacesthereof)thatleadtothenegativelabel.Thiscanbeeasilyachievedthroughagraphicalinterfacesuchasin[12].Positiveandnegativeregionsinfactorizedspace.Formally,factorizationconcernsauserinterestqueryQthatinvolvedat-tributesandcanbewrittenintheconjunctiveform,Q1^···^Qm,whereeachQIisconvexinthepositiveregion6andcontainsanattributesetAI={AI1,···,AIdI},withAIjrepresentingthejthattributeintheIthpartition.Afamilyofattributesets,A=(A1,···,Am),ispairwisedisjoint.Thetotaldimensionisd=PmI=1dI.ThenintheIthsubspacedeﬁnedbyAI,thepositiveandnegativeregionsofQIcanbedeﬁnedasinDeﬁnition3.1and3.2,butbasedonthe“positive”and“negative”exampleslabeledforQI.WedenotethesepositiveandnegativeregionsintheIthsubspaceasR+IandR I,respectively.WenotethatapositiveexamplewithrespecttoQimpliesthatitsprojectionineveryIthsubspacesatisﬁesQi.However,anegativeexamplewithrespecttoQimpliesthatthereexistsatleastonesubspace,I,wheretheexample’sprojectionisnegativeforQI,whiletheremaystillothersubspaces,I06=I,wheretheexample’sprojectionsatisﬁesQI0.NextwebuildthepositiveandnegativeregionsofthequeryQfromthepositiveandnegativeregionsinthesubspaces:R+f=⇥mI=1R+I,R f=⇥mI=1(R I)c(1)whereeachR+I(orR I)isinterpretedequallyasageometricobjectorthesetofallpossiblepointsenclosedintheobject,⇥representstheCartesianproductbetweentwosets,andRcrepresentsthecom-plementofsetR.Therefore,theuncertainregionofQisRuf=Rd R+f R fFinally,denotetheentiredatasetasDandtheevaluationsetasDeval.Thedeﬁnitionsofpositive,negative,anduncertainparti-tionsofDevalarethesameasinDeﬁnition3.4withthethreere-gionsreplacedbyR+f,R f,andRuf.Formalresultsonfactorization.Whenthetruequeryiscon-junctive,takingadvantageofthefactorizationpropertyofthedataspaceprovestobeeffectiveforenlargingthepositiveandnega-tiveregionsknowntotheDSMalgorithmandhencereducingtheuncertainregion.Formally,wehavethefollowingresults.Proposition4.1AllpointsinthepositiveregionR+farepositiveandR+✓R+fateachiterationofthedataexplorationprocess.6[Asmentionedbefore,eachQIcanalsobeconvexinthenegativeregion.However,intheinterestspaceourdiscussionfocusesonthecaseofconvexpositiveregions.]PROOF.Foreachpointx=(x1,···,xm)2R+fwherexIdenotesthevaluesofxonattributesAI,wehavexI2R+I,8I2Z\[1,m].Accordingtoproposition3.1,allpointsinR+IarepositiveforQI.Therefore,xispositiveforQ=Q1^···^Qm.Toprovethesecondpartoftheproposition,weseethattheCartesianproductofconvexsetsisconvex,soR+fisconvexbydeﬁnition.Ateachiteration,givenaﬁnitesetofpositivepoints{x},R+andR+fareconstructedon{x}.SinceR+asaconvexpolytopeisthesmallestconvexsetthatcontains{x},weconcludeR+✓R+f.Proposition4.2AllpointsinthenegativeregionR farenegativeandR ✓R fateachiterationofthedataexplorationprocess.PROOF.Ifapointx=(x1,···,xm)2R f,thenthereexistssomesubspacespannedbyattributesAIsuchthatxI2R I.SinceallpointsinR IarenegativeforQIbasedonproposition3.2,andthetargetqueryQisinaconjunctiveform,xisnegativeforQ.ToproveR ✓R f,itissufﬁcienttoprovethateveryarbitraryconvexconethatR isbuiltupon,iscontainedbyR f.Lete betheapexofaconvexconeR e inDeﬁnition3.2.Sincee isnegativeforQ,thereexistsIsuchthatitsfactorizationvectore IisnegativeforQI.Let⇡I(R e )betheprojectionoftheconeR e ontothesubspacespannedbyAI.Thenforapointx2R e ,xI2⇡I(R e ).NowdeﬁnetheconvexconeconstructioninthesubspacespannedbyAIwithe IasapexasR e I={xI2RdI|xIe I\R+I=;^   !xIe I\R+I6=;}.Wewillnowshowthat⇡I(R e )✓R e I.Wehave⇡I(R e )={xI2RdI|xIe I\⇡I(R+)=;^   !xIe I\⇡I(R+)6=;}.SincexI2⇡I(R e )and⇡I(R e )isanegativeconvexcone,xIe I\R+I=;istrue.Ontheotherhand,since⇡I(R+)✓R+I,   !xIe I\⇡I(R+)6=;implies   !xIe I\R+I6=;.Thisshows⇡I(R e )✓R e I.ThereforexI2⇡I(R e )✓R e I✓R I,andx2R f.Finally,R e ✓R fforanye ,andhenceR ✓R f.Proposition4.3FactorizedDSMimprovestheThree-SetMetric,thelowerboundofthemodelaccuracyinF1-score.A D ​"↑−  C B (a)Case1A D ​"↑−  C B (b)Case2A D ​"↑−  C B (c)Case3Figure5:Illustrationofpositiveandnegativeregionsinfactorizedspace.anexample,thelabeliscertainlypositiveineachsubspace.How-ever,iftheuserlabelisnegativeforanexample,shewillbeaskedtohighlightthespeciﬁcsetofattributes(andthesubspacesthereof)thatleadtothenegativelabel.Thiscanbeeasilyachievedthroughagraphicalinterfacesuchasin[12].Positiveandnegativeregionsinfactorizedspace.Formally,factorizationconcernsauserinterestqueryQthatinvolvedat-tributesandcanbewrittenintheconjunctiveform,Q1^···^Qm,whereeachQIisconvexinthepositiveregion6andcontainsanattributesetAI={AI1,···,AIdI},withAIjrepresentingthejthattributeintheIthpartition.Afamilyofattributesets,A=(A1,···,Am),ispairwisedisjoint.Thetotaldimensionisd=PmI=1dI.ThenintheIthsubspacedeﬁnedbyAI,thepositiveandnegativeregionsofQIcanbedeﬁnedasinDeﬁnition3.1and3.2,butbasedonthe“positive”and“negative”exampleslabeledforQI.WedenotethesepositiveandnegativeregionsintheIthsubspaceasR+IandR I,respectively.WenotethatapositiveexamplewithrespecttoQimpliesthatitsprojectionineveryIthsubspacesatisﬁesQi.However,anegativeexamplewithrespecttoQimpliesthatthereexistsatleastonesubspace,I,wheretheexample’sprojectionisnegativeforQI,whiletheremaystillothersubspaces,I06=I,wheretheexample’sprojectionsatisﬁesQI0.NextwebuildthepositiveandnegativeregionsofthequeryQfromthepositiveandnegativeregionsinthesubspaces:R+f=⇥mI=1R+I,R f=⇥mI=1(R I)c(1)whereeachR+I(orR I)isinterpretedequallyasageometricobjectorthesetofallpossiblepointsenclosedintheobject,⇥representstheCartesianproductbetweentwosets,andRcrepresentsthecom-plementofsetR.Therefore,theuncertainregionofQisRuf=Rd R+f R fFinally,denotetheentiredatasetasDandtheevaluationsetasDeval.Thedeﬁnitionsofpositive,negative,anduncertainparti-tionsofDevalarethesameasinDeﬁnition3.4withthethreere-gionsreplacedbyR+f,R f,andRuf.Formalresultsonfactorization.Whenthetruequeryiscon-junctive,takingadvantageofthefactorizationpropertyofthedataspaceprovestobeeffectiveforenlargingthepositiveandnega-tiveregionsknowntotheDSMalgorithmandhencereducingtheuncertainregion.Formally,wehavethefollowingresults.Proposition4.1AllpointsinthepositiveregionR+farepositiveandR+✓R+fateachiterationofthedataexplorationprocess.6[Asmentionedbefore,eachQIcanalsobeconvexinthenegativeregion.However,intheinterestspaceourdiscussionfocusesonthecaseofconvexpositiveregions.]PROOF.Foreachpointx=(x1,···,xm)2R+fwherexIdenotesthevaluesofxonattributesAI,wehavexI2R+I,8I2Z\[1,m].Accordingtoproposition3.1,allpointsinR+IarepositiveforQI.Therefore,xispositiveforQ=Q1^···^Qm.Toprovethesecondpartoftheproposition,weseethattheCartesianproductofconvexsetsisconvex,soR+fisconvexbydeﬁnition.Ateachiteration,givenaﬁnitesetofpositivepoints{x},R+andR+fareconstructedon{x}.SinceR+asaconvexpolytopeisthesmallestconvexsetthatcontains{x},weconcludeR+✓R+f.Proposition4.2AllpointsinthenegativeregionR farenegativeandR ✓R fateachiterationofthedataexplorationprocess.PROOF.Ifapointx=(x1,···,xm)2R f,thenthereexistssomesubspacespannedbyattributesAIsuchthatxI2R I.SinceallpointsinR IarenegativeforQIbasedonproposition3.2,andthetargetqueryQisinaconjunctiveform,xisnegativeforQ.ToproveR ✓R f,itissufﬁcienttoprovethateveryarbitraryconvexconethatR isbuiltupon,iscontainedbyR f.Lete betheapexofaconvexconeR e inDeﬁnition3.2.Sincee isnegativeforQ,thereexistsIsuchthatitsfactorizationvectore IisnegativeforQI.Let⇡I(R e )betheprojectionoftheconeR e ontothesubspacespannedbyAI.Thenforapointx2R e ,xI2⇡I(R e ).NowdeﬁnetheconvexconeconstructioninthesubspacespannedbyAIwithe IasapexasR e I={xI2RdI|xIe I\R+I=;^   !xIe I\R+I6=;}.Wewillnowshowthat⇡I(R e )✓R e I.Wehave⇡I(R e )={xI2RdI|xIe I\⇡I(R+)=;^   !xIe I\⇡I(R+)6=;}.SincexI2⇡I(R e )and⇡I(R e )isanegativeconvexcone,xIe I\R+I=;istrue.Ontheotherhand,since⇡I(R+)✓R+I,   !xIe I\⇡I(R+)6=;implies   !xIe I\R+I6=;.Thisshows⇡I(R e )✓R e I.ThereforexI2⇡I(R e )✓R e I✓R I,andx2R f.Finally,R e ✓R fforanye ,andhenceR ✓R f.Proposition4.3FactorizedDSMimprovestheThree-SetMetric,thelowerboundofthemodelaccuracyinF1-score.A D ​"↑−  C B (a)Case1A D ​"↑−  C B (b)Case2A D ​"↑−  C B (c)Case3Figure5:Illustrationofpositiveandnegativeregionsinfactorizedspace.anexample,thelabeliscertainlypositiveineachsubspace.How-ever,iftheuserlabelisnegativeforanexample,shewillbeaskedtohighlightthespeciﬁcsetofattributes(andthesubspacesthereof)thatleadtothenegativelabel.Thiscanbeeasilyachievedthroughagraphicalinterfacesuchasin[12].Positiveandnegativeregionsinfactorizedspace.Formally,factorizationconcernsauserinterestqueryQthatinvolvedat-tributesandcanbewrittenintheconjunctiveform,Q1^···^Qm,whereeachQIisconvexinthepositiveregion6andcontainsanattributesetAI={AI1,···,AIdI},withAIjrepresentingthejthattributeintheIthpartition.Afamilyofattributesets,A=(A1,···,Am),ispairwisedisjoint.Thetotaldimensionisd=PmI=1dI.ThenintheIthsubspacedeﬁnedbyAI,thepositiveandnegativeregionsofQIcanbedeﬁnedasinDeﬁnition3.1and3.2,butbasedonthe“positive”and“negative”exampleslabeledforQI.WedenotethesepositiveandnegativeregionsintheIthsubspaceasR+IandR I,respectively.WenotethatapositiveexamplewithrespecttoQimpliesthatitsprojectionineveryIthsubspacesatisﬁesQi.However,anegativeexamplewithrespecttoQimpliesthatthereexistsatleastonesubspace,I,wheretheexample’sprojectionisnegativeforQI,whiletheremaystillothersubspaces,I06=I,wheretheexample’sprojectionsatisﬁesQI0.NextwebuildthepositiveandnegativeregionsofthequeryQfromthepositiveandnegativeregionsinthesubspaces:R+f=⇥mI=1R+I,R f=⇥mI=1(R I)c(1)whereeachR+I(orR I)isinterpretedequallyasageometricobjectorthesetofallpossiblepointsenclosedintheobject,⇥representstheCartesianproductbetweentwosets,andRcrepresentsthecom-plementofsetR.Therefore,theuncertainregionofQisRuf=Rd R+f R fFinally,denotetheentiredatasetasDandtheevaluationsetasDeval.Thedeﬁnitionsofpositive,negative,anduncertainparti-tionsofDevalarethesameasinDeﬁnition3.4withthethreere-gionsreplacedbyR+f,R f,andRuf.Formalresultsonfactorization.Whenthetruequeryiscon-junctive,takingadvantageofthefactorizationpropertyofthedataspaceprovestobeeffectiveforenlargingthepositiveandnega-tiveregionsknowntotheDSMalgorithmandhencereducingtheuncertainregion.Formally,wehavethefollowingresults.Proposition4.1AllpointsinthepositiveregionR+farepositiveandR+✓R+fateachiterationofthedataexplorationprocess.6[Asmentionedbefore,eachQIcanalsobeconvexinthenegativeregion.However,intheinterestspaceourdiscussionfocusesonthecaseofconvexpositiveregions.]PROOF.Foreachpointx=(x1,···,xm)2R+fwherexIdenotesthevaluesofxonattributesAI,wehavexI2R+I,8I2Z\[1,m].Accordingtoproposition3.1,allpointsinR+IarepositiveforQI.Therefore,xispositiveforQ=Q1^···^Qm.Toprovethesecondpartoftheproposition,weseethattheCartesianproductofconvexsetsisconvex,soR+fisconvexbydeﬁnition.Ateachiteration,givenaﬁnitesetofpositivepoints{x},R+andR+fareconstructedon{x}.SinceR+asaconvexpolytopeisthesmallestconvexsetthatcontains{x},weconcludeR+✓R+f.Proposition4.2AllpointsinthenegativeregionR farenegativeandR ✓R fateachiterationofthedataexplorationprocess.PROOF.Ifapointx=(x1,···,xm)2R f,thenthereexistssomesubspacespannedbyattributesAIsuchthatxI2R I.SinceallpointsinR IarenegativeforQIbasedonproposition3.2,andthetargetqueryQisinaconjunctiveform,xisnegativeforQ.ToproveR ✓R f,itissufﬁcienttoprovethateveryarbitraryconvexconethatR isbuiltupon,iscontainedbyR f.Lete betheapexofaconvexconeR e inDeﬁnition3.2.Sincee isnegativeforQ,thereexistsIsuchthatitsfactorizationvectore IisnegativeforQI.Let⇡I(R e )betheprojectionoftheconeR e ontothesubspacespannedbyAI.Thenforapointx2R e ,xI2⇡I(R e ).NowdeﬁnetheconvexconeconstructioninthesubspacespannedbyAIwithe IasapexasR e I={xI2RdI|xIe I\R+I=;^   !xIe I\R+I6=;}.Wewillnowshowthat⇡I(R e )✓R e I.Wehave⇡I(R e )={xI2RdI|xIe I\⇡I(R+)=;^   !xIe I\⇡I(R+)6=;}.SincexI2⇡I(R e )and⇡I(R e )isanegativeconvexcone,xIe I\R+I=;istrue.Ontheotherhand,since⇡I(R+)✓R+I,   !xIe I\⇡I(R+)6=;implies   !xIe I\R+I6=;.Thisshows⇡I(R e )✓R e I.ThereforexI2⇡I(R e )✓R e I✓R I,andx2R f.Finally,R e ✓R fforanye ,andhenceR ✓R f.Proposition4.3FactorizedDSMimprovestheThree-SetMetric,thelowerboundofthemodelaccuracyinF1-score.x-y z Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+11
+
+e− is projected onto (x-y), it is negative and deﬁnes a con-
+vex cone R−
+xy marked by the two solid red lines in the (x-y)
+plane. When e− is projected onto z, it lies in the positive
+region. According to Eq. 2, the new negative region R−
+f ex-
+tends the convex cone R−
+xy by all possible values of z, yield-
+ing a geometric shape enclosed by the three solid red lines
+in the ﬁgure. Again, the new R−
+
+f is much bigger than R−.
+
+Formal results. For both DSC and p-DSC queries, we
+offer formal results of the polytope model with factorization.
+Proposition 3 All points in the positive region R+
+itive, and R+ ⊆ R+
+
+f in each iteration of data exploration.
+
+f are pos-
+
+Proposition 4 All points in the negative region R−
+ative, and R− ⊆ R−
+
+f are neg-
+f in each iteration of data exploration.
+
+Proposition 5 DSMF improves the Three-Set Metric, the
+lower bound of the model accuracy in F1-score, over DSM.
+
+Proposition 3 and Proposition 4 state that the positive
+and negative regions constructed via factorization, (R+
+f ,
+R−
+f ), are a superset of (R+, R−) that the original DSM of-
+fers. Hence, the lower bound of the F1-score built from (R+
+f ,
+R−
+f ) is higher than that from (R+, R−) based on Def. 4.
+
+Testing assumptions of DSMF . Factorization relies on
+two assumptions: The ﬁrst assumption is that we have a cor-
+rect factorization structure, A = (A1, · · · , Am), derived
+from a query trace or the database schema. The second as-
+sumption is that user interests take the form a conjunctive
+query (CQ). When either assumption is wrong, we may see
+conﬂicting examples in a polytope model for a speciﬁc sub-
+space, i.e., a positive example labeled by the user appears in
+the negative region or vice versa. Our system uses a proce-
+dure to test online both assumptions behind DSMF : At the
+beginning of data exploration, we build two polytope models
+for each subspace, one under the assumption that the posi-
+tive region is convex, Q+
+c , the other under the assumption
+that the negative region is convex, Q−
+c . Over iterations, we
+count the number of conﬂicting examples of these two poly-
+tope models, and use a threshold, T , to turn off a polytope
+model if its count exceeds T . If both polytope models re-
+main active in a given iteration, the one with the smaller
+count will be used; in the case of a tie, the model for Q+
+c
+will be used as more query patterns belong to this class.
+When both polytope models for a subspace are turned off,
+we use partial factorization until they are turned off for all
+subspaces, when we resort to the classiﬁer.
+
+5 Learning with Label Noise
+
+Traditional active learning implicitly assumes that uncor-
+rupted labels are provided by the user. However, in practice,
+label noise often occurs during the process of manual an-
+notation. The user may not fully understand his/her interest
+
+and may have trouble labeling some examples correctly, es-
+pecially for the ambiguous examples close to the underlying
+decision boundary. In other cases, the user may just mislabel
+some examples occasionally. Based on the observations of
+labeling behaviors in our user study, we assume in this work
+that the user exploration is overall moving toward a target in-
+terest region (e.g., not switching mind between two different
+regions), but the user may mislabel some examples. To im-
+prove the robustness of our AL-based data exploration sys-
+tem, we explore suitable label noise models to characterize
+the human annotator noise and propose denoising methods
+that are customized for our DSM model. We also analyze the
+effect of factorization on the label noise problem and pro-
+vide several optimization methods to improve our system.
+
+5.1 Label Noise Models and Noise Distillation
+
+In this section, we present background on label noise models
+and some analysis about the data cleansing method used in
+our algorithm - automatic noise distillation.
+
+5.1.1 Label Noise Models
+
+There are mainly three types of label noise models [17, 31]:
+(i) In the random classiﬁcation noise (RCN) model, the la-
+bel ﬂip probability (noise rate) is independent of the exam-
+ple and the corresponding true label (i.e., all examples have
+the same label ﬂip probability). (ii) In the class-conditional
+random label noise (CCN) model, the label ﬂip probability
+is independent of the example but dependent on the true la-
+bel. The examples from the same class have the same label
+ﬂip probability. (iii) The instance- and label-dependent label
+noise (ILN) model, where the label ﬂip probability depends
+on both the example and true label, is the most general case
+of label noise, hence most complex yet broadly applicable.
+Compared to the RCN and CCN models, the ILN model has
+not been widely studied in the literature. In this work, we
+consider ILN for AL-based data exploration.
+
+In particular, we use the assumption on label noise pro-
+posed by [17], shown as Assumption 1 below, to deal with
+a speciﬁc type of ILN. Let X denote the observation, Y
+the uncorrupted but unobserved label, and ˜Y the observed
+but noisy label. We assume that (X, Y, ˜Y ) ∈ X × Y × Y
+are jointly distributed according to an unknown distribu-
+tion, where X ⊆ Rd is the data space and Y = {−1, 1}
+is the label space. Given an example x and its correspond-
+ing true label y, the noise rate model in [17] is deﬁned as
+ρy(x) = P ( ˜Y = −y | X = x, Y = y). For RCN,
+ρ+1(x) = ρ−1(x) = ρ (ρ is a constant). For CCN, ρy(x)
+is independent of X but dependent on Y . For ILN, ρy(x)
+is dependent on both X and Y . A particular case of ILN is
+called bounded instance- and label- dependent noise (BILN)
+in [17], if the following assumption holds.
+
+12
+
+Enhui Huang† et al.
+
+Assumption 1 (Key assumption in [17]) ∀x ∈ X , we
+have the following bounds on the noise rates:
+
+
+
+
+
+
+0 ≤ ρ+1 (x) ≤ ρ+1 max < 1,
+0 ≤ ρ−1 (x) ≤ ρ−1 max < 1,
+0 ≤ ρ+1 (x) + ρ−1 (x) < 1.
+
+where ρ+1 max and ρ−1 max are upper bounds of noise rates
+for positive and negative examples respectively.
+
+The ﬁrst two restrictions on label noise rates indicate that
+the label noise rates (label ﬂipping probabilities) of labeled
+examples must have upper bounds less than 1. The last re-
+striction 0 ≤ ρ+1 (x)+ρ−1 (x) < 1 encodes the assumption
+made in [51] that a majority of the labels in the ILN model
+are correct on average, and it is derived from [12, 64] where
+ρ±1 are constant. In the rest of this paper, we always assume
+that Assumption 1 holds.
+
+Boundary-Consistence Noise (BCN). Although our
+proposed algorithm is designed for any kind of label noise
+that satisﬁes Assumption 1, to demonstrate the effective-
+ness of our algorithm in AL-based data exploration, we
+focus on one special case of ILN, Boundary-Consistence
+Noise (BCN), in evaluation. In the BCN model, the exam-
+ples closer to the decision boundary are more likely to be
+mislabeled. As stated in [11, 25, 51], the BCN model is a
+reasonable model for human annotator noise, and it can be
+applied to many real-world applications. More details of the
+BCN model can be found in Section 5.4.
+
+5.1.2 Automatic Noise Distillation and Limitations
+
+We now introduce a data cleansing method with theoreti-
+cal guarantees (ﬁrst proposed in [17]), which automatically
+collects conﬁdent examples out of a potentially corrupted
+dataset for the label noise problem under Assumption 1. We
+refer to this method as auto-cleansing.
+
+Lemma 1 Denote by η(x) the conditional probability
+P (Y = +1 | X = x). The Bayes optimal classiﬁer is given
+by g∗(x) = sgn(η(x) − 1
+
+2 ).
+
+Corollary 1 (Corollary in [17]) Denote by ˜η(x) the condi-
+tional probability P ( ˜Y = +1 | X = x), ∀x ∈ X , and then
+we have
+
+˜η(x) <
+
+˜η(x) >
+
+1 − ρ+1 max
+2
+1 + ρ−1 max
+2
+
+=⇒ (x, Y = −1) is distilled;
+
+=⇒ (x, Y = +1) is distilled.
+
+When ˜η, ρ+1 max and ρ−1 max are given, according to
+Corollary 1, a noisy example (Xi, ˜Yi) is identiﬁed auto-
+matically as positive (negative) if ˜η (Xi) > 1+ρ
+(˜η (Xi) < 1−ρ+1 max
+). The labels of distilled examples are
+identical to those assigned by the Bayes optimal classiﬁer
+
+1 max
+−
+2
+
+2
+
+under the clean distribution, i.e., g∗. In practice, ˜η, ρ+1 max
+and ρ−1 max are usually unknown, but they can be estimated.
+More details can be found in [17].
+
+This automatic noise distillation method is applicable
+to general label noise with robust performance guaranteed
+by the above theoretical results. Its effectiveness has been
+demonstrated empirically in the context of supervised learn-
+ing. However, in the AL framework, under the combined ef-
+fects of adverse factors (limited labeled data and severe class
+imbalance), the estimated ˜η, ρ+1 max and ρ−1 max learned
+from the existing labeled examples are usually not accurate
+enough. Consequently, the conﬁdent examples collected by
+auto-cleansing may include a certain amount of label noise.
+
+5.2 Robust Dual-Space Model
+
+Given the limitations of auto-cleansing in the context of
+active learning, we propose a Robust Dual-Space Model
+(DSM) to further ﬁlter label noise and eventually build an
+accurate DSM. Here, we leverage the geometrical property
+of DSM and a k-nearest neighbors method to further re-
+move noisy labels from the distilled examples collected by
+auto-cleansing. Since there is a tradeoff between introduc-
+ing DSM-labeled examples to save user labeling effort and
+avoiding additional noisy labels from DSM-labeled exam-
+ples, we also design an adaptive method based on estimated
+noise rates to bring in DSM-labeled examples strategically.
+
+5.2.1 Data Space Model Reﬁnement
+
+To further ﬁlter noisy labels from the distilled examples
+collected by auto-cleansing, we propose a DSM-based data
+cleansing method called Data Space Model Reﬁnement. In
+the following, we suppose that the subspatial convexity as-
+sumption holds for the data space under consideration. We
+use Dch and Dcc to denote the labeled examples for building
+the convex hull and the convex cones, respectively.
+
+Illustration. Before presenting the complete algorithm,
+we illustrate the intuition that the subset of examples in Dch
+that are very close to the boundary of the convex hull are
+likely to be noisy. Our approach to cleansing the convex hull
+is that for each vertex of the current convex hull, if its k-
+nearest neighbors contain a conﬂicting example from Dcc,
+then we remove from the convex hull this vertex and all its
+neighbors that lie within a l-distance radius of this vertex,
+where l is deﬁned to be the distance between the vertex and
+the discovered conﬂicting example. As shown in Figure 5(a),
+the green tetragon represents the convex hull formed by the
+examples in Dch (green dots), and red triangles represent
+some examples from Dcc but inside the convex hull. Take
+the vertex o for example: its nearest neighbor is g1 and its
+second nearest neighbor is r1, regardless of the choice of
+k. If the assumption of subspatial convexity holds, both o
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+13
+
+(a) Noise ﬁltering for the convex hull
+
+(b) Initial convex hull
+
+(c) Intermediate convex hull
+
+(d) Final convex hull
+
+Fig. 5: Illustration of data space model reﬁnement
+
+and g1 are likely to be noisy examples, so we remove both
+o and g1 to avoid the over-expansion of the convex hull. We
+refer to the process of constructing the convex hull based on
+current Dch and examine every vertex of the convex hull to
+remove noise as one round of noise ﬁltering.
+
+Multiple-round noise ﬁltering for the convex hull.
+One round of noise ﬁltering, however, may not be adequate.
+We next demonstrate the effectiveness of the iterative reﬁne-
+ment of the convex hull by displaying the gradually shrink-
+ing convex hulls over rounds of noise ﬁltering. For ease of
+composition, we assume that the user interest query is in
+Q+
+c , and the convex hull of DSM is created from the pos-
+itive examples. In addition, we use k = 3 for ﬁnding the
+k-nearest neighbors in the example in Figure 5.
+
+Figure 5(b) shows the initial convex hull (enclosed by
+red dashed lines) built on the conﬁdent examples distilled
+by auto-cleansing. Here, the true query region is marked by
+the dashed black rectangle, the red points denote distilled
+positive examples, and the blue points denote distilled neg-
+ative examples. Figure 5(c) shows the intermediate result of
+the convex hull after one round of noise ﬁltering, and Fig-
+ure 5(d) shows that after two-rounds of noise ﬁltering. It is
+evident that in Figure 5(b), six negative examples (six red
+points outside the dashed black rectangle) are erroneously
+labeled, which leads to the over-expansion of the convex
+hull. Three out of them are the vertices of the initial con-
+vex hull, and have negative examples among their 3-nearest
+neighbors. By removing these mislabeled positive examples
+and some other positive examples from their neighbors, an
+intermediate convex hull is derived as shown in Figure 5(c).
+Since there still exist negative examples inside the convex
+hull, we perform another round of noise ﬁltering and even-
+tually obtain a conservative and much more accurate convex
+hull, as shown in Figure 5(d).
+
+Reﬁnement of the convex cones. To reﬁne the convex
+cones, we perform simple ﬁltering by checking whether an
+example x in Dcc is inside the reﬁned hull. Only when x /∈
+hull, will x be used to build a convex cone.
+
+Fig. 6: RDSM update
+
+5.2.2 Robust Dual-Space Model for Data Exploration
+
+We now propose a Robust Dual-Space Model (RDSM) by
+integrating into DSM (i) the existing data cleansing method,
+auto-cleansing [17], (ii) our own data cleansing method,
+data space model reﬁnement, and (iii) a new adaptive auto-
+labeling method in the sample acquisition procedure.
+
+Like DSM, RDSM fulﬁlls two functionalities, prediction
+and sampling, as an active learner for data exploration. But
+there are two major differences, in both model update and
+sample acquisition methods: At each iteration, we update
+DSM based on the labeled examples directly, and always al-
+low DSM for auto-labeling in the sample acquisition process
+(lines 22-25 in Algorithm 1). In contrast, to update RDSM,
+as shown in Figure 6, we ﬁrst use auto-cleansing to collect
+conﬁdent examples from labeled examples and then based
+on the conﬁdent examples, we 1) update the classiﬁer, 2)
+build the data space model with reﬁnement, and 3) compute
+estimated noise rates to control auto-labeling, which takes
+effect later in the sampling acquisition process.
+
+We now present the full algorithm (Algorithm 2) of ap-
+plying RDSM into active learning-based interactive data ex-
+ploration and highlight the lines (marked in blue) that differ
+from Algorithm 1. Since the framework remains similar, we
+only discuss the two major differences.
+
+Update of RDSM. Lines 7-15 update the RDSM. More
+speciﬁcally, we collect clean labeled examples Dclean dis-
+tilled by auto-cleansing (line 7) and then use Dclean to train
+both a data space model with reﬁnement (line 10) and a
+classiﬁer (line 8). Lines 11-14 update the three-set parti-
+tions (D+, D−, Du): the partitions must be rebuilt if there
+exist user-labeled examples (Dlu) in the newly labeled ex-
+
+14
+
+Enhui Huang† et al.
+
+Algorithm 2 Robust Dual-Space Model
+Input: database D, initial labeled data set D0, accuracy threshold λ,
+sampling ratio γ, unlabeled pool size m
+1: Dlabeled ← D0, Dunlabeled ← D \ D0
+2: R+ ← ∅, R− ← ∅
+3: D+ ← ∅, D− ← ∅, Du ← D
+4: D ← (D+, D−, Du)
+5: Dlu ← D0, Dld ← ∅
+6: repeat
+
+classif ier ← train_classifier(Dclean)
+auto_labeling ← compare_rates(Dlabeled, Dclean)
+(R+, R−) ← train_data_space_model(Dclean)
+if Dlu = ∅ and Dld (cid:54)= ∅ then
+
+// training the Robust Dual-Space Model:
+7: Dclean ← distill_by_auto(Dlabeled)
+8:
+9:
+10:
+11:
+12:
+13:
+14:
+15:
+
+D ← rebuilding_threeSets(R+, R−, D)
+
+D ← threeSets(R+, R−, D)
+
+accu ← threeSetMetric(D)
+// applying the combined query strategy:
+
+else
+
+16: Dlu ← ∅, Dld ← ∅, x∗ ← ∅
+17:
+
+if rand() ≤ γ then
+
+//sampling from the uncertain region :
+pool ← subsample(Du, m)
+x∗ ← sample_acquisition(pool, classif ier)
+Dlu ← get_labels_from_user(x∗)
+
+else
+
+//uncertainty sampling around the boundary:
+pool ← subsample(Dunlabeled, m)
+x∗ ← sample_acquisition(pool, classif ier)
+for x ∈ x∗ do
+
+if x ∈ (R+ ∪ R−) and auto_labeling then
+
+Dld ← Dld ∪ {get_labels_from_rdsm(x)}
+
+else
+
+Dlu ← Dlu ∪ {get_labels_from_user(x)}
+
+18:
+19:
+20:
+21:
+
+22:
+23:
+24:
+25:
+26:
+27:
+28:
+
+// updating the labeled and unlabeled data sets:
+
+29: Dlabeled ← Dlabeled ∪ Dlu ∪ Dld
+30: Dunlabeled ← Dunlabeled \ x∗
+31: until accu ≥ λ or reachedMaxNum()
+32: finalRetrieval(D, (R+, R−), classif ier)
+
+amples. Otherwise, they are updated incrementally. The im-
+plicit assumption of the incremental update method is that
+D± (Du) built at a certain iteration must be a superset (sub-
+set) of D± (Du) built at any previous iteration. We use
+D(±, t) and D(u, t) to denote D± and Du built at iteration
+t respectively and then the assumption can be formalized as:
+if t1 < t2, then D(±, t1) ⊆ D(±, t2) and D(u, t2) ⊆ D(u, t1).
+However, this assumption does not hold in the presence of
+label noise. As a consequence, we need to correct the exist-
+ing partitions when receiving newly labeled examples from
+the user. We believe that the data space model created with
+more labeled examples is more accurate than that created
+with fewer labeled examples, so we correct the existing par-
+titions by rebuilding the partitions according to the latest
+data space model. Rebuilding the partitions enables RDSM
+to self-correct the partitions and thus alleviates the effect of
+label noise on its performance.
+
+Adaptive Auto-labeling. Line 9 determines whether to
+utilize RDSM later for auto-labeling. Recall that our la-
+
+beled set includes both user-labeled and DSM-labeled ex-
+amples. Hence, we compute the error rates for these two
+subsets, respectively, and compare them to decide whether
+auto-labeling is enabled. The estimated noise rate of user-
+labeled (DSM-labeled) examples ˆρu (ˆρd) is deﬁned to be
+the ratio of estimated mislabeled examples in user-labeled
+(DSM-labeled) examples. The on-off switch auto_labeling
+is assigned to be T rue if ˆρd < ˆρu, otherwise F alse. Line
+25 shows that only when auto_labeling is T rue, RDSM is
+qualiﬁed to provide labels. This adaptive strategy, which not
+only takes advantage of auto-labeling to save user labeling
+effort but also prevents introducing label noise from RDSM,
+is more realistic and applicable than using auto-labeling all
+the time. More details can be found in [39].
+
+5.3 High-dimensional Exploration with Label Noise
+
+In this section, we present how to optimize RDSM further
+through factorization for high-dimensional exploration and
+analyze how factorization affects learning with label noise.
+For data exploration performed with high dimension-
+ality, to further boost performance we leverage the idea
+of factorization to devise the factorized RDSM, denoted as
+RDSMF . This method divides the high dimensional space
+into a set of lower dimensional subspaces and builds a RDSM
+in each subspace. RDSMF follows the same factorization
+rules as those of DSMF , as described in Section 4.
+
+We provide further analysis of the effect of factorization
+on learning with label noise. We prove that if the factoriza-
+tion structure has the conjunctive property, the noise rate of
+positive examples in each subspace is lower than or equal
+to that in the original data space. Besides, we explain how
+factorization affects the mislabeled negative examples.
+
+Mislabeled positive examples. The user interest queries
+in our data exploration setting usually have very low selec-
+tivity, i.e., the user interest examples are scarce and hard to
+hit during the data exploration. It is well known that such
+class imbalance pushes the decision boundary of classiﬁca-
+tion models towards minority examples [5, 72, 79, 80]. Fur-
+ther, if some minority examples are mislabeled while the
+majority examples are clean, the class imbalance problem
+becomes more severe. In general, mislabeled minority ex-
+amples are more destructive than mislabeled majority ex-
+amples. In our problem setting, the minority examples are
+positive examples, which are often rare when the user comes
+to explore a very large dataset. Hence, our design pays more
+attention to mislabeled positive examples.
+
+Without loss of generality, we assume that the factoriza-
+tion structure consists of two groups of attributes (X 1, X 2),
+X j ∈ Rdj , j = 1, 2 and {X 1, X 2} are independent. In
+the jth subspace, we use Y j and ˜Y j to denote the true la-
+bel and the observed label of the projected examples X j,
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+15
+
+(cid:33)
+
+P (˜y (cid:54)= y | x) = ρmax exp
+
+−
+
+(cid:18)
+
+(cid:19)
+
+(dist(x, B))2
+2σ2
+
+and we deﬁne the noise rate of an example x in this sub-
+yj (x) = P ( ˜Y j = −yj | X j = xj, Y j = yj),
+space as, ρj
+yj ∈ {−1, +1}. According to the conjunctivity in the orig-
+inal high-dimensional data space, we have the clean but un-
+observed label Z = min(Y 1, Y 2), the observed but cor-
+rupted label ˜Z = min( ˜Y 1, ˜Y 2), and the overall noise rate
+is deﬁned as ρz(x) = P ( ˜Z = −z | X = x, Z = z), where
+x = (x1, x2), xj ∈ Rdj , j = 1, 2.
+
+Lemma 2 Denote by F the factorization structure com-
+posed of two groups of attributes (X 1, X 2), X j ∈ Rdj , j =
+1, 2, and {X 1, X 2} are independent, if the conjunctive prop-
+erty holds in F , we have ρj
+
++1 ≤ ρ+1, j = 1, 2.
+
+Proof With the conjunctive property, we have
+
+ρ+1(x) = P ( ˜Z = −1 | X = x, Z = +1)
+P ( ˜Z = −1, X = x, Z = +1)
+P (X = x, Z = +1)
+
+=
+
+=
+
+P (X = x, Z = +1) − P ( ˜Z = +1, X = x, Z = +1)
+P (X = x, Z = +1)
+
+P ( ˜Y i = +1, X i = xi, Y i = +1)
+P (X i = xi, Y i = +1)
+
+= 1 −
+
+(cid:89)i=1,2 (cid:32)
+1 − ρ1
++1(x) + ρ2
+
+(cid:0)
+
+= 1 −
+= ρ1
+
++1(x))(1 − ρ2
++1(x) − ρ1
+
++1(x)
++1(x)ρ2
++1(x)
+(cid:1)
+
+Then ρ+1(x) − ρ1
++1(x) ≤ ρ+1(x). Similarly, we can prove ρ2
+ρ1
+
++1(x)(1 − ρ1
+
++1(x) = ρ2
+
++1(x)) ≥ 0 ===⇒
++1(x) ≤ ρ+1(x).
+
+It is trivial to extend the Lemma 2 from two independent
+groups of attributes to a ﬁnite number of independent groups
+and obtain the following theorem.
+
+Theorem 3 Denote by F the factorization structure com-
+posed of m groups of attributes (X 1, X 2, · · · , X m), X j ∈
+Rdj , j = 1, 2, · · · , m, and {X 1, X 2, · · · , X m} are inde-
+pendent, if the conjunctive property holds in F , we have
+ρj
++1 ≤ ρ+1, j = 1, 2, · · · , m.
+
+Theorem 3 demonstrates that given a factorization struc-
+ture with conjunctive property, the noise rate of positive ex-
+amples in each subspace is lower than that in the original
+high-dimensional space. It coincides with the intuition that
+when a positive example is labeled as negative and the user
+is asked to specify which subspaces cause the negative label,
+the user may not label all the subspaces as negative. Thus,
+the classiﬁers can always gain useful information from the
+subspaces that obtain the correct subspatial labels.
+
+Mislabeled negative examples. We now focus on neg-
+ative examples. The projection of negative examples may
+fall into the projected positive region (user interest region)
+in some subspace. For example, a small black car does not
+suit the user who seeks a large black car, but it captures the
+user interest partially along the color dimension, leading to
+an overall negative label but a positive subspatial label for
+
+the color. When a negative example is mislabeled as posi-
+tive in the original high-dimensional space, according to the
+conjunctive property, its subspatial label in each subspace
+is inferred to be positive. Since the actual subspatial labels
+of this example in some subspaces might be positive, these
+subspatial labels remain correct and can offer useful infor-
+mation in the corresponding subspaces. Compared to stan-
+dard classiﬁers, which only learn from the mislabeled nega-
+tive examples in high-dimensional space, the classiﬁers with
+factorization gain greater insight from the subspaces and be-
+come more robust.
+
+5.4 Simulation of Label Noise Models
+
+Boundary-Consistence Noise (BCN). As mentioned in
+Section 5.1.1, we focus on Boundary-Consistence Noise
+(BCN) for evaluation as the BCN model is considered a rea-
+sonable model for human annotator noise. Inspired by [25],
+we assume that the label noise is distributed as an unnormal-
+ized Gaussian centered at decision boundary with variance
+σ2 and thus, the BCN model can be represented by
+
+(cid:52)
+= ρmax exp
+
+(cid:19)
+
+(cid:18)
+
+−
+
+d2
+x
+λ
+
+(8)
+
+where dx = dist(x, B) represents the distance from the ex-
+ample x to the true decision boundary B and λ = 2 ∗ σ2
+is a parameter to determine the label noise level. When
+dx = 0, i.e. the example x lies on the decision boundary,
+P (˜y (cid:54)= y | x) reaches its maximum ρmax. Given ﬁxed
+ρmax and an example x, larger λ leads to higher noise rate.
+When λ is large enough, the BCN model approximates a
+RCN model with the label ﬂip probability equal to ρmax.
+
+To apply the BCN model for our simulation of human
+
+annotator noise, we need to address the following issues.
+
+Estimation of dx. When the query pattern is not linear,
+it is nontrivial to attain dx for any example x. Although
+a perfect SVM classiﬁer is trained based on the ground
+truth to compute dx in [40], the estimated distance pro-
+vided by SVM cannot perfectly reﬂect the true distance,
+which eventually leads to a distorted distribution of the BCN
+model. Therefore, in this work, we propose a new method
+to estimate dx more precisely. The new distance estimation
+method mainly consists of three steps: 1) Collect border
+points: We run a k-nearest neighbors algorithm (provided
+by the scikit-learn library5) on the entire dataset and col-
+lect the examples whose neighbors contain at least t (t ≥ 1)
+examples(s) from the other class. These collected examples
+must be very close to the boundary, and we call them bor-
+der points. 2) Compute distance: Given an example x, we
+
+5 https://scikit-learn.org/stable/
+
+16
+
+Enhui Huang† et al.
+
+treat the distance from x to its nearest border points as the
+estimated dx. 3) Scaling dx to [0, 1] within each class: Ac-
+cording to the ground truth of the user interest, we separate
+the entire dataset into two sets, i.e., a positive set and a nega-
+tive set. Then we scale dx to [0, 1] by its maximum absolute
+value within each set.
+
+Setup of ρmax. We treat ρmax as a parameter to control
+different noise settings. We vary them in the range, [0.05,
+0.1, 0.2, 0.3, 0.4, 0.5], in our experimental evaluation.
+
+Tuning of λ. We assume that the examples farthest to
+the decision boundary have very low probability (at most τ )
+to be mislabeled under the BCN model. Given ρmax and the
+upper bound τ (τ = 10−12 in our experiments), we have
+
+(cid:18)
+
+ρmax exp
+
+−
+
+(cid:19)
+
+1
+λ
+
+(cid:54) τ =====⇒ λ (cid:54)
+
+−1
+log(τ /ρmax)
+
+.
+
+−1
+
+Noise injection during data exploration. We simulate
+noisy labels in our experimental study as follows: For a ﬁxed
+user interest pattern and a ﬁxed noise level ρmax, we set up
+λ as
+log(τ /ρmax) and precompute the label ﬂip probabilities
+in advance according to the BCN model deﬁned in Equation
+8. In the simulated user labeling process of data exploration,
+we ﬂip a coin for the selected example x with the label ﬂip
+probability, P (˜y (cid:54)= y | x), to determine whether a noisy
+label is generated or not for this example.
+
+6 Experimental Evaluation
+
+We implemented all of our proposed techniques in a Python-
+based prototype for data exploration, which connects to
+a PostgreSQL database. In this section, we evaluate our
+techniques and compare to recent active learning algo-
+rithms [13, 28], active search [33], and explore-by-example
+systems including Aide [23, 24] and LifeJoin [19].
+Datasets: Our evaluation used two datasets. (1) SDSS (190
+million tuples) contains the “PhotoObjAll" table with 510
+attributes. By default, we used 1% sample (1.9 million tu-
+ples, 4.9GB) to create an evaluation set for DSM and for
+pool-based uncertainty sampling – our formal results in Sec-
+tion 3.4 allowed us to use the 1% sample for data explo-
+ration, yet with bounded difference of (cid:15) ≤ .001 from the
+accuracy achieved over the full database with probability
+≥0.994. (2) Car database (5622 tuples): this small dataset
+is used for our user study because it is more intuitive for
+users to perform explorative analytics. We defer a detailed
+discussion to §6.3.
+User Interest Queries: We extracted 7 query templates
+from the SDSS query release [68] to represent user inter-
+ests. They allow us to run simulations of user exploration
+sessions, as in [23, 24], by using the true query answers as
+the proxy for user labeling. The 7 templates are shown in
+
+Table 1: Query templates with different selectivity values
+
+Query template
+Q1 (rectangle): rowc ∈ [a1, a2] ∧ colc ∈ [b1, b2]
+Q2 (ellipse): ((rowc − a1)/b1)2 + ((colc − a2)/b2)2 < c2
+Q3 (rectangle): ra ∈ [a1, a2] ∧ dec ∈ [b1, b2]
+Q4 (outside a circle): rowv2 + colv2 > c2
+Q5: 4D queries combining two queries from Q1-Q4
+Q6: 6D queries combining three from Q1-Q4
+Q7: 4D, (x1 > a + b · x2) ∧ (x3 + c · log10 x2
+
+4 < d)
+
+Table 1. Each template is instantiated with different con-
+stants to vary query selectivity in [0.01%, 10%]. In particu-
+lar, Q1-Q3 represent patterns that are convex in the positive
+region (Q+
+c ). Q4 retrieves tuples outside a circle, hence in
+the Q−
+c class. Q5-Q6 combine these attributes for scalabil-
+ity tests. Q7 includes a predicate on x1 and x2 that belongs
+to Q+
+c , and a log predicate on x3 and x4 that belongs to Q−
+c
+if x4 > 0 or is non-convex if x4 ∈ R. We use Q7 to test
+partial factorization as discussed in §4.
+Servers: Our experiments were run on four servers,
+each with 40-core Intel(R) Xeon(R) CPU E5-2640 v4 @
+2.40GHz, 128GB memory, Python 3.7 on CentOS 7.
+
+6.1 Dual-Space Algorithm with Factorization
+
+We evaluate our Dual-Space Model (DSM) and compare it
+to two ML techniques: (i) Active Learning (AL) runs uncer-
+tainty sampling [13,28] to obtain labeled examples for build-
+ing a classiﬁer, which is the version space part of DSM. We
+run AL with an SVM or a standard kNN classiﬁer (kNN+).
+(ii) Active Search (AS) [33] also follows an iterative pro-
+cedure of asking the user to label an example and training
+a new model to guide the selection of the next example, but
+uses a strategy to maximize the number of positive examples
+in the set of selected examples, not classiﬁcation accuracy. It
+uses a special variant of kNN classiﬁer to enable optimiza-
+tion, denoted as kNN−. In all plots, the x-axis is the number
+of labeled examples.
+
+Expt 1 (2D queries): We run 2D queries from templates
+Q1 to Q4. Since the results show similar trends, we show the
+results for Q3 (1%) in Figure 7(a)-7(d).
+
+Regarding F1-score, DSM outperforms AL, and AL out-
+performs AS. (1) An important factor is the data distribution
+around the decision boundary B of the user interest query. If
+B falls into a sparse region, separating the positive and neg-
+ative classes is relatively easy for DSM and AL. Figure 7(a)
+shows that for Q3 whose decision boundary is in a sparse
+region, DSM and AL-SVM converge within 10 labeled ex-
+amples. However, AS performs poorly, with the F1-score
+less than 20%. The reason is that AS compromises recall by
+searching close to existing positive examples. In contrast,
+DSM and AL aims to maximize classiﬁcation accuracy by
+sampling the uncertain region of the model, e.g., close to
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+17
+
+(a) F-score for Q3 (1%, sparse region)
+
+(b) F-score for Q3 (1%, dense region)
+
+(c) Lower bound for Q3 (1%, dense region)
+
+(d) Time per iteration for Q3 (1%, dense)
+
+(e) F-score for Q5 (0.1%, dense)
+
+(f) Lower bound for Q5 (0.1%, dense)
+
+(g) F-score for Q6 (0.01%, dense)
+
+(h) Time for Q6 (0.01%, dense)
+
+(i) Full vs. partial factorization with Q7
+
+Fig. 7: DSM with factorization for SDSS 2D, 4D, and 6D queries, compared to AL and AS algorithms
+
+(a) DSM vs Aide and LifeJoin (SDSS 2D)
+
+(b) DSM vs Aide and LifeJoin (SDSS 4D, 6D)
+
+Fig. 8: Results of SDSS queries for partial factorization and comparison to Aide and LifeJoin systems
+
+the decision boundary, hence offering better F1-score. (2) If
+B falls into a dense data region, learning an approximate
+˜B that can accurately divide all unlabeled data points re-
+quires more labeled examples. To reach 95% accuracy, DSM
+requires 100 labeled examples for Q3 and 90 examples on
+average for Q1-Q4. AL works better with the SVM than the
+kNN classiﬁer, but even AL-SVM fails to reach 95% for Q3
+or most other workloads. Finally, AS performs much worse
++ while both use kNN classiﬁers. DSM further
+than AL-KNN
+offers a lower bound in F1-score. Figure 7(c) shows that the
+lower bound is quite close to the true F1-score.
+
+The time cost of DSM, shown in Fig. 7(d), varies with
+the sampling method. Recall from Alg. 1 that with probabil-
+ity γ, it samples from the uncertain partition of the poly-
+tope model, Du; otherwise, it does so from a subsample
+of the unlabeled examples in the database, Dunlabeled. γ=0
+leads to high time costs because the examples retrieved from
+Dunlabeled may repeatedly fall in the positive or negative re-
+gion of the polytope model, wasting resources with no new
+information. γ=1 and γ=0.5 signiﬁcantly reduce the time
+cost, with γ=0.5 offering slightly better accuracy due to bal-
+anced sampling. However, both settings exhibit a spike in
+
+ 0 0.2 0.4 0.6 0.8 1 0 20 40 60 80 100F-scoreIterationDSMAL-SVMAL-KNN+AS-KNN- 0 0.2 0.4 0.6 0.8 1 0 40 80 120 160 200F-scoreIterationDSMAL-SVMAL-KNN+AS-KNN- 0 0.2 0.4 0.6 0.8 1 0 40 80 120 160 200F-scoreIterationDSM truthDSM lower bound 0.01 0.1 1 10 100 1000 10000 0 40 80 120 160 200Time per iteration (sec)IterationDSM(g=0)DSM(g=0.5)DSM(g=1)DSM(g=0.5,OPT2)DSM(g=0.5,OPT1)AL 0 0.2 0.4 0.6 0.8 1 0 40 80 120 160 200F-scoreIterationDSMFDSMAL-SVMAL-KNN+AS-KNN- 0 0.2 0.4 0.6 0.8 1 0 40 80 120 160 200F-scoreIterationDSMF truthDSMF lower boundDSM lower bound 0 0.2 0.4 0.6 0.8 1 0 40 80 120 160 200F-scoreIterationDSMFAL-SVMAL-KNN+AS-KNN- 0 1 2 3 4 5 0 40 80 120 160 200Time per iteration (sec)IterationDSMFAL-SVM 0 0.2 0.4 0.6 0.8 1 0 40 80 120 160 200F-scoreIterationDSMF(DSC)AL-KNN+DSMF(p-DSC)AS-KNN-AL-SVM 0 0.2 0.4 0.6 0.8 1 0 40 80 120 160 200F-scoreIterationDSMAIDELifeJoin 0 0.2 0.4 0.6 0.8 1 0 100 200F1-scoreIteration6D-DSMF4D-DSMF6D-AIDE4D-AIDE6D-LifeJoin4D-LifeJoin18
+
+Enhui Huang† et al.
+
+time cost in the early phase, which is the time to build the
+polytope model the ﬁrst time by scanning the entire eval-
+uation set. Finally, we improve γ=0.5 with the optimization
+(OPT1) from Section 3.4, where we start with a smaller eval-
+uation set (n=50k) to avoid the initial spike, but later switch
+to a larger evaluation set (n=1.9 million) once its polytope
+model is built completely in the background. This optimiza-
+tion keeps the time cost per iteration within a second. An-
+other way to reduce the time cost is to apply distributed
+computing (OPT2) from Section 3.4, which cuts down the
+per-iteration time to within 1-2 seconds when the size of the
+evaluation set is always 1.9 million. OPT1 and OPT2 can
+be combined to further improve the time performance; how-
+ever, OPT1 may reduce accuracy due to use of a smaller
+sample. Since OPT2 keeps the time cost per iteration within
+a reasonable range, OPT2 with a 1.9-million evaluation set
+will be used as the default setting of our algorithm.
+
+Expt 2 (4D-6D queries): We next show results of 4D-6D
+queries in dense regions as they present harder workloads.
+The main results of Figure 7(e)-7(h) are: (1) Without fac-
+torization, DSM performs similarly to AL as the polytope
+model is dominated by the uncertain region. DSMF dramat-
+ically shrinks the uncertain region, and improves the lower
+bound and F1-score. (2) Consistently, DSMF outperforms
+AL, which further outperforms AS. Figure 7(g) shows that
+for the 6D query, DSMF reaches 96% with 80 examples,
+AL-SVM cannot reach 20% with 200 examples, and AS is
+close to 0%. (3) DSMF has the time per iteration within 1-2
+seconds, as shown in Figure 7(h) for the 6D query.
+
+Expt 3 (Partial factorization): We next generate two
+queries from Q7 with 7.8% selectivity for Q7.v1 and 0.7%
+selectivity for Q7.v2 (based on the constants used in SDSS).
+Q7.v1 is in the DSC family because its positive region is con-
+vex in the (x1, x2) subspace, and its negative region is con-
+vex in (x3, x4). Q7.v2 is in the p-DSC family because it is
+non-convex in (x3, x4). Hence, DSM supports Q7.v2 with
+partial factorization. Figure 7(i) shows that DSMF works
+better for the DSC query than p-DSC query, as expected, but
+even partial factorization works much better than (i) AL,
+which does not reach 60% after 200 labeled examples, and
+(ii) AS, which cannot achieve more than 5% accuracy.
+
+6.2 Comparison to Alternative Systems
+
+We next compare our system to two state-of-the-art explore-
+by-example systems: 1) LifeJoin [19] uses SVM for clas-
+siﬁcation and active learning for seeking the next example
+for labeling. But it differs in the SVM implementation from
+our work: LifeJoin proposed a hybrid approach that utilizes
+program synthesis to generate a number of interest functions
+(each function can be treated as a weak learner and the group
+forms an ensemble), and uses an SVM to ﬁnd the weights for
+the generated functions. The example on which the weighted
+
+functions disagree the most is selected as the next example
+for labeling. We implemented LifeJoin as additional meth-
+ods in our system. 2) Aide [23, 24] uses decision trees as the
+classiﬁcation model and customized methods for seeking the
+next example for labeling. We obtained the source code from
+the authors. When comparing these systems, we exclude the
+overhead to ﬁnd the ﬁrst positive example as these systems
+use different methods / assumptions to ﬁnd them.
+
+Expt 4: The F1-score is reported in Figure 8(a) for a 2D
+query, and in Figure 8(b) for 4D and 6D queries. (1) For the
+2D query, our system outperforms Aide, which further out-
+performs LifeJoin. Overall, LifeJoin is signiﬁcantly worse
+in accuracy. (2) For the 4D query, Aide and LifeJoin drop
+to below 10% in accuracy, while our system achieves 99%
+within 140 iterations. For the 6D query, again Aide and Life-
+Join fail to work. This observation remains for any query
+that we tried beyond 2D. This is due to the combination of
+low selectivity and high dimensionality in data exploration.
+Additional analysis of these systems is available in [39].
+
+6.3 User Study using a Car Database
+
+We conducted a user study by building a car database6. The
+database includes 5622 vehicles with 27 attributes such as
+the model, year, length, height, engine power, and retail
+price. Our study has two objectives: (1) build a query trace
+to understand the characteristics of data exploration tasks in
+this domain; (2) use this trace as the ground truth of user
+interests to evaluate our system.
+
+To develop the query trace, we designed task scenar-
+ios with different price constraints and usage patterns, e.g.,
+buying a car for everyday city commute, outdoor sports,
+an elderly in the family, or a small business. The 18 users
+in our study belong to two groups: the ﬁrst 11 users are
+CS professors and graduate students, while the rest of 7
+are non-technical people. We asked each user to ﬁnd all
+the cars that meet the requirements of the assigned task
+so that he can provide a recommendation service to cus-
+tomers who belong to the given scenario. Each user pro-
+ceeds in three phases: 1) Review the schema: Since this is
+a familiar domain, most users can understand the schema
+quickly. 2) Initial exploration: We next show sample data
+to help the user understand the data and materialize the
+user preference. We also ask the user to come up with
+the ﬁrst positive example via (a) naming a car that he/she
+already has in mind, or (b) reviewing a sample set pre-
+computed for the given task based on the price constraints,
+body type, year, etc., and ﬁnding one that appears relevant.
+Two users chose option (a) while the others chose option
+(b). 3) Iterative manual exploration: Next, the user is asked
+to specify her interest precisely by (i) sending a SQL query
+
+6 The content is extracted from http://www.teoalida.com/
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+19
+
+Table 2: Results of the car database using Manual Exploration, DSMF , Active Learning (AL). “#attrs” shows the number
+of attributes used in the user interest and “# encoded features” shows the number of features (with one-hot encoding) after
+transforming all categorical attributes for use by the classiﬁer. For manual exploration, “# tuples INIT" shows the number
+of tuples reviewed in initial exploration (the 2nd phase) for the user to ﬁnd the ﬁrst positive example; and “# tuples ITER"
+shows those reviewed in iterative exploration (3rd phase). Last three rows show the global Min, Max and Mdn respectively.
+For DSMF and AL, the algorithm marked by ‘-’ never reached the desired accuracy within 100 iterations. The notation "SIM
+RES" over the last 6 columns indicates that these results are based on the simulation of user behaviors.
+
+Q
+
+Q1
+∼
+Q11
+
+Q12
+∼
+Q18
+
+Min
+Max
+Mdn
+
+Min
+Max
+Mdn
+
+Global Min
+Global Max
+Global Mdn
+
+# attrs
+
+# encoded
+features
+
+Manual Exploration
+
+# tuples INIT
+
+# tuples ITER #SQL
+
+AL (SIM RES)
+0.95
+
+0.99
+
+0.8
+
+DSMF (SIM RES)
+0.99
+0.95
+0.8
+
+4
+8
+6
+
+4
+10
+6
+
+4
+10
+6
+
+12
+418
+35
+
+4
+51
+24
+
+4
+418
+30
+
+0
+18
+11
+
+0
+24
+4
+
+0
+24
+10
+
+35
+412
+104
+
+50
+260
+91
+
+35
+412
+98
+
+8
+49
+16
+
+4
+15
+10
+
+4
+49
+12
+
+8
+-
+29
+
+9
+-
+28
+
+8
+-
+29
+
+9
+-
+42
+
+15
+-
+-
+
+9
+-
+-
+
+9
+-
+-
+
+15
+-
+-
+
+9
+-
+-
+
+4
+14
+7
+
+3
+7
+6
+
+3
+14
+6
+
+4
+23
+10
+
+5
+11
+6
+
+4
+23
+9
+
+5
+26
+13
+
+6
+12
+9
+
+5
+26
+10
+
+to the database (for the 7 non-technical people, we offered
+help to translate their requirements to SQL); (ii) reviewing
+a subset of the returned tuples; (iii) going back to revise the
+query. The steps are repeated until the user is satisﬁed with
+all returned tuples of the ﬁnal query.
+
+First, we verify that the selectivities of all 18 queries are
+in the range of [0.2%, 0.9%]. They contain 117 predicates in
+total: 70 of them are deﬁned on numerical attributes and are
+all convex in the positive region. The rest 47 use categor-
+ical attributes, for which the notion of convexity does not
+apply. All the queries are conjunctive; the only disjunction
+is applied to the categorical attributes.
+
+Second, we evaluate our system by running simula-
+tions using these queries as the true user interest. While
+the queries involve 4 to 10 attributes, the classiﬁer requires
+categorical attributes to be transformed using one-hot en-
+coding, resulting in 4 to 418 features. As for the initial ex-
+amples for each experiment, the initial positive example is
+provided by the user at Step 2, and the initial negative ex-
+ample is randomly picked from the examples that are "far
+away" from the initial positive example. Table 2 shows in
+the "DSM" column family that DSMF achieve 99% for all
+queries, with a median of 10 labeled examples, despite the
+high-dimensionality. In contrast, the users manually wrote a
+series of queries, with a median of 12, and reviewed many
+tuples, with a median of 98. The results from two user
+groups are largely consistent, with a small difference that
+non-technical people tend to specify simpler queries, hence
+easier for DSM to learn. Note that the initial cost of ﬁnding
+the ﬁrst positive example, with a median of 10 tuples, can be
+added fairly to both exploration modes.
+
+Third, the study veriﬁed our beneﬁts over active learning
+(AL), which cannot reach 95% accuracy for most queries
+
+within 100 iterations, and for 80% accuracy requires a me-
+dian of 29 labeled examples. Even though the decision
+boundary is often in a sparse region in this dataset, high di-
+mensionality makes AL suffer in performance.
+
+6.4 Learning with Label Noise
+
++, AL-KNN
+
+We now evaluate our algorithm for handling label noise and
+demonstrate its advantages over alternative methods. The
+previous results showed that in the noise-free cases, (1) AL-
+− and AS, (2) the
+SVM outperforms AL-KNN
+alternative systems Aide and LifeJoin are greatly inferior
+to DSMF and they are often defeated by AL-SVM. Besides,
+both Aide and LifeJoin assume noise-free conditions and
+cannot handle label noise. Thus, the following experiments
+use AL-SVM as the baseline and focus on the harder prob-
+lem in which the decision boundary falls into dense regions.
+Expt 5 (Evaluation of RDSM without factorization): Fig-
+ure 9(a) shows the averaged F-score comparison of RDSM,
+AL-SVM + auto (AL-SVM combined with auto-cleansing),
+and AL-SVM over all 2D queries (queries from SDSS query
+templates Q1-Q4) at iteration 200 in the form of a heat map.
+In the heat map, the x-axis labels correspond to varied ρmax
+from 5% to 50%, and the y-axis labels correspond to various
+algorithms. The number inside the cell (i, j) corresponds to
+the averaged F-score over all 2D queries when algorithm j
+is run with ρmax = i. For example, as the red cell in the
+upper-left corner shows, when ρmax = 5%, RDSM reaches
+up to 99% accuracy on average.
+
+The main observations are: (1) RDSM outperforms the
+other two algorithms under every noise rate. (2) Given a
+ﬁxed ρmax, there always exists a gap (2%-4%) between
+
+20
+
+Enhui Huang† et al.
+
+(a) Averaged F-scores of RDSM, AL-SVM + auto and AL-SVM
+over SDSS 2D queries at iteration 200
+
+(b) Averaged F-scores of RDSMF , AL-SVMF + auto, AL-SVMF
+and AL-SVM over 4D-6D queries at iteration 200
+
+Fig. 9: Results for SDSS queries in the presence of label noise
+
+(a) Q3 (0.1%), ρmax 5%, F-score
+
+(b) Q3 (0.1%), ρmax 10%, F-score
+
+(c) Q3 (0.1%), Time
+
+Fig. 10: RDSM for SDSS 2D queries, compared to AL-SVM + auto and AL-SVM
+
+RDSM and AL-SVM + auto, while the latter outperforms
+AL-SVM. It empirically proves that the performance im-
+provement of RDSM is attributed to not only the auto-
+cleansing method but also our proposed techniques — data
+space model reﬁnement and adaptive auto-labeling. (3) As
+ρmax becomes larger (i.e., the noise rate increases), all al-
+gorithms reduce accuracy while RDSM reduces at the slow-
+est pace. For example, with ρmax ranging from 5% to 30%,
+RDSM drops from 99% to 82%, AL-SVM + auto drops from
+95% to 78% and AL-SVM drops from 95% to 63%. (4) AL-
+SVM + auto performs similarly to AL-SVM when ρmax is
+relatively small, but it achieves substantially higher accuracy
+than AL-SVM when ρmax becomes larger.
+
+We now present some detailed results of different algo-
+rithms in terms of the F-score and time measurement. Since
+the results for different queries show similar trends, and Q3
+(0.1%) is one of the most challenging 2D query patterns to
+learn, we present only Q3 (0.1%) in the interest of space.
+Figures 10(a) - 10(b) show that RDSM surpasses the other al-
+gorithms in accuracy almost at every iteration. With respect
+to time measurement, the time cost of each algorithm re-
+mains similar under different levels of label noise. As shown
+in Figure 10(c), both AL-SVM + auto and AL-SVM have
+time cost per iteration below 0.5 second. The time cost per
+iteration of RDSM is within 2 seconds, which is reasonable
+for the requirement of interactive performance.
+
+Expt 6 (Evaluation of RDSM with factorization
+(RDSMF )): The heat map in Figure 9(b) shows the aver-
+aged F-score comparison of RDSMF , AL-SVM, AL-SVMF
+
+(AL with a factorized SVM), and AL-SVMF + auto (AL-
+SVMF combined with auto-cleansing) for 4D-6D queries at
+iteration 200. The heat map is drawn in the same format as
+that in Figure 9(a). The main results are: (1) Consistently,
+RDSMF outperforms the other algorithms under every noise
+rate. (2) Thanks to the factorized data space model, RDSMF
+always outperforms the second-best algorithm AL-SVMF +
+auto by a wide margin (13%-40%). (3) It is worth noting
+that compared to 2D queries, the gap between RDSMF and
+the second-best algorithm becomes larger. On the one hand,
+even with factorization, the other algorithms fail to achieve
+high accuracy for high-dimensional queries. On the other
+hand, RDSMF takes advantage of the factorized data space
+model to dramatically shrink the uncertain region and cap-
+ture the true decision boundary in high dimensional space
+rapidly. (4) For each algorithm, its accuracy decreases as
+ρmax increases. Particularly, RDSMF drops at the slowest
+rate, which empirically attests to the robustness of RDSMF .
+(5) Compared to AL-SVM, AL-SVMF improves the accu-
+racy dramatically. Except for 50% ρmax, AL-SVMF sur-
+passes AL-SVM by around 40% accuracy, which shows the
+beneﬁt of factorization. (6) Similar to previous observations,
+due to the usage of auto-cleansing, AL-SVMF + auto out-
+performs AL-SVMF when ρmax is high, but these two meth-
+ods are similar for lower ρmax.
+
+We next show some details in terms of the F1-score
+and time measurement. Since the experimental results have
+similar trends for all high-dimensional queries and the 4D
+query Q5 (0.01%) and the 6D query Q6 (0.01%) have the
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+21
+
+(a) Q5 (0.01%), ρmax 5%, F-score
+
+(b) Q5 (0.01%), ρmax 30%, F-score
+
+(c) Q5 (0.01%), Time
+
+(d) Q6 (0.01%), ρmax 5%, F-score
+
+(e) Q6 (0.01%), ρmax 30%, F-score
+
+(f) Q6 (0.01%), Time
+
+Fig. 11: RDSMF for SDSS 4D and 6D queries, compared to AL-SVMF + auto, AL-SVMF and AL-SVM
+
+(a) Averaged F-scores of RDSMF , AL-SVMF + auto,
+AL-SVMF , and AL-SVM over all 18 car queries at
+iteration 100
+
+(b) Car query Q5, ρmax 40%, F-score
+
+(c) Averaged F-scores of RDSMF , AL-
+SVMF , and AL-SVM over 5 car queries
+with false positive labels at iteration 100
+
+Fig. 12: Results for the user study in the presence of label noise.
+
+lowest selectivity (lower selectivity typically leads to more
+difﬁculties in learning), we take the two queries as exam-
+ples to show the general trends. As shown in Fig. 11(a)-
+11(b) and 11(d)-11(e), RDSMF outperforms the other al-
+gorithms after 20-40 iterations, and by a wide margin for
+Q6. It achieves above 90% accuracy even when ρmax rises
+up to 30%, while the other algorithms have accuracy be-
+low 80% for ρmax = 30%. AL-SVMF + auto and AL-
+SVMF perform similarly for low ρmax, but for high ρmax,
+AL-SVMF drops faster than AL-SVMF + auto. As for AL-
+SVM its highest accuracy is below 80% for Q5(0.01%) with
+ρmax = 5%, while in other cases, its accuracy is close to 0.
+Regarding time measurement, like 2D queries, the time
+cost per iteration of each algorithm for high dimensional
+queries remains similar across different levels of label noise.
+Figure 11(c) and 11(f) show that AL-SVMF + auto, AL-
+SVMF and AL-SVM have time cost per iteration below 0.5
+second. The highest time cost per iteration of RDSMF is
+around 2.5 seconds for Q5 (0.01%) and around 3 seconds for
+
+Q6 (0.01%). In conclusion, for all the experiments, the time
+cost for RDSMF is within 3 seconds per iteration, which is
+reasonable for the requirement of interactive performance.
+As our work aims to reduce user labeling efforts, 200 la-
+beled examples and within 3 seconds per iteration seem to
+be acceptable. The most time-intensive procedure is updat-
+ing the three-set based data space model at each iteration.
+If more iterations are needed, instead of building the data
+space model on the entire dataset, we can further keep the
+iteration time within 3 seconds via subsampling methods.
+
+Expt 7 (Learning car queries with synthetic noisy
+labels): In this experiment, we simulate the Boundary-
+Consistence Noise using the approaches described in Sec-
+tion 5.4, and conduct the evaluation for the 18 car queries
+obtained from our user study. Figure 12(a) shows the aver-
+aged F-scores of RDSMF , AL-SVMF + auto, AL-SVMF ,
+and AL-SVM over these queries. The main results in-
+clude: (1) Consistent with the results of SDSS queries,
+RDSMF substantially outperforms other algorithms under
+
+22
+
+Enhui Huang† et al.
+
+every noise rate. In particular, RDSMF improves the per-
+formance from AL-SVM by 12%-69% (48% on average).
+(2) RDSMF is the most robust one whose accuracy drops
+at the slowest pace as the noise rate rises. It achieves 85%
+when ρmax is up to 50%, while other algorithms, no mat-
+ter the noise rate is low or high, cannot reach 85% in
+most cases. (3) The considerable improvement from AL-
+SVMF + auto to RDSMF can be attributed to the factor-
+ized data space model. (4) For each noise rate, AL-SVMF +
+auto performs slightly better than AL-SVMF . (5) For lower
+noise rates, AL-SVM achieves better performance than AL-
+SVMF while for higher noise rates, AL-SVMF signiﬁcantly
+outperforms AL-SVM.
+
+Among all car queries, Q5 (0.231%) has the highest di-
+mensionality, including 418 attributes after one-hot encod-
+ing of the categorical attributes. In Figure 12(b), we show the
+trends of the algorithms for the car query Q5 using an exam-
+ple ρmax = 40%. Consistently, we observe that RDSMF sig-
+niﬁcantly outperforms other algorithms. AL-SVMF + auto
+and AL-SVMF have similar performances, and their accu-
+racies lie in between RDSMF and AL-SVM.
+
+Expt 8 (Learning car queries with real noisy labels): We
+next evaluate our algorithm using real noisy labels from our
+Car User Study. However, this study has some constraints:
+the user recorded only "positive examples" during initial ex-
+ploration (Step 2) and at the end of manual exploration (Step
+3) when the user veriﬁed the ﬁnal results before terminat-
+ing the exploration. So, we can treat the examples returned
+by the ﬁnal query as the true positive examples. In contrast,
+during initial exploration, the user was not very clear about
+her true interest and might provide false positive examples.
+As such, this study provides only limited noisy labels in the
+initial exploration phase and in the form of false positives.
+
+To generalize the noisy labels to all iterations in our ex-
+periment, we use label propagation to characterize the false
+positive region. More speciﬁcally, we obtain false positive
+examples from the initial exploration in the user trace, pre-
+process our dataset by propagating noisy labels to the k near-
+est neighbors of the false positives, and execute the data ex-
+ploration on the polluted dataset to test the robustness of our
+model. In the process of label propagation, we ﬂip the labels
+only for the negative examples in the neighborhood of the
+false positive examples under the assumption that the exam-
+ples close to the false positives are more likely to be positive.
+We tune the value of k to control the label noise incurred in
+the data exploration to obtain a percentage error rate.
+
+As shown in Figure 12(c), RDSMF consistently outper-
+forms the other algorithms by a large margin (14%-59%
+times higher), and AL-SVMF beats AL-SVM in most cases
+except in the 5% case. The scores in Expt 8 are not compa-
+rable to those in Expt 7 due to different distributions of label
+noise: In Expt 7, the label noise follows a Gaussian distri-
+bution. In Expt 8, to ensure that the k-nearest neighbors are
+
+actually hit as noisy labels in iterative data exploration, we
+impose a Bernoulli distribution on the label noise: if an ex-
+ample is in the k-nearest neighbor set, it is a noisy label;
+otherwise, it is not. The noise in Expt 8 often occurs close to
+the decision boundary, while the noise in Expt 7 may occur
+far from the boundary – hence the former has a more severe
+impact on performance than the latter. Overall, the results in
+Expt 8 demonstrate not only the robustness of our model to
+real noise, but also the capability of our model to address
+different types of noisy labels.
+
+7 Related Work
+
+Data Exploration. Faceted search iteratively recommends
+query attributes for drilling down into the database, but the
+user is often asked to provide attribute values until the de-
+sired tuple(s) are returned [45, 61, 62] or offer an “inter-
+estingness” measure and its threshold [21]. Semantic win-
+dows [44] are pre-deﬁned multidimensional predicates that
+a user can explore. These methods are different from our
+active learning approach. Recent work also supports time
+series data [54] or avoids false discoveries of statistical pat-
+terns [84] during interactive data exploration. Finding best
+database objects based on user preferences [70] assumes
+a numeric weight per database attribute, which is different
+from the active learning approach to discover the user inter-
+est on the ﬂy. The kBM-IGS framework proposed in [85]
+handles interactive search for multiple labels using a con-
+strained budget. While our work only considers single label
+cases, the extension for multiple labels will be a promising
+direction. By interactive data exploration, the DEXPLORER
+system in [58] aims to discover and rank examples and the
+EDA4Sum system in [81] detects highly uniform and di-
+verse itemsets to provide data summaries, which are dif-
+ferent from our scenario of ﬁnding desired examples. The
+ATENA system in [26] auto-generates EDA notebooks to of-
+fer the user more insights before he/she actively explores the
+dataset, which is complementary to our work. Recent work
+[55] proposes GUIDES, an innovative framework for guided
+Text-based Item Exploration (TIE), to explore structured
+and unstructured data in tandem and provide guidance in the
+dual space of attributes and text. However, GUIDES lever-
+ages an action-driven approach, example-based TIE oper-
+ators are yet to be fully explored. A new query workload
+augmentation with labeling estimation framework DATA-
+FARM [78] also adopts active learning for label forecasting,
+but it focuses on generating query workloads with labels,
+which is different from our goal. Beyond the requirements
+of regular data exploration, the authors of [7] address the
+joint exploration of items, people, and people’s opinions on
+items in the Subjective Data Exploration (SDE) framework.
+Instead of ﬁnding interesting data sets, the approach in [65]
+aims to ﬁnd the target users through guided exploration.
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+23
+
+Query by Example is a speciﬁc framework for data ex-
+ploration. Earlier work on QBE focused on a visualization
+front-end that aims to minimize the user effort to learn the
+SQL syntax [42, 56]. Recent work [53] proposes exemplar
+queries which treat a query as a sample from the desired
+result set and retrieve other tuples based on similarity met-
+rics, but for graph data only. The work [67] considers data
+warehouses with complex schemas and learns the minimal
+project-join queries from a few example tuples efﬁciently. It
+does not consider selection with complex predicates, which
+is a focus of our work. The work [43] helps users construct
+join queries for exploring relational databases, and [47] does
+so by asking the user to determine whether a given output ta-
+ble is the result of her intended query on a given database.
+INODE [6] as an end-to-end data exploration system also
+provides explore-by-example approaches for ﬁnding inter-
+esting data patterns across multiple semantics, but it adopts
+existing approaches rather than developing new methods.
+Query Formulation has been surveyed in [18]. The closest
+to our work is LifeJoin [19], which we compared in Sec-
+tion 6.2. Query By Output (QBO) [74] takes the output of
+one query on a database, and constructs another query such
+that running these two queries on the database are instance-
+equivalent. Dataplay [2] provides a GUI for users to directly
+construct and manipulate query trees. It assumes that the
+user can specify the value assignments used in his intended
+query, and learns conjunctions of quantiﬁed Horn expres-
+sions (with if-then semantics) over nested relations [1].
+Active Learning. Tong and Koller [73] provide a theoreti-
+cal motivation on selecting new examples using the notion
+of a version space, but with unknown convergence speed.
+Related to our work is a lower bound on the probability of
+misclassiﬁcation error on the unlabeled training set
+[16].
+However, it relies on user labeling of an additional sample
+from the unlabeled pool, which is not required in our work.
+Recent papers [27, 35–37] offer probabilistic bounds for the
+classiﬁcation error and sample complexity. Our work differs
+in that we focus on F1-score, which suits selective user in-
+terest queries (imbalanced classes in classiﬁcation).
+
+Most learning theory makes no assumptions on convex
+data/class distributions [38]. Clustering techniques can as-
+sume that data is clustered in convex sets [38], but address a
+different problem from ours. In Active Learning, convexity
+assumptions occur in the Version Space [10, 73], which is
+the set of classiﬁers consistent with training data. DSM can
+embrace any classiﬁer developed through the version space,
+but also includes the new polytope model.
+Active Search [33, 50, 75] aims to maximize the number
+of positive examples discovered, called the Target Set Ac-
+curacy, within a limited budget of user labeling effort. In
+comparison, our work aims to maximize the F-score of the
+model learned to approximate the true user interest. We re-
+ported the performance difference from [33] in the previous
+
+section. The works [50, 75] use a kernel function to measure
+similarity of items in order to maximize the utility of a set
+of selected items. Such kernel methods have the smoothness
+requirement, i.e., similar items have similar utility values,
+and require training data to tune the kernel for each use case
+(user interest), which do not suit our problem setting.
+
+Crowdsourcing-based Active Learning with Label Noise.
+Many existing methods in the active learning literature ad-
+dress the label noise problem based on crowdsourcing tech-
+niques [3, 41, 48, 82]. However, these techniques depend
+on adding redundancy by collecting labels for each exam-
+ple from multiple users and aggregating the labels using
+some methods such as majority voting. In this context, these
+crowdsourcing techniques usually result in an additional la-
+beling cost and can not support the scenarios with a single
+user. While our work assumes that only one user is involved,
+if combined with some crowdsourcing techniques to aggre-
+gate labels from the users, our proposed algorithms have the
+potential to support multiple users.
+Active Learning with Relabeling Noisy Labels. In the ac-
+tive learning literature, a popular approach to deal with label
+noise is to relabel suspiciously mislabeled examples. Re-
+cent works [14, 83] treat relabeling as an individual pro-
+cess triggered at each iteration or under some conditions.
+Other works [41,48] integrate relabeling into the sample ac-
+quisition process, which generalizes conventional sampling
+strategies with a tradeoff between assigning labels for more
+unlabeled examples and relabeling potentially noisy exam-
+ples in the existing labeled data set to improve the label qual-
+ity. Instead of relabeling, our work takes advantage of noise
+removal methods. On the one hand, label noise cleansing
+methods have the following advantages: (1) removed noisy
+examples have no effect on modeling [32], (2) it’s observed
+that retaining mislabeled examples may be more harmful
+than removing some correctly labeled examples [15], and
+(3) in general, removing noisy examples is more effective
+than relabeling them and a hybrid approach which com-
+bines removal and relabeling [20, 52]. On the other hand,
+relabeling may be too costly since humans may make sim-
+ilar mistakes repeatedly [71], and there is no guarantee that
+the relabeled examples are noise-free. Recent work [71] pro-
+posed a Bidirectional Active Learning with human Training
+(BALT) model to improve the expertise of labelers and re-
+labeling quality simultaneously. However, the BALT model
+relies on some gold instances (previously labeled and noise-
+free) which are not available in our setting.
+Data Programming. When ground truth labels are not
+available, recent studies [8, 60, 76] have employed the data
+programming paradigm to build training data for develop-
+ing high-quality models. Furthermore, Snorkel [59], a ﬁrst
+end-to-end system based on data programming, is designed
+for training machine learning models with weak supervi-
+sion. Snorkel asks the users to write labeling functions (LFs)
+
+24
+
+Enhui Huang† et al.
+
+that express various weak supervision sources (e.g., domain
+expertise) and learns an accurate model through weak super-
+vision on LFs. However, the typical LFs development cycles
+include multiple iterations of ideation, reﬁning, evaluation,
+and debugging, which can be very time-consuming and ex-
+pensive. In addition, it may be unrealistic to request a rea-
+sonable set of LFs from non-expert users. Even though re-
+cent work [77] proposed an approach to generate LFs using
+an initially labeled dataset automatically, the size of the la-
+beled datasets needed reaches a magnitude of hundreds.
+Data Discovery. Recent work considered correlated dataset
+search by capturing the relationships between datasets. Au-
+rum [30] leverages an enterprise knowledge graph (EKG)
+to retrieve relevant datasets for a user-provided discovery
+query. The recent work [63] proposes a QCR index-based
+approach to efﬁciently support correlated table search for
+generalized join-correlation queries. COCOA [29] acceler-
+ates the calculation of correlation coefﬁcients to select the
+most correlated features for user-deﬁned machine learning
+tasks efﬁciently. The goal of our work is different: we aim to
+ﬁnd examples of user interest in a dataset, rather than iden-
+tify the relationships between datasets/tables and obtain the
+most correlated ones. However, these methods can be used
+to discover correlated features in our future work.
+
+8 Conclusion and Future Work
+
+We presented new algorithms for interactive data explo-
+ration in the active learning framework, which leverage the
+subspatial convex and conjunctive properties of database
+queries to overcome the slow convergence problem and
+the label noise problem. Our main results include the fol-
+lowing: (1) In the absence of label noise, our algorithm
+signiﬁcantly outperforms active learning [13, 28], active
+search [33], and existing explore-by-example systems in-
+cluding Aide [23, 24] and LifeJoin [19], in accuracy and
+convergence speed. (2) For bounded instance- and label-
+dependent label noise, our algorithm substantially improves
+accuracy and convergence speed, while other alternative al-
+gorithms fail to handle noisy labels. (3) Our algorithm main-
+tains the per-iteration time within 1-3 seconds.
+
+In future work, we plan to extend query patterns to mul-
+tiple disjoint areas using exploration versus exploitation. To-
+ward this goal, a possible approach is to explore the en-
+tire dataset to identify possible subregions, partition the data
+space based on the detected subregions such that each par-
+tition contains only one subregion, and then apply our al-
+gorithm in each partition respectively. It is also interesting
+to tackle noisy labels intrinsically by building probabilis-
+tic convex hulls. Another direction for future work is to
+generalize our techniques from database exploration, where
+subspatial convexity and conjunctivity properties are likely
+to hold, to more general active learning problems, e.g., for
+
+text/image classiﬁcation, and understand their applicability
+and potential beneﬁts in those settings.
+
+References
+
+1. A. Abouzied, D. Angluin, et al. Learning and verifying quantiﬁed
+
+boolean queries by example. In PODS, pages 49–60, 2013.
+
+2. A. Abouzied, J. M. Hellerstein, and A. Silberschatz. Playful query
+speciﬁcation with dataplay. PVLDB, 5(12):1938–1941, 2012.
+3. A. Agarwal, R. Garg, and S. Chaudhury. Greedy search for active
+
+learning of OCR. In ICDAR, pages 837–841, 2013.
+
+4. C. C. Aggarwal, A. Hinneburg, and D. A. Keim. On the surprising
+behavior of distance metrics in high dimensional spaces. In ICDT,
+page 420–434, Berlin, Heidelberg, 2001. Springer.
+
+5. R. Akbani, S. Kwek, and N. Japkowicz. Applying support vector
+machines to imbalanced datasets. In ECML, pages 39–50, 2004.
+6. S. Amer-Yahia, et al. INODE: building an end-to-end data explo-
+ration system in practice. SIGMOD Rec., 50(4):23–29, 2021.
+7. S. Amer-Yahia, T. Milo, and B. Youngmann. Exploring ratings in
+subjective databases. In SIGMOD, pages 62–75. ACM, 2021.
+8. S. H. Bach, B. He, A. Ratner, and C. Ré. Learning the structure of
+generative models without labeled data. In ICML, 273–282, 2017.
+9. C. B. Barber, D. P. Dobkin, and H. Huhdanpaa. The quickhull
+
+algorithm for convex hulls. TOMS, 22(4):469–483, 1996.
+
+10. K. Bellare, S. Iyengar, A. Parameswaran, and V. Rastogi. Active
+sampling for entity matching with guarantees. ACM Transactions
+on Knowledge Discovery from Data, 7(3):12:1–12:24, Sept. 2013.
+11. A. Berthon, B. Han, G. Niu, T. Liu, and M. Sugiyama. Conﬁ-
+dence scores make instance-dependent label-noise learning possi-
+ble. arXiv preprint arXiv:2001.03772, 2020.
+
+12. A. Blum and T. Mitchell. Combining labeled and unlabeled data
+
+with co-training. In COLT, pages 92–100, 1998.
+
+13. A. Bordes, S. Ertekin, J. Weston, et al. Fast kernel classiﬁers with
+online and active learning. JMLR, 6:1579–1619, Dec. 2005.
+14. M. Bouguelia, S. Nowaczyk, K. C. Santosh, and A. Verikas.
+Agreeing to disagree: active learning with noisy labels without
+crowdsourcing. IJMLC, 9(8):1307–1319, 2018.
+
+15. C. E. Brodley and M. A. Friedl. Identifying mislabeled training
+
+data. J. Artif. Intell. Res., 11:131–167, 1999.
+
+16. C. Campbell, N. Cristianini, and A. J. Smola. Query learning with
+
+large margin classiﬁers. In ICML, pages 111–118, 2000.
+
+17. J. Cheng, T. Liu, et al. Learning with bounded instance and label-
+dependent label noise. In ICML, pages 1789–1799. PMLR, 2020.
+18. A. Cheung and A. Solar-Lezama. Computer-assisted query for-
+mulation. Foundations and Trends R(cid:13) in Programming Languages,
+3(1):1–94, June 2016.
+
+19. A. Cheung, A. Solar-Lezama, et al. Using program synthesis for
+social recommendations. In CIKM, 1732–1736. ACM, 2012.
+20. S. Cuendet, D. Hakkani-Tür, et al. Automatic labeling inconsis-
+tencies detection and correction for sentence unit segmentation in
+conversational speech. Int’l Workshop on MLMI, 144–155, 2007.
+21. D. Dash, J. Rao, N. Megiddo, et al. Dynamic faceted search for
+
+discovery-driven analysis. In CIKM, 3–12, 2008.
+
+22. Y. Diao, et al. AIDE: an automatic user navigation system for
+interactive data exploration. PVLDB, 8(12):1964–1967, 2015.
+23. K. Dimitriadou, O. Papaemmanouil, and Y. Diao. Explore-by-
+example: an automatic query steering framework for interactive
+data exploration. In SIGMOD, pages 517–528, 2014.
+
+24. K. Dimitriadou, O. Papaemmanouil, and Y. Diao. Aide: an active
+learning-based approach for interactive data exploration. TKDE,
+28(11):2842–2856, 2016.
+
+25. J. Du and Z. Cai. Modelling class noise with symmetric and asym-
+
+metric distributions. In AAAI, pages 2589–2595, 2015.
+
+26. O. B. El, T. Milo, and A. Somech. Automatically generating data
+exploration sessions using deep reinforcement learning. In SIG-
+MOD, pages 1527–1537. ACM, 2020.
+
+Efﬁcient and Robust Active Learning Methods for Interactive Database Exploration
+
+25
+
+27. R. El-Yaniv and Y. Wiener. Active learning via perfect selective
+
+58. X. Qin, et al. Interactively discovering and ranking desired tuples
+
+classiﬁcation. JMLR, 13(1):255–279, Feb. 2012.
+
+by data exploration. VLDB J., 31(4):753–777, 2022.
+
+28. S. Ertekin, J. Huang, et al. Learning on the border: Active learning
+in imbalanced data classiﬁcation. In CIKM, 127–136, 2007.
+29. M. Esmailoghli, J. Quiané-Ruiz, et al. COCOA: correlation
+coefﬁcient-aware data augmentation. In EDBT, 331–336, 2021.
+30. R. C. Fernandez, Z. Abedjan, et al. Aurum: A data discovery sys-
+
+tem. In ICDE, 1001–1012, 2018.
+
+31. B. Frénay and M. Verleysen. Classiﬁcation in the presence of
+label noise: A survey. IEEE Trans. Neural Networks Learn. Syst.,
+25(5):845–869, 2014.
+
+32. D. Gamberger, N. Lavraˇc, and S. Džeroski. Noise elimination in
+inductive concept learning: A case study in medical diagnosis. In
+International Workshop on ALT, pages 199–212. Springer, 1996.
+33. R. Garnett, et al. Bayesian optimal active search and surveying. In
+
+ICML, pages 843–850, 2012.
+
+34. B. Grünbaum. Convex polytopes. In Convex Polytopes. Springer-
+
+Verlag New York, 2 edition, 2003.
+
+35. S. Hanneke. Rates of convergence in active learning. The Annals
+
+of Statistics, 39(1):333–361, 02 2011.
+
+36. S. Hanneke. Theory of disagreement-based active learning. Foun-
+dations and Trends in Machine Learning, 7(2-3):131–309, 2014.
+37. S. Hanneke. Reﬁned error bounds for several learning algorithms.
+Journal of Machine Learning Research, 17(1):4667–4721, 2016.
+38. T. Hastie, R. Tibshirani, and J. Friedman. The Elements of Statis-
+
+tical Learning. Springer, 2001.
+
+39. E. Huang. Active Learning Methods for Interactive Exploration on
+
+Large Databases. Theses, Institut Polytechnique de Paris, 2021.
+
+40. E. Huang, L. Peng, et al. Optimization for active learning-based
+interactive database exploration. PVLDB, 12(1):71–84, 2018.
+41. P. G. Ipeirotis, et al. Repeated labeling using multiple noisy label-
+
+ers. Data Min. Knowl. Discov., 28(2):402–441, 2014.
+
+42. B. E. Jacobs and C. A. Walczak. A Generalized Query-by-
+Example Data Manipulation Language Based on Database Logic.
+IEEE Transactions on Software Engineering, 9(1):40–57, 1983.
+
+43. M. Kahng, et al. Interactive browsing and navigation in relational
+
+databases. PVLDB, 9(12):1017–1028, 2016.
+
+44. A. Kalinin, U. Cetintemel, and S. Zdonik. Interactive data explo-
+ration using semantic windows. In SIGMOD, 505–516, 2014.
+45. N. Kamat, P. Jayachandran, K. Tunga, and A. Nandi. Distributed
+and Interactive Cube Exploration. In ICDE, pages 472–483, 2014.
+46. S. R. Lay. Convex Sets and Their Applications. Dover Publica-
+
+tions, 2007.
+
+47. H. Li, C.-Y. Chan, and D. Maier. Query from examples: An
+iterative, data-driven approach to query construction. PVLDB,
+8(13):2158–2169, 2015.
+
+48. C. H. Lin, Mausam, and D. S. Weld. Re-active learning: Active
+learning with relabeling. In AAAI, pages 1845–1852, 2016.
+49. W. Liu, Y. Diao, and A. Liu. An analysis of query-agnostic
+sampling for interactive data exploration. Communications in
+Statistics-Theory and Methods, 47(16):3820–3837, 2018.
+
+50. Y. Ma, R. Garnett, and J. G. Schneider. Σ-optimality for active
+
+learning on gaussian random ﬁelds. In NIPS, 2751–2759, 2013.
+
+51. A. K. Menon, et al. Learning from binary labels with instance-
+dependent noise. Machine Learning, 107(8):1561–1595, 2018.
+52. A. L. B. Miranda, et al. Use of classiﬁcation algorithms in noise
+
+detection and elimination. In HAIS, 417–424, 2009.
+
+53. D. Mottin, et al. Exemplar queries: Give me an example of what
+
+you need. PVLDB, 7(5):365–376, 2014.
+
+54. R. Neamtu, et al.
+
+Interactive time series analytics powered by
+
+ONEX. In SIGMOD, pages 1595–1598, 2017.
+
+55. B. Omidvar-Tehrani, A. Personnaz, et al. Guided text-based item
+
+exploration. In CIKM, 3410–3420. ACM, 2022.
+
+56. G. Özsoyoglu and H. Wang. Example-Based Graphical Database
+
+Query Languages. Computer, 26(5):25–38, 1993.
+
+57. L. D. Palma. New Algorithms and Optimizations for Human-in-
+the-Loop Model Development. PhD thesis, Polytechnic Institute
+of Paris, France, 2021.
+
+59. A. Ratner, et al. Snorkel: Rapid training data creation with weak
+
+supervision. Proc. VLDB Endow., 11(3):269–282, 2017.
+
+60. A. J. Ratner, et al. Data programming: Creating large training sets,
+
+quickly. In NeurIPS, pages 3567–3575, 2016.
+
+61. S. B. Roy, et al. Minimum-effort driven dynamic faceted search in
+
+structured databases. In CIKM, pages 13–22, 2008.
+
+62. S. B. Roy, et al. Dynacet: Building dynamic faceted search sys-
+
+tems over databases. In ICDE, pages 1463–1466, 2009.
+
+63. A. S. R. Santos, et al. A sketch-based index for correlated dataset
+
+search. In ICDE, pages 2928–2941, 2022.
+
+64. C. Scott, et al. Classiﬁcation with asymmetric label noise: Consis-
+
+tency and maximal denoising. In COLT, 489–511, 2013.
+
+65. M. Seleznova, et al. Guided exploration of user groups. PVLDB,
+
+13(9):1469–1482, 2020.
+
+66. B. Settles. Active Learning. Synthesis Lectures on Artiﬁcial Intel-
+ligence & Machine Learning. Morgan Claypool Publishers, 2012.
+67. Y. Shen, et al. Discovering queries based on example tuples. In
+
+SIGMOD, pages 493–504, 2014.
+
+68. Sloan
+
+sky
+
+digital
+
+survey: DR8
+http://skyserver.sdss.org/dr8/en/help/doc
+s/realquery.asp.
+
+sample SQL queries.
+
+69. A. Szalay, et al. Designing and mining multi-terabyte astronomy
+archives: The Sloan digital sky survey. SIGMOD, 451–462, 2000.
+70. B. Tang, et al. Determining the impact regions of competing op-
+tions in preference space. In SIGMOD, pages 805–820, 2017.
+71. F. Tang. Bidirectional active learning with gold-instance-based
+
+human training. In IJCAI, pages 5989–5996, 2019.
+
+72. Y. Tang, et al. Svms modeling for highly imbalanced classiﬁca-
+tion. IEEE Trans. Syst. Man Cybern. Part B, 39(1):281–288, 2009.
+73. S. Tong and D. Koller. Support vector machine active learning
+with applications to text classiﬁcation. JMLR, 2:45–66, Mar. 2002.
+74. Q. T. Tran, C.-Y. Chan, and S. Parthasarathy. Query by output. In
+
+SIGMOD, pages 535–548, 2009.
+
+75. H. P. Vanchinathan, et al. Discovering valuable items from mas-
+
+sive data. In SIGKDD, pages 1195–1204, 2015.
+
+76. P. Varma, et al.
+
+Inferring generative model structure with static
+
+analysis. In NeurIPS, pages 240–250, 2017.
+
+77. P. Varma and C. Ré. Snuba: Automating weak supervision to label
+
+training data. Proc. VLDB Endow., 12(3):223–236, 2018.
+
+78. F. Ventura, et al. Expand your training limits! generating training
+data for ml-based data management. SIGMOD, 1865–1878, 2021.
+79. B. C. Wallace and I. J. Dahabreh. Class probability estimates are
+unreliable for imbalanced data (and how to ﬁx them). In ICDM,
+pages 695–704. IEEE Computer Society, 2012.
+
+80. G. Wu and E. Y. Chang. KBA: kernel boundary alignment con-
+sidering imbalanced data distribution. IEEE Trans. Knowl. Data
+Eng., 17(6):786–795, 2005.
+
+81. B. Youngmann, S. Amer-Yahia, and A. Personnaz. Guided explo-
+ration of data summaries. PVLDB, 15(9):1798–1807, 2022.
+82. J. Zhang, X. Wu, et al. Active learning with imbalanced multiple
+noisy labeling. IEEE Trans. Cybern., 45(5):1081–1093, 2015.
+83. X. Zhang, S. Wang, and X. Yun. Bidirectional active learning: A
+IEEE
+
+two-way exploration into unlabeled and labeled data set.
+Trans. Neural Networks Learn. Syst., 26(12):3034–3044, 2015.
+84. Z. Zhao, et al. Controlling false discoveries during interactive data
+
+exploration. In SIGMOD, pages 527–540, 2017.
+
+85. X. Zhu, et al. Budget constrained interactive search for multiple
+
+targets. PVLDB, 14(6):890–902, 2021.
+
+

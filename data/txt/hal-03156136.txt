@@ -1,0 +1,5177 @@
+Computing Difference Abstractions of Linear Equation
+Systems
+Emilie Allart, Joachim Niehren, Cristian Versari
+
+To cite this version:
+
+Emilie Allart, Joachim Niehren, Cristian Versari. Computing Difference Abstractions of Linear Equa-
+tion Systems. Theoretical Computer Science, 2021, ￿10.1016/j.tcs.2021.06.030￿. ￿hal-03156136v3￿
+
+HAL Id: hal-03156136
+
+https://hal.science/hal-03156136v3
+
+Submitted on 17 Jun 2021
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Computing Diﬀerence Abstractions of Linear Equation Systems
+
+Emilie Allarta,c, Joachim Niehrena,b, Cristian Versaria,c
+
+aBioComputing CRIStAL - Centre de Recherche en Informatique, Signal et Automatique de Lille (CRIStAL) -
+UMR 9189
+bLinking Dynamic Data CRIStAL - UMR 9189, Inria Lille - Nord Europe
+cUniversit´e de Lille
+
+Abstract
+
+Abstract interpretation was proposed for predicting changes of reaction networks with partial
+kinetic information in systems biology. This requires to compute the set of diﬀerence abstrac-
+tions of a system of linear equations under nonlinear constraints. We present the ﬁrst practical
+algorithm that can compute the diﬀerence abstractions of linear equation systems exactly. We
+also present a new heuristics based on minimal support consequences for overapproximating the
+set of diﬀerence abstractions. Our algorithms rely on elementary modes, ﬁrst-order deﬁnitions,
+and ﬁnite domain constraint programming. We implemented our algorithms and applied them
+to change prediction in systems biology. It turns out experimentally that the new heuristics is
+often exact in practice, while outperforming the exact algorithm.
+
+This journal article extends on a paper published at the 17th International Conference on
+
+Computational Methods in Systems Biology (CMSB’2019) [1].
+
+Keywords: abstract interpretation, constraint programming, linear programming, elementary
+modes, ﬁrst-order deﬁnitions, gene knockout prediction, reaction networks, systems biology,
+synthetic biology, metabolic networks, boolean abstraction.
+
+1. Introduction
+
+Motivated by analysis questions for steady states [2, 3] of chemical reaction networks [4, 5, 6, 7]
+we study the problem how to compute the set of diﬀerence abstractions of the solutions of a
+given linear equations system. The diﬀerence abstractions may be subject to constraints, which
+in the motivating application serve for expressing partial kinetic information on inhibitors and
+accelerators of the reactions of the network [8].
+Problem. We consider systems of homogeneous linear equations with variables for positive real
+numbers in R+ including 0, possibly existentially quantiﬁed, such as for instance E(X, Y ) in (1):
+
+∃U.∃V.
+
+(cid:18) −1
+
+0
+0 −1
+
+1 −1
+1 −1
+
+(cid:19)
+
+
+
+
+
+
+
+
+
+
+
+
+
+X
+Y
+U
+V
+
+.= 0
+
+(1)
+
+Given that the matrix is triangular and the variables U, V are existentially quantiﬁed, we can
+read oﬀ the set of solutions of E(X, Y ) easily. A variable assignment is a solution over R+ if and
+
+Email address: emilie.allart@univ-lille.fr (Emilie Allart)
+
+Preprint submitted to Elsevier
+
+June 17, 2021
+
+Figure 1: The diﬀerence abstraction to ∆3.
+
+Figure 2: The diﬀerence abstraction to ∆6.
+
+only if it maps X and Y to the same number:
+
+solR+(E(X, Y )) = {α : {X, Y } → R+ | α(X) = α(Y )}
+
+An instance of the question studied in this article is, what happens to the value of Y if we
+increase the value of X, while jumping from one solution of E(X, Y ) to another? Clearly, the
+value of Y must be increased as well, since X and Y must have the same value in all solutions.
+More generally, we want to compute all possible relationships of any two solutions of E(X, Y )
+over the positive reals.
+
+For making this problem more precise, we consider a partition of the space R2
+
++ of concrete
+diﬀerences into the set of abstract diﬀerences ∆3 = {(cid:97), (cid:96), ∼∼∼}, which is illustrated in Figure 1.
+The abstract diﬀerence (cid:97) stands for an increase, ∼∼∼ for a no-change, and (cid:96) for a decrease. Given
+a ﬁnite set of variables V , we deﬁne the diﬀerence abstraction of two variable assignments to the
+positive reals α, α(cid:48) : V → R+ as the assignment β : V → ∆3 such that for all x ∈ V :
+
+β(x) =
+
+
+
+
+
+
+(cid:97) if α(x) < α(cid:48)(x)
+∼∼∼ if α(x) = α(cid:48)(x)
+(cid:96) if α(x) > α(cid:48)(x)
+
+Our objective then is to compute for any given linear equation system the set of diﬀerence
+abstractions of any two positive real solutions. In our example system E(X, Y ), the expected
+In general, the computation can be done by
+answer is {β : {X, Y } → ∆3 | β(X) = β(Y )}.
+a generate and test algorithm based on Lemma 1 below, which reduces the test to a linear
+program. This algorithm, however, is too slow in practice, to be applicable to change prediction
+tasks in systems biology. This is why the previous approach by John et al. [8, 9, 10] computed
+an overapproximation only, by interpreting the equation system abstractly over the canonical
+relational structure with ﬁnite domain ∆3 and signature {+, ∗, 0, 1}, and solving it by ﬁnite
+domain constraint programming [11, 12]. The question we study in the present article is whether
+there exists a better algorithm useful for change prediction in systems biology, that can compute
+the diﬀerence abstraction exactly while avoiding any overapproximation.
+
+Furthermore, two variants of the above problem must be supported for practical application
+to systems biology. First, we need to be able to treat a reﬁned diﬀerence abstraction with 6 values
+∆6 = {↑, ↓, ∼, ⇑, ⇓, ≈} illustrated in Figure 2. Note that (cid:97) = ↑ (cid:93) ⇑, (cid:96) = ↓ (cid:93) ⇓ and ∼∼∼ = ∼ (cid:93) ≈,
+depending on whether the change started or ended with 0 or not. Second, for capturing partial
+kinetic information up to similarity, we must be able to impose additional constraints on the
+
+2
+
+abstract solutions we are interested in. These will be given by some ﬁrst-order formulas that are
+to be interpreted over the abstract domain.
+Contributions. First, we generalize the diﬀerence abstractions h∆3 : R2
++ →
+∆6 algebraically to Σ-abstractions, which are homomorphisms between the Σ-structures. The
+set of concrete diﬀerences R2
++ becomes a Σ-algebra with signature Σ = {+, ∗, 0; 1} equipped
+with pointwise addition and multiplication. The sets of abstract diﬀerences ∆3 and ∆6 become
+Σ-structures that are naturally induced by the ﬁnite partitioning of R2
++ in Figures 1 and 2.
+Second, we can show for any two Σ-structure S and ∆ (such as R2
++ and ∆3 above) that John’s
+overapproximation theorem [8, 10] can be lifted to general Σ-abstractions h : S → ∆. It states
+that for any positive ﬁrst-order Σ-formula φ, its h-abstraction can be computed by abstract
+interpretation of ∆:
+
++ → ∆3 and h∆6 : R2
+
+h ◦ solS(φ) ⊆ sol∆(φ)
+
+This is since any h-abstraction of an S-solution of φ is also a ∆-solution of φ. If furthermore ∆
+is ﬁnite, then we can compute sol∆(φ) by ﬁnite domain constraint programming. This approach
+was shown to be applicable in the motivating application from systems biology [9].
+
++(φ) and respectively h∆6 ◦ solR2
+
+The objective of this article, however, is to compute exactly the set of diﬀerence abstractions
+for both cases h∆3 ◦ solR2
++(φ), where φ is a system of linear
+equations possibly with existential quantiﬁers (which clearly can be seen as Σ-formulas). The
+motivation is to overcome the main problematics of John’s overapproximation, which can already
+be illustrated at the example of E(X, Y ). When interpreted over the Σ-structure ∆3, the system
+E(X, Y ) admits the abstract solution β = [X/(cid:97), Y /(cid:96)], since (cid:97) +∆3 (cid:96) may be related to any
+value in ∆3 nondeterministically. However, β is not the diﬀerence abstraction of any concrete
+solution, given that E(X, Y ) implies X .= Y . In other words, X .= Y is a logical consequence of
+E(X, Y ) over R+, but not over ∆3, so precisely the information that we seek in our example is
+lost by abstract interpretation relying on John’s overapproximation.
+
+In order to avoid any overapproximation, one may want to enrich the linear equation system
+before solving it over the ﬁnite abstract structure, by adding all its logical consequences over
+R+, which correspond to all the linear combinations of the rows of the matrix (its row space).
+However this leads to an inﬁnite number of consequences, so one would be forced to consider
+them modulo equivalence up to abstract interpretation. Since the abstract domains considered
+are ﬁnite, the number of equivalence classes would be ﬁnite too. However, ﬁnding a representative
+for each equivalence class corresponds to solving a linear programming problem, and the number
+of consequences to be added is exponential in the dimension of the matrix. Therefore, even if this
+approach leads to a ﬁnite representation of the set of logical consequences of the linear equation
+system, it is still unfeasible in practice for complexity reasons. A less ineﬃcient approach but
+still infeasible in practice can be obtained by the generate and test algorithm metionned earlier.
+The idea is to test the satisﬁability of each abstract solution candidate individually by linear
+programming based on Lemma 1 below.
+
+As a third contribution we propose a new heuristics based on minimal support consequences
+to improve John’s overapproximation algorithm. Given a system of linear equations, the idea is to
+add all linear consequences that have a minimal number of variables and normalized coeﬃcients,
+before computing the abstract solutions. We show how to compute this ﬁnite set of linear
+consequences based on elementary modes [13, 14] and orthogonal complements.
+
+As a fourth and most important contribution, we present algorithms for computing the dif-
+ference abstractions for linear equation system exactly. They can deal with ∆3 and ∆6 and
+with the addition of constraints on the abstract diﬀerences. The exact abstraction problems are
+reduced to ﬁnite domain constraint problems, that can be solved in practice with existing ﬁnite
+domain constraint solvers. The reductions are based on properties of ﬁrst-order deﬁnitions that
+permit to reason with concrete diﬀerences in a ﬁrst-order logic with pairs. Furthermore, we rely
+
+3
+
+on a recent algorithm [15] for the exact rewriting of linear equation systems with respect to the
+boolean abstraction hB : R+ → B, which maps 0 to 0 and all other positive real numbers to 1.
+The linear equation system φ obtained by exact rewriting for the boolean abstraction satisﬁes
+hB ◦ solR+(φ) = solB(φ) and is again based on the computation of elementary modes.
+
+Fifth, we implemented the minimal support heuristics and our exact abstraction algorithm
+for ∆6, and applied them to the prediction of leucine overproduction, a benchmark task for
+change prediction in systems biology [8, 9]. It turns out that the minimal support heuristics
+indeed computes the diﬀerence abstraction to ∆6 exactly for this benchmark, while it does not
+do so in general. The main advantage of this heuristic is that it outperforms the exact algorithm
+dramatically in computation time: only 5 minutes are needed for the knockout prediction rather
+than 5 hours with the always exact algorithm.
+
+This article extends on a conference paper at CMSB’2019 [1]. This was an extended abstract
+without any proofs, where most of the technical diﬃculties could not be exposed. In particular,
+we could not explain how to decompose the diﬀerence abstractions for ∆3 and ∆6 into the
+boolean abstraction based on functions deﬁned in ﬁrst-order logic. Also we could not describe in
+any suﬃcient detail how the addition of kinetic constraint can be dealt with. So the additional
+material mainly consists in detailed sections on how to compute diﬀerence abstractions to ∆3
+and ∆6 exactly, also in the presence of kinetic constraints. The case of ∆6 is considerably
+more diﬃcult to be treated, since it requires more advanced kinds of ﬁrst-order deﬁnitions.
+Furthermore, the presentation of the minimal support heuristics has been extended and equipped
+with a correctness argument.
+
+The present article contains full proofs, of which some simpler inductions are delegated to
+
+the appendix.
+Outline. In Sections 2 and 3 we discuss further related work and illustrate the application to
+change prediction in systems biology. After some preliminaries (Section 4), we recall in Section
+5 the notion of Σ-abstractions and in Section 6 the Σ-structures of abstract diﬀerences ∆3 and
+∆6. The standard ﬁrst-order logic is recalled in Section 7 jointly with a less standard variant
+that we call the tuple logic. Diﬀerence abstractions and John’s overapproximation theorem are
+recalled in Section 8. Section 9 recalls a previous result on exact boolean abstraction.
+
+In Section 10 we use the existing result on exact boolean abstraction to provide a new char-
+acterization of diﬀerence abstraction to ∆3 and ∆6 for linear equation systems. This characteri-
+zation yields an algorithm for computing diﬀerence abstractions of linear equation systems, that
+we extended in Section 11 so that it can take additional diﬀerence constraints into account. An
+overapproximation heuristics with minimal support is then presented in Section 12. And ﬁnally
+in Section 13, an implementation and experimentation section compares these two approaches.
+
+2. Related Work
+
+We ﬁrst discuss the generate and test algorithm for solving our problem based on existing
+
+results for linear equations systems and linear programming.
+
+Given an abstract diﬀerence d ∈ ∆3 and two variables y, z we deﬁne a formula saying that
+
+the abstraction of the concrete diﬀerence denoted by (y, z) is equal to d:
+
+abs d(y, z) =
+
+
+
+
+
+
+y < z
+x .= y
+z < y
+
+if d = (cid:97)
+if d = ∼∼∼
+if d = (cid:96)
+
+Let x = x1 . . . xm, y = y1 . . . ym and z = z1 . . . zm be sequences of distinct variables. Given
+an assignment of the variable in x to abstract diﬀerences β : {x} → ∆3 we deﬁne a formula
+
+4
+
+abs β(y, z) as follows:
+
+abs β(y, z) =
+
+m
+(cid:94)
+
+abs β(xi)(yi, zi)
+
+i=1
+The assignment β then is the diﬀerence abstraction of some pair of solutions in solR+(E(x)) if
+and only if the following formula is satisﬁable over R+.
+
+E(y) ∧ E(z) ∧ abs β(y, z)
+
+Lemma 1. The satisﬁability over R+ of systems of homogeneous linear equation and strict linear
+inequations without constants can be decided in polynomial time.
+
+Proof A strict linear inequation without constants x < y is equivalent over R+ to ∃z. x +
+z .= y ∧ z (cid:54) .= 0. Therefore, it is suﬃcient to consider the satisﬁability over R+ of systems of
+homogeneous linear equations E(x) and nonzero equation x(cid:48) (cid:54) .= 0. The solution set solR+(E(x))
+is a cone (while for more general linear programs it could be more general polytopes). The
+elements of a cone can be multiplied by positive reals without leaving the cone. Therefore,
+the nonzero equation x(cid:48) (cid:54) .= 0 can be rewritten to x(cid:48) ≥ 1 without aﬀecting the satisﬁability of
+the formula. This rewriting eliminates the strict inequations without constants at the cost of
+Instead of
+introducing nonstrict inequations with constants. The result is a linear program.
+interpretation over R+ we can add inequations x ≥ 0 ∧ x(cid:48) ≥ 0 and change to an interpretation
+over R. It well known that the satisﬁability of linear programs over R can be tested in polynomial
+(cid:3)
+time [16].
+
+So by a naive enumerate and test algorithm, we can compute in the case of ∆3 the set of
+all diﬀerence abstractions for sol∆3(E(x)) in time O(3mpoly(|E(x)|)). For ∆6, the analogous
+argument yields O(6mpoly(|E(x)|)).
+
+Flux balance analysis [2, 3] can be used to predict the eﬀect of inﬂux changes of metabolic
+networks at steady state. Such predictions can be based on reasoning with linear equation
+systems that describe the rates of the reactions in a steady state of the metabolic network,
+by using Gaussian elimination, elementary ﬂux modes (EFMs) [17], or optimisation methods
+[18, 19]. Most importantly, precise quantitative kinetic information is not required in contrast
+to classical mathematical analysis methods for reaction networks. In fact, even when the kinetic
+functions associated to chemical reactions are known, the values of the rate constants are most
+often missing, since it is diﬃcult to measure them experimentally in the precise state of the
+regulation of the metabolic network at the time point of interest.
+
+Recently, abstract interpretation [20, 21, 22] has been exploited to design novel algorithms
+[8, 10] that can use partial kinetic information beneﬁcially for predicting changes of metabolic
+networks. They can in particular exploit the knowledge about the enzymes and inhibitors.
+Similarly to ﬂux balance analysis, the linear equations describing steady states are used, but in
+addition to them, kinetic constraints are inferred from the partial kinetic information of inhibitors
+and enzymes.
+
+3. Application to Change Prediction in Systems Biology
+
+Reaction networks [4, 5, 6, 7] are widely used in systems biology to model the dynamics of
+biological systems, so that their behaviour can be simulated or analysed. We are interested in
+change predictions for reaction networks with partial kinetic information [8, 9, 10]. The steady
+state semantics of such networks yields a system of linear equations, and a set of nonlinear
+constraints about the diﬀerences abstraction in ∆6 of solutions of the linear system.
+
+5
+
+in-A
+
+A
+
+4
+
+6
+
+E
+
+2
+
+C
+
+3
+
+5
+
+D
+
+1
+
+B
+
+out-C
+
+out-B
+
+Linear equation Nonlinear const-
+system over R+:
+
+raints over ∆6:
+
+.= v1 + v2
+
+vin-A
+v1
+v2
+v4
+v3
+
+.= vout-B
+.= vout-C
+.= v6
+.= v5
+
+.= A ∗ D
+v1
+.= A ∗ E
+v2
+v3 ∈ {⇓, ∼}
+v4 ∈ {⇓, ∼}
+.= D
+v5
+.= E
+v6
+vout-B
+vout-C
+
+.= B
+.= C
+
+Figure 3: An example of reaction network with partial
+kinetic information.
+
+Figure 4: Steady state semantics.
+
+A simple example of reaction network with partial formal kinetic information is given in
+Figure 3; the linear equation system and the nonlinear constraints on its diﬀerence abstraction
+are given in Figure 4. The networks has ﬁve species A, B, C, D, E and nine reactions 1, . . ., 6,
+in-A, out-B , out-C . As with the graphical notation for Petri nets, the species are nodes drawn as
+circles and the reactions nodes drawn as boxes. The colors of the species indicate their biological
+role, but do not contribute to the semantics. Metabolites are drawn in yellow and enzymes in
+brown circles. Reaction in-A is an inﬂow of the metabolite A, while reactions out-B and out-C
+are outﬂows of the metabolites B and C respectively. The inﬂows are controlled externally, while
+the outﬂows are controlled internally in the system. Reactions 3 and 4 correspond respectively
+to the gene expression of the enzymes D and E. These reactions may be knocked out, modeling a
+gene knockout. The knockouts are changes that are controlled externally similarly to the change
+of inﬂow in-A. None of the other reactions can be changed externally. Reaction 6 degrades
+the enzyme E and reaction 5 degrades the enzyme D. Reaction 1 transforms its metabolic
+substrate A, into its metabolic product B, while being activated and accelerated by the enzyme
+D. Symmetrically, the reaction 2 transforms its metabolic substrate A, into its metabolic product
+C, while being activated and accelerated by the enzyme E.
+
+In a steady state of the reaction network, the concentrations of all its species become stable.
+For each species we have a linear equation, that states that the rate of its production is equal to
+the rate of its consumption. For species A, for instance, this is the following equation over R+,
+since species A is produced by inﬂow in-A at rate vin-A, while it is consumed by reaction 1 at
+rate v1 and reaction 2 at rate v2:
+
+vin-A
+
+.= v1 + v2
+
+The network has partial kinetic information: we know the enzymes (and inhibitors) of the reac-
+tions, but not necessarily their precise kinetics. For instance, the precise kinetics of reaction 1 is
+unknown. But since D is an enzyme of reaction 1 it follows that the rate v1 is zero if the con-
+centration of species D is zero, and that v1 increases if the concentration of species D increases.
+Furthermore, since A is a substrate of reaction 1 it follows that v1 is zero if the concentration of
+species A is zero, and that v1 increases if the concentration of species A increases. This means
+that the following nonlinear constraint holds after diﬀerence abstraction to ∆6:
+
+.= A ∗ D
+
+v1
+
+For reactions 3 and 4 which may be knocked out, we have the following constraints about their
+
+6
+
+↑
+
+in-A
+
+↑
+
+A
+
+↑
+
+↑
+
+1
+
+B
+
+∼
+
+∼
+
+E
+
+4
+
+6
+∼
+
+↑
+
+↑
+
+2
+
+C
+
+↑
+
+out-C
+
+out-B
+
+D
+∼
+
+↑
+
+∼
+
+in-A
+
+∼
+
+A
+
+⇓
+
+⇓
+
+2
+
+C
+
+↑
+
+↑
+
+1
+
+B
+
+∼
+
+∼
+
+3
+
+5
+
+⇓
+
+⇓
+
+E
+
+4
+
+6
+⇓
+
+⇓
+
+out-C
+
+out-B
+
+∼
+
+∼
+
+3
+
+5
+
+D
+∼
+
+↑
+
+(a) Increase inﬂow of A.
+
+(b) Knock down gene expression 4 of E.
+
+Figure 5: Two changes leading to an increase of the outﬂow of B.
+
+diﬀerence abstraction to ∆6:
+
+v3 ∈ {⇓, ∼}
+v4 ∈ {⇓, ∼}
+
+So the rates of these reactions may either decrease to zero or remain unchanged but diﬀerent
+from zero.
+
+A typical question for change prediction is which changes can be applied to the example
+.=↑. The set of potential changes is
+network in order to increase the outﬂow of B, that is vout-B
+to increase or decrease the inﬂow of A, i.e., vin-A ∈ {↑, ↓}, or to shut down reactions 3 or 4, that
+is v3 =⇓ or v4 =⇓. The two single-change predictions that answer this question are:
+
+1. increase the inﬂow of A, that is vin-A
+2. knock down reaction 4, i.e., v4
+
+.=↑, or
+
+.=⇓ and thus of the gene expression of enzyme E.
+
+These two predictions correspond to the two abstract solutions over ∆6 in Figure 5. The ﬁrst
+solution in Figure 5a motivates the prediction of an increase of in-A and the second solution in
+Figure 5b the prediction of a knock down of reaction 4, the gene expression producing enzyme
+E.
+
+Both abstract solutions are diﬀerence abstractions over ∆6 of real positive solutions of the
+linear equation system in Figure 4, so that these diﬀerence abstractions do also satisfy the
+nonlinear constraints over ∆6 given there. We can ﬁnd both predictions by applying John’s
+overapproximation algorithm [8, 10], that is by computing the ∆6 solutions of linear equation
+system and the nonlinear constraints. This can be done in practice by using ﬁnite domain
+constraint programming.
+
+Qualitative reasoning can also be performed manually for this simple example. For increasing
+out-B be must increase the concentration of B and thus the rate of reaction 1. For this, we must
+either increase the concentration of enzyme D which is impossible by the available changes, or
+increase the concentration of A. The latter requires to either increase the inﬂow of A, leading to
+the ﬁrst abstract solution in Figure 5a, or else decrease the rate of reaction 2. This is possible by
+decreasing the concentration of E by knocking out the reaction 4, the gene expression producing
+this enzyme. This yields the second abstract solution in Figure 5b.
+
+John’s algorithm does not lead to any overapproximation for this example. The main reason
+is that the graph of the reaction network in Figure 3 is acyclic, even in the absence of partial
+
+7
+
+in-A
+
+A
+
+1
+
+2
+
+B
+
+out-B
+
+v1
+v1
+
+.= vin-A + v2
+.= vout-B + v2
+
+Figure 6: A reaction network with a simple loop.
+
+Figure 7: Linear equation system of the reaction net-
+work in Figure 6 with the simple loop.
+
+in-A
+
+A
+
+1
+
+2
+
+B
+
+out-B
+
+Figure 8: Elementary ﬂux modes of the simple loop network.
+
+kinetic information. The situation changes for reaction networks with cycles. The simplest
+counterexample is the simple loop in Figure 6. The linear equation system of this network is
+exactly the system from the introduction, where John’s algorithm predicts unjustiﬁed changes.
+This network has two species A and B and four reactions: an inﬂow of A, an outﬂow of
+B, a reaction 1 transforming A to B and a inverse reaction 2. So each molecule A that ﬂows
+into the system may loop for a while, changing to B and back, before eventually outﬂowing as
+B. In a steady state, the rate of the inﬂow of A is equal to the rate of the outﬂow of B. The
+argument can be understood more easily, when considering the elementary ﬂux modes [14, 23] of
+this reaction network, which are shown graphically in Figure 8 in red and respectively in green.
+An elementary ﬂux mode is a linear combination of reactions that can become steady. The
+simple loop network has two elementary ﬂux modes, corresponding to the linear combination of
+reactions 1vin-A + 1v1 + 1vout-B using red edges and the linear combination of reactions 1v1 + 1v2
+with green edges respectively.
+
+While some molecules may loop with the green edges, transforming A’s to B’s and back, all
+inﬂowing A’s must follow the red edges and thus eventually outﬂow as B. From an algebraic
+perspective, the elementary ﬂux modes of a reaction network correspond exactly to the elemen-
+tary modes of its stoichiometry matrix [13]. An elementary mode of a matrix A is a positive
+integer solution of Ax .= 0 where x a sequence of fresh variables. Furthermore, we require that
+the solution has minimal support, meaning that a minimal subset of the variables is assigned
+to a nonzero value, and that the solution is normalized (so it cannot be devided by any natural
+number strictetly greater than 1). Note that the stoichiometry matrix of the simple loop network
+was given within the linear equation system (1) at the beginning of the introduction. Here, the
+vector of variables x corresponds to the order on reactions adopted by the stoichiometry matrix,
+so it can be chosen as (vin-A, vout-B , v1, v2). Its elementary modes are (1, 1, 1, 0) and (0, 0, 1, 1).
+The diﬀerence abstraction of any two concrete solutions of the linear equations of the simple
+.= vout-B . The corresponding abstract solution over ∆6 satisfying
+loop network must satisfy vin-A
+.=↑ is illustrated in Figure 9. However, the alternative variable assignment
+vin-A
+to ∆6 in Figure 10 is also a solution of all linear equations when interpreted over ∆6, while not
+
+.=↑ and vout-B
+
+8
+
+↑
+
+1
+
+↑
+
+1
+
+↑
+
+in-A
+
+↑
+
+A
+
+↑
+
+B
+
+out-B
+
+↑
+
+↓
+
+in-A
+
+↑
+
+A
+
+↑
+
+B
+
+↑
+
+out-B
+
+↑
+
+2
+
+↑
+
+2
+
+Figure 9: A justiﬁed abstract solution.
+
+Figure 10: An unjustiﬁed abstract solution.
+
+being justiﬁed by any pair of concrete solutions over R+.
+
+The intuitive reason for this failure is that John’s overapproximation algorithm performs only
+local reasoning, considering one linear equation at a time, i.e., one species of the reaction network.
+In this manner, it cannot see, that X .= Y is a logical consequence of the linear equation system
+of the network over R+, while it is not a consequence over ∆6. So what we are searching is way
+to reason globally with all species of a reaction network at a time. For this we have to take into
+account all linear combinations of the equations of the system.
+
+4. Preliminaries
+
+We present standard notion of sets, partial and total functions, relations, Σ-algebras and
+
+Σ-structures.
+
+4.1. Set and Functions
+
+We start with the usual notation for sets. Let N be the set of natural numbers and R+ the
+set of positive real numbers, both including 0. For any set A and n ∈ N, the set of n-tuples
+of elements in A is denoted by An. The i-th projection function on n-tuples of elements in A,
+where 1 ≤ i ≤ n is the function πi : An → A such that πi(a1, . . . , an) = ai for all a1, . . . , an ∈ A.
+If A is ﬁnite the number of elements of A is denoted by |A|.
+
+We continue with notion for total and partial functions. A partial function is a relation
+f ⊆ A × B such that for all a ∈ A there exists at most one b ∈ B such that (a, b) ∈ f . In this
+case, we write f (a) = b. The domain of the partial function is dom(f ) = {a | ∃b ∈ B.f (a) = b}
+and its range ran(f ) = {b | ∃a ∈ A. f (a) = b}. A total function f : A → B is a partial function
+f ⊆ A × B such that dom(f ) = A. Given a total function f : A → B and a partial function
+g : B × C such that ran(f ) ⊆ dom(g) we deﬁne the function composition as the total function
+g ◦ f : A → C such that (g ◦ f )(x) = g(f (x)) for all x ∈ A. Furthermore if R ⊆ {f : A → B}
+then we deﬁne:
+
+g ◦ R = {g ◦ f : A → C | f ∈ R, ran(f ) ⊆ dom(g)}
+
+Note that g ◦ f is deﬁned only if ran(f ) ⊆ dom(g), so functions f ∈ R violating this condition
+will be ignored all over in the composition g ◦ R. This is since we want all the functions in g ◦ R
+to be total even if g is partial.
+
+4.2. Σ-Algebras and Σ-Structures
+
+We next recall the notions of Σ-algebras, Σ-structures, and homomorphism between Σ-
+structures. These classical notions of universal algebra will be fundamental to our algebraic
+generalization of diﬀerence abstractions to the notion of Σ-abstractions in Deﬁnition 8.
+
+9
+
+Let Σ = ∪n≥0F (n) (cid:93) C be a ranked signature. The elements of f ∈ F (n) are called the n-ary
+
+function symbols of Σ and the elements in c ∈ C its constants.
+
+Deﬁnition 2. A Σ-algebra S = (dom(S), .S) consists of a set dom(S) and an interpretation .S
+such that cS ∈ dom(S) for all c ∈ C, and f S : dom(S)n → dom(S) for all f ∈ F (n) and n ∈ N.
+
+We next reinterpret n-ary function symbols of Σ as n+1-ary relation symbols, so that we can
+
+reuse the same signature Σ for deﬁning Σ-structures.
+
+Deﬁnition 3. A Σ-structure ∆ = (dom(∆), .∆) consists of a set dom(∆) and an interpretation
+.∆ such that c∆ ∈ dom(∆) for all c ∈ C and f ∆ ⊆ dom(∆)n+1 for all f ∈ F (n) and n ∈ N.
+
+In this manner, any Σ-algebra is also a Σ-structure since any n-ary function is an n + 1-ary
+relation. Note also that symbols in F (0) are interpreted as monadic relations in Σ-structures,
+i.e., as subsets of the domain, in contrast to constants in C that are interpreted as elements of
+the domain.
+
+It is sometimes useful to add the elements of the domain of a Σ-structure A to the constants.
+
+Therefore, we deﬁne the extended signature:
+
+Σ[dom(A)] = Σ (cid:93) dom(A)
+
+The Σ-structure A can be lifted to a Σ[dom(A)]-structure by interpreting the new constants by
+themselves, i.e., aA = a for all a ∈ dom(A), and all symbols in Σ as before.
+
+Deﬁnition 4. A homomorphism between two Σ-structures S and ∆ is a function h : dom(S) →
+dom(∆) such that for c ∈ C, n ∈ N, f ∈ F (n), and s1, . . . , sn+1 ∈ dom(S):
+
+1. h(cS) = c∆, and
+2. if (s1, . . . , sn+1) ∈ f S then (h(s1), . . . , h(sn+1)) ∈ f ∆.
+
+For Σ-algebras, the second condition is equivalent to h(f S(s1, . . . , sn)) = f ∆(h(s1), . . . , h(sn)).
+For any Σ-structure S we can reinterpret n + 1 ary relations f S as n-ary set valued functions.
+
+In order to do so, we deﬁne for any sequence s1, . . . , sn ∈ dom(S) a subset of values:
+
+f ∆(s1, . . . , sn) = {s ∈ dom(S) | (s1, . . . , sn, s) ∈ f ∆}
+
+With this set-valued reinterpretation, the second condition of homomophisms can be rewritten
+equivalently to:
+
+h(f S(s1, . . . , sn)) ⊆ f ∆(h(s1), . . . , h(sn))
+
+5. Σ-Abstractions
+
+We introduce the concept of Σ-abstractions for general signatures. Before doing so, we start
+with an example for a Σ-abstraction, which is the boolean abstraction of positive real numbers.
+It has the signature of arithmetics Σ = F (2)
+pos-arith (cid:93) Cpos-arith with two binary function symbols
+and two constants such that:
+
+F (2)
+pos-arith = {+, ∗}
+Cpos-arith = {0, 1}
+
+For all Σ-algebras considered, the operators +S and ∗S are associative and commutative, with
+neutral element 0S and 1S respectively.
+
+10
+
+Example 5. The set of positive real numbers R+ can be turned into a Σ-algebra with domain
+R+, by interpreting + as the addition of positive real numbers +R+, ∗ as the multiplication of
+positive real numbers ∗R+, and interpreting the constants by themselves 0R+ = 0 and 1R+ = 1.
+We will deliberatly confuse the set R+ with the Σ-algebra (R+, .R+) whose domain dom(R+) is
+equal to the set of positive reals R+.
+
+Example 6. The set of Booleans B = {0, 1} ⊆ R+ can be turned into a Σ-algebra with domain B
+by interpreting +B = ∨B as disjunction, ∗B = ∧B as conjunction, and the constants by themselves
+0B = 0 and 1B = 1. We will deliberatly confuse the set B with the Σ-algebra (B, .B) whose domain
+dom(B) is the set of booleans B.
+
+We can abstract positive real numbers into booleans by deﬁning a function hB : R+ → B such
+
+that hB(0) = 0 and hB(r) = 1 for all r ∈ R+ \ {0}.
+
+Lemma 7. The function hB : R+ → B is a homomorphism between Σ-algebras where Σ =
+F (2)
+
+pos-arith (cid:93) Cpos-arith.
+
+Proof For all r, r(cid:48) ∈ R+ we have:
+
+hB(r +R+ r(cid:48)) = 1 ⇔ r +R+ r(cid:48) (cid:54)= 0 ⇔ r (cid:54)= 0 ∨ r(cid:48) (cid:54)= 0 ⇔ hB(r) = 1 ∨ hB(r(cid:48)) = 1
+hB(r ∗R+ r(cid:48)) = 1 ⇔ r ∗R+ r(cid:48) (cid:54)= 0 ⇔ r (cid:54)= 0 ∧ r(cid:48) (cid:54)= 0 ⇔ hB(r) = 1 ∧ hB(r(cid:48)) = 1
+
+Hence hB(r +R+ r(cid:48)) = hB(r) +B hB(r(cid:48)) and hB(r ∗R+ r(cid:48)) = hB(r) ∗B hB(r(cid:48)). Finally, for both
+constants c ∈ C we have that hB(cR+) = hB(c) = c = cB.
+
+The boolean abstraction hB is the prime example of what we will call a Σ-abstraction. The
+
+following deﬁnition applies for general signatures.
+
+Deﬁnition 8. A Σ-abstraction is a homomorphism between Σ-structures S and ∆ such that
+dom(∆) ⊆ dom(S).
+
+We assume that dom(∆) ⊆ dom(S) since this will permit us to reason about Σ-abstractions
+by talking at the same time about concrete values in dom(S) and abstract values in dom(∆) by
+ﬁrst-order formulas interpreted over the Σ-structure S.
+
+6. Abstracting Concrete Diﬀerences
+
+Concrete diﬀerences are pairs of positive in R2
+into abstract diﬀerences. For this, we consider R2
+ﬁnite Σ-structures ∆3 and ∆6.
+
++. We show how to abstract concrete diﬀerences
++ as a Σ-algebra that we then abstract into
+
+6.1. The Tuple Σ-Algebra Sn
+
+For any Σ-algebra S where Σ = F (2) ∪ C and natural number n ∈ N we deﬁne the Σ-algebra
+n ∈ dom(S) and (cid:12) ∈ F (2):
+
+) such that for all s1, . . . , sn, s(cid:48)
+
+of n-tuples Sn = (dom(S)n, .Sn
+
+1, . . . , s(cid:48)
+
+(s1, . . . , sn) (cid:12)Sn
+
+(s(cid:48)
+
+1, . . . , s(cid:48)
+
+n) = (s1 (cid:12)S s(cid:48)
+
+1, . . . , sn (cid:12)S s(cid:48)
+
+n)
+
+The constants c ∈ C are interpreted as cSn
+of +S, then 0Sn
+∗S then 1Sn
+of +Sn
+
+is also the neutral element of ∗Sn
+
+and ∗Sn
+
+is the also the neutral element of +Sn
+
+inherit from +S and ∗S respectively.
+
+= (cS, . . . , cS). Note that if 0S is the neutral element
+. In analogy, if 1S is the neutral element of
+. Furthermore, the associativity and commutativity
+
+11
+
+Note that we deliberately confuse the set R2
+
+Given this, it follows from the above, that the algebra R2
+and the neutral element (1, 1) for ∗R2
+
++) with our notation.
++ has the neutral element (0, 0) for +R2
++, and that these operations are associative and commutative.
+For any function h : A → B and n ∈ N we deﬁne the function hn : An → Bn such that
+
++ with the Σ-algebra (R2
+
++
+
++, .R2
+
+hn(a1, . . . , an) = (h(a1), . . . , h(an)) for all a1, . . . , an ∈ A.
+
+Lemma 9. If h is a Σ-abstraction from S to ∆ then hn is a Σ-abstraction from Sn to ∆n.
+
+Proof Let (cid:12) ∈ F (2) and t = (s1, . . . , sn), t(cid:48) = (s(cid:48)
+
+1, . . . , s(cid:48)
+
+n) ∈ dom(S)n. Then we have:
+
+hn(t (cid:12)Sn
+
+t(cid:48)) = (h(s1 (cid:12)S s(cid:48)
+
+1), . . . , h(sn (cid:12)S s(cid:48)
+
+n))
+
+= (h(s1) (cid:12)∆ h(s(cid:48)
+= (h(s1), . . . , h(sn)) (cid:12)∆n
+= hn(t) (cid:12)∆n
+
+hn(t(cid:48))
+
+1), . . . , h(sn) (cid:12)∆ h(s(cid:48)
+(h(s(cid:48)
+
+n))
+1), . . . , h(s(cid:48)
+
+n)) deﬁnition of ∆n
+deﬁnition of hn
+
+deﬁnitions of hn and Sn
+since h is homomorphism
+
+Finally, for both constants c ∈ C we have:
+
+hn(cSn
+
+) = hn(cS, . . . , cS)
+
+deﬁnition Sn
+= (h(cS), . . . , h(cS)) deﬁnition hn
+= (c∆, . . . , c∆)
+= c∆n
+
+since h is homomorphism
+deﬁnition of ∆n
+
+6.2. Abstractions of Concrete Diﬀerences
+
+Given that R+ is a Σ-algebra with signature Σ = F (2)
+
+pos-arith ∪ Cpos-arith, we have that R2
+
++ is
+
+also a Σ-algebra with the same signature.
+
+We now show how to abstract the concrete diﬀerences in R2
++ to abstract diﬀerence. A generic
+manner to do so is to start with some some partition h : R2
++ → ∆ into a ﬁnite set ∆. The
+elements of this set will be called the abstract diﬀerences. The function h says how to abstract
+concrete to abstract diﬀerences. Since it is a partition, it splits R2
++ into ﬁnitely many equivalence
+classes.
+
+For any partition h : R2
+
++ → ∆, there is a unique manner to deﬁne an interpretation .∆ such
+that (∆, .∆) becomes Σ-structure with domain ∆ and h a Σ-abstraction. For any constant c ∈ C
+we have to deﬁne c∆ = h(cR2
++) and for any function symbol (cid:12) ∈ F (2) we have to deﬁne a ternary
+relation (cid:12)∆, which seen as set-valued function (cid:12)∆ : ∆ × ∆ → 2∆ must satisfy for all abstract
+values d1, d2 ∈ ∆:
+
+d1 (cid:12)∆ d2 = {h(r1 (cid:12)R+ r2, r(cid:48)
+
+1 (cid:12)R+ r(cid:48)
+
+2) | h(r1, r(cid:48)
+
+1) = d1, h(r2, r(cid:48)
+
+2) = d2}
+
+Lemma 10. h : R2
+
++ → ∆ is a Σ-abstraction where Σ = F (2)
+
+pos-arith ∪ Cpos-arith.
+
+Proof For any p1 = (r1, r(cid:48)
+follows for all (cid:12) ∈ F (2)
+pos-arith:
+
+1), p2 = (r2, r(cid:48)
+
+2) ∈ R2
+
++ the second condition for homomorphisms
+
+h(p1 (cid:12)R2
+
++ p2) = h(r1 (cid:12)R+ r2, r(cid:48)
+
+1 (cid:12)R+ r(cid:48)
+
+2) ∈ h(p1) (cid:12)∆ h(p2)
+
+Finally, for all constants c ∈ Cpos-arith we have by deﬁnition that h(cR2
+
++) = c∆.
+
+12
+
+d +∆3 d(cid:48)
+{(cid:97)}
+
+d d(cid:48)
+(cid:97) (cid:97)
+(cid:97) (cid:96) {(cid:97), ∼∼∼, (cid:96)} {(cid:97), ∼∼∼, (cid:96)}
+{(cid:97), ∼∼∼}
+(cid:97)
+
+d ∗∆3 d(cid:48)
+{(cid:97)}
+
+{(cid:97)}
+
+∼∼∼
+
+d d(cid:48) d +∆3 d(cid:48) d ∗∆3 d(cid:48)
+{∼∼∼}
+∼∼∼ ∼∼∼ {∼∼∼}
+{(cid:96)}
+{(cid:96)}
+(cid:96) (cid:96)
+{(cid:96), ∼∼∼}
+∼∼∼
+{(cid:96)}
+(cid:96)
+
+c c∆3
+0 ∼∼∼
+1 ∼∼∼
+
+Figure 11: Interpretation of Σ-structure ∆3.
+
+6.3. The Σ-Structure ∆3
+
+We continue with the signature of arithmethics Σ = F (2)
+
+pos-arith(cid:93)Cpos-arith Our next objective is
+to recall the abstraction of concrete diﬀerences from the Σ-algebra R+ into the ﬁnite Σ-structure
+with domain ∆3 = {(cid:97), (cid:96), ∼∼∼} that is well-known from qualitative reasoning (see e.g. [24]). For
+this we start with the function h∆3 (r, r(cid:48)) ∈ ∆3 such that for any r, r(cid:48) ∈ R+:
+
+h∆3(r, r(cid:48)) =
+
+
+
+
+
+
+(cid:97) = (0, 1)
+(cid:96) = (1, 0)
+∼∼∼ = (0, 0)
+
+if r < r(cid:48)
+if r > r(cid:48)
+if r = r(cid:48)
+
+We deﬁne the ternary relation +∆3 as the relation that is symmetric in the ﬁrst two arguments
+and has the set-valued reinterpretation d +∆3 d(cid:48) ⊆ ∆3 in Figure 11 for all d, d(cid:48) ∈ ∆3. The
+deﬁnition of ∗∆3 is given in analogy in the same ﬁgure. The interpretation of the constants are
+1∆3 = 0∆3 = ∼∼∼. By Lemma 10, h∆3 : R2
+
++ → ∆3 is a Σ-abstraction.
+
+6.4. The Σ-Structure ∆6
+
+We next recall the abstraction of concrete diﬀerences to the ﬁnite Σ-structure with domain
+∆6 = {↑, ↓, ∼, ⇑, ⇓, ≈} that was introduced for gene knockout prediction in [8]. For deﬁning this
++ → ∆6 such that for any two numbers r, r(cid:48) ∈ R+:
+Σ-structure, we start with the function h∆6 : R2
+
+h∆6(r, r(cid:48)) =
+
+
+
+
+
+
+↑= (1, 2)
+↓= (2, 1)
+∼= (1, 1)
+
+if 0 (cid:54)= r < r(cid:48)
+if r > r(cid:48) (cid:54)= 0
+if r = r(cid:48) (cid:54)= 0
+
+h∆6(r, r(cid:48)) =
+
+
+
+
+
+
+⇑= (0, 2)
+⇓= (2, 0)
+≈= (0, 0)
+
+if 0 = r < r(cid:48)
+if r > r(cid:48) = 0
+if r = r(cid:48) = 0
+
+We deﬁne the ternary relation +∆6 as the relation that is symmetric in the ﬁrst two arguments
+and has the set-valued reinterpretation d +∆6 d(cid:48) ⊆ ∆6 in Figure 12 for all d, d(cid:48) ∈ ∆6. The
+relation ∗∆6 is deﬁned in the same style in Figure 12. The constants are interpreted as 0∆6 =≈
+and 1∆6 =∼. By Lemma 10, h∆6 : R2
+
++ → ∆6 is a Σ-abstraction.
+
+7. First-Order Logic
+
+We ﬁrst recall the standard ﬁrst-order logic and then show how to enhance it with n-tuples
+
+without increasing the expressiveness.
+
+7.1. Standard First-Order Logic
+
+We ﬁx a set of variables V (for instance V = N). The variables in V will be ranged over by x
+
+and y. The signature Σ = F (2) (cid:93) C is arbitrary here.
+
+The set of ﬁrst-order expressions e ∈ EΣ and ﬁrst-order formulas φ ∈ FΣ are constructed
+according to the abstract syntax in Figure 13 from the symbols in the signature Σ, the variables
+.=. As shortcuts, we deﬁne the formula
+in V, the ﬁrst-order connectives, and the equality symbol
+
+13
+
+{↑}
+{↑, ∼, ↓}
+{↑}
+{↑}
+
+d d(cid:48) d +∆6 d(cid:48)
+↑ ↑
+↑ ↓
+↑ ∼
+↑ ⇑
+↑ ⇓ {↑, ↓, ∼}
+↑ ≈
+
+{↑}
+
+d d(cid:48) d ∗∆6 d(cid:48)
+↑ ↑
+↑ ↓
+↑ ∼
+↑ ⇑
+↑ ⇓
+↑ ≈
+
+{↑}
+{↑, ∼, ↓}
+{↑}
+{⇑}
+{⇓}
+{≈}
+
+d d(cid:48) d +∆6 d(cid:48)
+{↑, ∼, ↓}
+⇑ ↓
+{↑}
+⇑ ∼
+⇑ ⇑
+{⇑}
+⇑ ⇓ {↑, ∼, ↓}
+⇑ ≈
+⇓ ⇓
+
+{⇑}
+{⇓}
+
+d d(cid:48) d ∗∆6 d(cid:48)
+⇑ ↑
+⇑ ∼
+⇑ ⇑
+⇑ ⇓
+⇑ ≈
+⇓ ⇓
+
+{⇑}
+{⇑}
+{⇑}
+{≈}
+{≈}
+{⇓}
+
+d d(cid:48) d +∆6 d(cid:48)
+∼ ∼
+∼ ≈
+∼ ↓
+∼ ⇓
+↓ ↓
+↓ ⇓
+
+{∼}
+{∼}
+{↓}
+{↓}
+{↓}
+{↓}
+
+d d(cid:48) d ∗∆6 d(cid:48)
+∼ ∼
+∼ ≈
+∼ ↓
+∼ ⇓
+↓ ↓
+↓ ⇓
+
+{∼}
+{≈}
+{↓}
+{⇓}
+{↓}
+{⇓}
+
+Figure 12: Interpretation of Σ-structure ∆6.
+
+d d(cid:48) d +∆6 d(cid:48)
+≈ ≈
+≈ ↓
+≈ ⇓
+
+{≈}
+{↓}
+{⇓}
+
+c c∆6
+0 ≈
+1 ∼
+
+d d(cid:48) d ∗∆6 d(cid:48)
+≈ ≈
+≈ ↓
+≈ ⇓
+
+{≈}
+{⇓}
+{⇓}
+
+true =def 1 .= 1 and for any sequence of formulas φ1, . . . , φn we deﬁne ∧n
+which is equal to true if n = 0. We deﬁne formulas e
+
+.
+(cid:54)=0 by ¬e .= 0.
+
+i=1φi as φ1 ∧ . . . ∧ φn
+
+The semantics of expressions in Figure 13 is deﬁned such that the following formula becomes
+
+true in the structure ∆3 taken with the signature extended with extra constants Σ[dom(∆3)]:
+
+(cid:97) + (cid:96)
+∧ (cid:97) + (cid:96)
+∧ (cid:97) + (cid:96)
+
+.= (cid:97)
+.= (cid:96)
+.= ∼∼∼
+
+The ﬁrst reason is that relations are reinterpreted as set-valued functions by the semantics of
+ﬁrst order logic. In paricular, we have (cid:97) +∆3 (cid:96) = ∆3. The second reason is that the meaning of
+the equality operator .= of the logic is nondetermistic equality, that is the nondisjointness. Also
+note that the following formula is unsatisﬁable:
+
+∃x. (x .= (cid:97) ∧ x .= (cid:96))
+
+This is since for any variable assignment the expression x must evaluated to a singleton, which
+cannot contain both (cid:97) and (cid:96). Another way to see this is that ∃x. (x .= (cid:97) ∧ x .= (cid:96)) is equivalent
+to (cid:96)
+
+.= (cid:97) which evaluates to false.
+
+More generally, the semantics of a formula φ ∈ FΣ is a truth value, which depends on the Σ-
+structures S of interpretation and on a variable assignment α : V → dom(S). Any Σ-expressions
+e ∈ EΣ denotes a subset of values in dom(S), which will be singleton in case that S was a Σ-
+algebra. The semantic of equations e .= e(cid:48) is, as expected when interpreted over Σ-algebras S: the
+unique values of e and e(cid:48) in S must be equal. However, we will also need to interpret equations
+e .= e(cid:48) over Σ-structures. This is why, any expression e denotes a subset of the Σ-structure, not
+just a single element. We can then interpret equality as nondisjointness, i.e., e .= e(cid:48) holds in a
+Σ-structure S if e and e(cid:48) are interpreted as nondisjoint subsets of dom(S).
+
+A variable assignment into a Σ-structure S is a partial function α : V → dom(S) for some
+subset V ⊆ V. Let S be a Σ-structure and α a variable assignment to S. Any Σ-expression e
+with fv (e) ⊆ V can be interpreted as an element of dom(S) and any Σ-formula φ ∈ FΣ with
+
+14
+
+First-order expressions and formulas:
+
+e ∈ EΣ
+φ ∈ FΣ
+
+::= x | c | e (cid:12) e(cid:48)
+::= e .= e | ∃x.φ | φ ∧ φ | ¬φ where x ∈ V
+
+where (cid:12) ∈ F (2), c ∈ C
+
+Set-valued interpretation of expressions:
+structures and α : V → dom(S) where V contains all free variables.
+
+α,S ⊆ dom(S), where S is a Σ-
+(cid:75)
+
+e
+
+(cid:74)
+
+c
+(cid:74)
+
+α,S = {cS}
+(cid:75)
+
+x
+(cid:74)
+(cid:74)
+Interpretation of formulas as truth values
+
+α,S = {α(x)}
+
+(cid:75)
+
+e (cid:12) e(cid:48)
+
+α,S = ∪{s (cid:12)S s(cid:48) | s ∈
+
+α,S, s(cid:48) ∈
+
+e
+
+(cid:74)
+
+(cid:75)
+
+e(cid:48)
+
+α,S}
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+α,S ∈ B:
+(cid:75)
+
+φ
+
+(cid:74)
+α,S (cid:54)= ∅
+
+e .= e(cid:48)
+(cid:74)
+
+α,S =
+(cid:75)
+
+(cid:26) 1 if
+
+e
+(cid:74)
+0 else
+
+(cid:75)
+
+α,S ∩
+
+e(cid:48)
+
+(cid:74)
+
+(cid:75)
+
+¬φ
+(cid:74)
+
+(cid:75)
+
+α,S = ¬B(
+
+φ
+
+α,S)
+(cid:75)
+
+(cid:74)
+
+φ ∧ φ(cid:48)
+
+(cid:75)
+
+α,S =
+
+α,S =
+
+∃x.φ
+
+(cid:75)
+
+φ
+
+(cid:75)
+1
+
+(cid:74)
+
+
+
+
+
+0
+
+α,S ∧B
+
+α,S
+
+φ(cid:48)
+
+(cid:74)
+
+(cid:75)
+
+if exists s ∈ dom(S).
+φ
+(cid:74)
+(cid:75)
+else
+
+α[x/s],S = 1
+
+(cid:74)
+
+(cid:74)
+
+Figure 13: Syntax and semantics of expressions and formulas of ﬁrst-order logic.
+
+o ∈ On
+ψ ∈ F n
+
+.
+πi(x) | c | o (cid:12) o
+
+Σ ::=
+Σ ::= o .= o(cid:48) | ∃x.ψ | ψ ∧ ψ | ¬ψ where x ∈ V
+
+where 1 ≤ i ≤ n, c ∈ C and (cid:12) ∈ F (2).
+
+Figure 14: Expressions and formulas of the ﬁrst-order logic with n-tuples.
+
+fv (φ) ⊆ V as a Boolean value. The set of solutions of a formula φ ∈ FΣ over a Σ-structure S
+with respect to some set of variables V ⊇ fv (φ) is deﬁned by:
+
+(cid:75)
+If V = fv (φ) then we omit the index V , i.e., solS(φ) = solS
+V (φ).
+
+(cid:74)
+
+solS
+
+V (φ)={α : V → dom(S) |
+
+φ
+
+α,S = 1}
+
+7.2. First-Order Tuple Logic
+
+We next extend the ﬁrst-order logic to n-tuples where the parameter n is ﬁxed. In applica-
+tions, we will use the case n = 2, that is the ﬁrst-order logic with pairs. Back and forth compilers
+from ﬁrst-order logic with and without tuples will be convenient later on.
+
+The syntax of ﬁrst-order logic with n-tuples is given in Figure 14. The expressions o ∈ On
+Σ
+are like the expression e ∈ EΣ except that variables x are now replaced by projection expressions
+.
+πi(x) where 1 ≤ i ≤ n. The reason is that any variable does now denote an n-tuple of values,
+rather than a single value (while the interpretation of constants and function symbols remain
+unchanged). The only change in the semantics is that variables assignment β do now map to
+.
+S,β = {πi(β(x))}. The set of solutions of a
+πi(x)
+n-tuples of values of the domain, and that
+(cid:75)
+formula ψ ∈ F n
+
+Σ over a Σ-structure S is deﬁned as follows:
+
+(cid:74)
+
+n-solS(ψ)={β : fv (ψ) → dom(S)n |
+
+β,S = 1}
+
+ψ
+
+(cid:74)
+
+(cid:75)
+
+We next show how to express any ﬁrst-order formulas in FΣ, interpreted over a tuple algebra
+Sn, by some formulas in F n
+Σ, interpreted over S. In a ﬁrst step, we convert ﬁrst-order expression
+in e ∈ EΣ – that we will interpret over the Σ-algebra Sn – to n projected expressions Πi(e) ∈ On
+Σ
+where 1 ≤ i ≤ n. For all operators (cid:12) ∈ F (2) and constants c ∈ C we deﬁne:
+
+Πi(e (cid:12) e(cid:48)) =def Πi(e) (cid:12) Πi(e(cid:48))
+
+Πi(x) =def
+
+.
+πi(x)
+
+Πi(c) =def
+
+c
+
+15
+
+In the second step, we convert any formula φ ∈ FΣ without tuples – that will be interpreted
+
+in the tuple algebra Sn – to some formula (cid:104)φ(cid:105)n ∈ F n
+
+Σ with tuples.
+
+(cid:104)e .= e(cid:48)(cid:105)n =def ∧n
+(cid:104)¬φ(cid:105)n =def ¬(cid:104)φ(cid:105)n
+
+i=1Πi(e) .= Πi(e(cid:48))
+
+(cid:104)φ ∧ φ(cid:48)(cid:105)n =def (cid:104)φ(cid:105)n ∧ (cid:104)φ(cid:48)(cid:105)n
+(cid:104)∃x.φ(cid:105)n =def ∃x.(cid:104)φ(cid:105)n
+
+Lemma 11. For any e ∈ EΣ, Σ-algebra S, n ≥ 1, and β : V → dom(S)n with V(φ) ⊆ V ⊆ V:
+
+β,Sn
+
+e
+
+=
+
+(Π1(e), . . . , Πn(e))
+
+β,S
+
+(cid:75)
+(cid:74)
+Proof sketch. By induction on the structure of expressions in EΣ.
+Proposition 12. For any φ ∈ FΣ, Σ-algebra S, and n ≥ 1: solSn
+
+(cid:74)
+
+(cid:75)
+
+(φ) = n-solS((cid:104)φ(cid:105)n).
+
+Proof sketch. By induction on the structure of formulas in FΣ. We only show the base case of
+Σ-equations. So let φ is a Σ-equation of the form e .= e(cid:48) where e, e(cid:48) ∈ EΣ and β a variable
+assignment β : V → dom(S)n such that V(φ) ⊆ V ⊆ V. Then:
+
+solSn
+Lemma 11
+
+β,Sn
+
+(e .= e(cid:48)) = {β |
+i=1 Πi(e) .= Πi(e(cid:48))
+= {β |
+β,S = 1}
+= {β |
+= n-solS((cid:104)e .= e(cid:48)(cid:105)n)
+(cid:75)
+
+e .= e(cid:48)
+(cid:86)n
+(cid:104)e .= e(cid:48)(cid:105)n
+
+= 1}
+
+(cid:74)
+(cid:74)
+(cid:74)
+
+(cid:75)
+
+β,S = 1}
+
+(cid:75)
+
+The inductive cases for the other formulas are straightforward.
+
+7.3. Polynomial Equations
+
+In the case of the arithmetic signature Σ = F (2)
+
+pos-arith (cid:93) Cpos-arith, the arithmetic equations
+e .= e(cid:48) ∈ FΣ provided by the formulas of standard FO-logic subsume the usual polynomial
+equations with natural coeﬃcients. We will use the following notation for writing polynomials.
+For any natural n and expression e, e1, . . . , en ∈ EΣ, we deﬁne the expression (cid:81)n
+i=1 ei = e1∗. . .∗en,
+which is equal to 1 if n = 0 and (cid:80)n
+i=1 ei = e1 + . . . + en which is equal to 0 if n = 0. Furthermore,
+let en = (cid:81)n
+i=1 e. The analogous deﬁnitions no and on can be made for object
+expression in o ∈ On
+Σ of the FO-tuple logic instead of expression in e ∈ EΣ of the standard
+ﬁrst-order logic.
+Example 13. Let φ ∈ FΣ be the polynomial equation 3x + 4y5 .= 0 of the standard FO-logic.
+Proposition 12 shows that φ has the same solutions over R2
+Σ of the
+π1(y)5 .=
+tuple FO-logic over R+. The latter is the system of polynomial equations 3
+0 ∧ 3
+
++ than the formula (cid:104)φ(cid:105)2 ∈ F 2
+.
+
+i=1 e and ne =def
+
+.
+π1(x) + 4
+
+π2(y)5 .= 0.
+
+.
+π2(x) + 4
+
+(cid:80)n
+
+.
+
+Concrete diﬀerences can be described by systems of polynomial equations of the standard FO-
+logic but interpreted over R2
++. As shown by Proposition 12, such systems can thus be mapped
+to systems of polynomial equations in the FO-pair logic, but now interpreted over R+. This is
+done by copying each equation over R2
++ into two equations of R+, as illustrated by the above
+example.
+
+.= 0 ∧ 3
+
+.
+π2(x) + 4
+
+Our next objective is to introduce fresh variables for projections in order to rewrite equation
+systems from the FO-pair logic into equation systems from the standard FO-logic. For instance,
+.
+π1(x) +
+when given two fresh variable generators ν1 and ν2, the system of polynomial equations 3
+.
+.= 0 in the FO-pair logic can be mapped to the systems of
+π1(y)5
+4
+polynomial equations 3ν1(x) + 4ν1(y)5 .= 0 ∧ 3ν2(x) + 4ν2(y)5 .= 0 in the standard FO-logic. The
+.
+πi(y) respectively.
+4 fresh variables such as νi(x) and νi(y) correspond to the projections
+With respect to the standard FO-logic, we can thus rewrite any system of polynomial equation
+2 to a system of polynomial equation over R+, so that the solutions correspond. The
+over R+
+unique role of the FO-pair logic is to serve us as an intermediate language for this purpose.
+
+.
+πi(x) and
+
+.
+π2(y)5
+
+16
+
+7.4. From ﬁrst-order tuple logic to Standard First-order Logic
+
+More generally, we wish to rewrite any FO-tuple formula ψ ∈ F n
+
+Σ into a standard FO formula
+˜ν(ψ) ∈ FΣ by introducing fresh variables for projections. For this, we ﬁx n generators of fresh
+variables ν1, . . ., νn : V → V. We then map any expression o ∈ On
+Σ with projections to some
+expressions ˜ν(o) ∈ EΣ without new variables:
+
+.
+πi(x)) =def νi(x),
+
+˜ν(
+
+˜ν(c) =def c,
+
+˜ν(o (cid:12) o(cid:48)) =def ˜ν(o) (cid:12) ˜ν(o(cid:48)).
+
+And ﬁnally, we map any formula ψ ∈ F n
+variables:
+
+Σ with projections to some formula ˜ν(ψ) ∈ FΣ with fresh
+
+˜ν(o = o(cid:48)) =def ˜ν(o) = ˜ν(o(cid:48))
+˜ν(ψ ∧ ψ(cid:48)) =def ˜ν(ψ) ∧ ˜ν(ψ(cid:48))
+
+˜ν(¬ψ) =def ¬˜ν(ψ)
+˜ν(∃x.ψ) =def ∃ν1(x) . . . ∃νn(x). ˜ν(ψ)
+
+Given an variable assignment β : V → dom(S)n with V ⊆ V, we deﬁne ν(β) : (cid:93)n
+
+i=1νi(V ) →
+
+dom(S) such that for all x ∈ V :
+
+ν(β)(νi(x)) = πi(β(x)))
+
+Function ν is a bijection with range {α | α : (cid:93)n
+satisﬁes ν-1(α)(x) = (α(ν1(x)), . . . , α(νn(x)) for all α in the range and all x ∈ V .
+
+i=1νi(V ) → dom(S)}. The inverse of this function
+
+Lemma 14. For any expression o ∈ On
+V(o) ⊆ V ⊆ V we have
+
+S,ν(β) =
+
+Σ and variable assignment β : V → dom(S)n with
+β,S.
+
+o
+
+˜ν(o)
+(cid:75)
+
+(cid:74)
+
+(cid:74)
+
+(cid:75)
+
+Proof sketch. By induction on the structure of Σ-expressions o ∈ On
+Σ.
+
+Proposition 15. For any ψ ∈ F n
+
+Σ, Σ-structure S, and n ≥ 1: n-solS(ψ) = ν-1(solS(˜ν(ψ))).
+
+Proof We ﬁrst prove the following claim is by induction on the structure of Σ-formulas in F n
+Σ,
+where the base case follows from Lemma 14.
+
+Claim 16. For any variable assignment β : V → dom(S)n with V ⊆ V and formula ψ ∈ F n
+have
+
+S,ν(β) =
+
+ψ
+
+Σ we
+
+˜ν(ψ)
+(cid:75)
+
+(cid:74)
+
+β,S.
+(cid:75)
+
+(cid:74)
+
+The proof of the claim is straightforward by induction on the structure of Σ-formulas in F n
+Σ.
+
+Finally, the claim implies the proposition as follows:
+
+β ∈ n-solS(ψ) ⇔ ν(β) ∈ n-solS(˜ν(ψ))
+
+previous claim
+
+⇔ ν-1(ν(β)) ∈ ν-1(n-solS(˜ν(ψ)))
+⇔ β ∈ ν-1(n-solS(˜ν(ψ)))
+
+7.5. Commutation Property
+
+As above, we consider n fresh variable generators ν1, . . . , νn and the operator ν-1 that maps
+object assignments of freshly generates variables to n-tuple assignments. We next show a com-
+mutation property of the operator ν-1 with Σ-abstractions.
+
+Lemma 17. For any Σ-abstraction h : S → ∆ and assignment of fresh variables α : (cid:93)n
+dom(S):
+
+i=1νi(V ) →
+
+ν-1(h ◦ α) = hn ◦ ν-1(α)
+
+17
+
+Proof For any variable x ∈ V we have:
+
+ν-1(h ◦ α)(x) = (h(α(ν1(x))), . . . , h(α(νn(x))))
+
+= hn((α(ν1(x))), . . . , α(νn(x)))
+= hn(ν-1(α)(x))
+= (hn ◦ ν-1(α))(x)
+
+Proposition 18. For any ﬁnite set V ⊆ V, subset R of variable assignments of type (cid:93)n
+dom(S), and Σ-abstraction h : S → ∆:
+
+i=1νi(V ) →
+
+ν-1(h ◦ R) = hn ◦ ν-1(R)
+
+Proof By Lemma 17: ν-1(h ◦ R) = {ν-1(h(α)) | α ∈ R} = {hn(ν-1(α)) | α ∈ R} = hn ◦ ν-1(R).
+
+8. Diﬀerence Abstraction
+
+of Σ-abstractions to concrete diﬀerence in the Σ-algebra R2
+
+We next recast the notions of diﬀerence abstractions from [8, 10, 9] by applying our notion
+pos-arith (cid:93) Cpos-arith.
++ of concrete diﬀerences, and
+V ⊆ V a subset of variables. For any two variable assignments α, α(cid:48) : V → dom(S), we deﬁne
+an assignment of variables to pairs of elements in the domain of the structure
+
+More generally, let S be a Σ-algebra, such as the algebra R2
+
++, where Σ = F (2)
+
+diﬀ(α, α(cid:48)) : V → dom(S)2
+
+that we call the diﬀerences of α and α(cid:48), such that for all variables x ∈ V , diﬀ(α, α(cid:48))(x) =
+(α(x), α(cid:48)(x)). For any subset R of variable assignments of type V → dom(S) we deﬁne the set
+of diﬀerences of assignments in R by:
+
+diﬀ(R) = {diﬀ(α, α(cid:48)) | α, α(cid:48) ∈ R}
+
+Deﬁnition 19. For any Σ-abstraction h : S2 → ∆ and formula φ ∈ FΣ we deﬁne the diﬀerence
+abstraction of the S-solution set of φ by: solS(φ)∆ = h ◦ diﬀ(solS(φ))).
+
+The original deﬁnition of sol(φ)∆6 in [8] was similar, but did not make the respective roles
++ → ∆6 explicit. By having done so, we can now state that the diﬀerence
+
+of diﬀ and h∆6 : R2
+abstraction of the R+-solution sets of a formula is the R2
+
++-solution set of the same formula.
+
+Lemma 20. For any formula φ ∈ FΣ and Σ-algebra S: diﬀ(solS(φ)) = solS2
+Proof For all α : V → dom(S), α(cid:48)
+: V → dom(S), α, α(cid:48) ∈ solS(φ) we can construct the
+variable assignment α(cid:48)(cid:48) : V → dom(S)2 with diﬀ(α, α(cid:48)) = (α(x), α(cid:48)(x)) = α(cid:48)(cid:48)(x). So we have
+diﬀ(solS(φ)) ⊆ solS2
+
+(φ).
+
+(φ).
+
+Conversely, for all variable assigment α(cid:48)(cid:48)
+
+ate two variable assignments α : V → dom(S), α(cid:48)
+V, α(x) = π1(α(cid:48)(cid:48)(x)) ∧ α(cid:48)(x) = π2(α(cid:48)(cid:48)(x)). So we have solS2
+nally diﬀ(solS(φ)) = solS2
+
+(φ).
+
+: V → dom(S)2, α(cid:48)(cid:48) ∈ solS2
+
+(φ) we can gener-
+: V → dom(S) ∈ solS(φ) with ∀x ∈
+(φ) ⊆ diﬀ(solS(φ)), and thus ﬁ-
+
+As an immediate consequence, we have for any Σ-abstraction h : S2 → ∆ that sol(φ)∆ =
+(φ). Our next objective is to show that we can overapproximate the set sol(φ)∆ by
+
+h ◦ solS2
+sol∆(φ) (Corollary 24).
+
+18
+
+Lemma 21. Let h : S(cid:48) → ∆ be a Σ-abstraction and α : V → dom(S(cid:48)) and a variable assignment.
+e
+For any expression e ∈ EΣ with V (e) ⊆ V : h(
+(cid:75)
+
+S(cid:48),α) ⊆
+
+∆,h◦α.
+
+e
+(cid:74)
+
+(cid:74)
+
+(cid:75)
+
+Proof sketch. Straightforward by induction on the structure of expressions e ∈ EΣ.
+
+Proposition 22. Let h : S(cid:48) → ∆ be a Σ-abstraction and α : V → dom(S(cid:48)) and a variable
+assignment. For any positive formula φ ∈ FΣ with V (φ) ⊆ V :
+
+S(cid:48),α ≤
+
+∆,h◦α.
+
+φ
+
+φ
+
+(cid:74)
+
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+
+Proof The proof is by induction on the structure positive Σ-formulas φ. If φ is some equation
+e .= e(cid:48) then it holds by Lemma 21 that: h(
+S(cid:48),α) ⊆
+∆,h◦α. Hence:
+(cid:74)
+(cid:75)
+S(cid:48),α ∩
+e(cid:48)
+e
+(cid:74)
+(cid:75)
+(cid:75)
+S(cid:48),α) ∩ h(
+⇔ h(
+e
+(cid:74)
+(cid:75)
+(cid:75)
+e(cid:48)
+∆,h◦α ∩
+⇒
+e
+e .= e(cid:48)
+(cid:74)
+(cid:75)
+∆,h◦α = 1
+⇔
+
+(cid:74)
+S(cid:48),α (cid:54)= ∅
+e(cid:48)
+(cid:74)
+∆,h◦α (cid:54)= ∅
+
+∆,h◦α and h(
+(cid:74)
+
+S(cid:48),α = 1 ⇔
+
+S(cid:48),α) (cid:54)= ∅
+
+Lemma 21
+
+S(cid:48),α) ⊆
+
+e .= e(cid:48)
+
+e
+(cid:75)
+
+e(cid:48)
+
+e(cid:48)
+
+e
+
+(cid:75)
+
+(cid:75)
+
+(cid:74)
+
+(cid:74)
+
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+
+(cid:75)
+
+(cid:74)
+(cid:74)
+∆,h◦α as required. We next consider the case where φ is
+(cid:75)
+
+This shows that
+(cid:74)
+a conjunction of the form φ(cid:48) ∧ φ(cid:48)(cid:48).
+
+(cid:75)
+
+S(cid:48),α ≤
+
+e .= e(cid:48)
+
+e .= e(cid:48)
+(cid:74)
+
+φ(cid:48) ∧ φ(cid:48)(cid:48)
+(cid:74)
+
+(cid:75)
+
+S(cid:48),α =
+≤
+=
+
+(cid:74)
+(cid:74)
+(cid:74)
+
+S(cid:48),α
+
+φ(cid:48)
+(cid:75)
+φ(cid:48)
+(cid:75)
+φ(cid:48) ∧ φ(cid:48)(cid:48)
+
+S(cid:48),α ∧B
+φ(cid:48)(cid:48)
+∆,h◦α ∧B
+(cid:74)
+(cid:74)
+∆,h◦α
+
+(cid:75)
+φ(cid:48)(cid:48)
+
+(cid:75)
+
+∆,h◦α
+
+induction hypothesis
+
+(cid:75)
+
+The last case is where φ is an existentially quantiﬁed formula of the form ∃x.φ(cid:48).
+
+∃x.φ(cid:48)
+
+(cid:74)
+
+(cid:75)
+
+S(cid:48),α = 1 ⇔ (exists s ∈ dom(S(cid:48)).
+⇒ (exists s ∈ dom(S(cid:48)).
+⇔
+
+∆,h◦α = 1
+
+∃x.φ(cid:48)
+
+φ(cid:48)
+(cid:74)
+φ(cid:48)
+(cid:74)
+
+) = 1
+
+α[x/s],S(cid:48)
+(cid:75)
+h◦α[x/s],∆) = 1
+(cid:75)
+
+induction hypothesis
+
+This shows that
+
+∆,h◦α as required.
+
+(cid:74)
+S(cid:48),α ≤
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+∃x.φ(cid:48)
+
+(cid:75)
+
+∃x.φ(cid:48)
+(cid:74)
+
+Theorem 23. Let h : S(cid:48) → ∆ be a Σ-abstraction and α : V → dom(S(cid:48)) and a variable
+assignment. For any positive formula φ ∈ FΣ with V(φ) ⊆ V :
+
+h ◦ solS(cid:48)
+
+(φ) ⊆ sol∆(φ)
+
+Proof Let h be Σ-abstraction from S(cid:48) to ∆ and φ ∈ FΣ a positive formula. For any variable
+S(cid:48),α ≤
+∆,h◦α by Proposition 22 since φ is positive.
+assignment α to dom(S(cid:48)), we know that
+φ
+This is equivalent to {h ◦ α | α ∈ solS(cid:48)
+(φ)} ⊆ sol∆(φ) and thus h ◦ solS(cid:48)
+(cid:75)
+(cid:74)
+(φ) ⊆ sol∆(φ) as
+required.
+
+φ
+(cid:74)
+
+(cid:75)
+
+Corollary 24 (John’s Theorem [8, 10]). For any Σ-abstraction h : S2 → ∆ and positive
+ﬁrst-order formula φ ∈ FΣ:
+
+solS(φ)∆ ⊆ sol∆(φ)
+
+Proof With the Σ-stucture S(cid:48) = S2, this follows from Lemma 20 and Theorem 23.
+
+solS(φ)∆ = h ◦ diﬀ(solS(φ)) = h ◦ solS2
+
+(φ) ⊆ sol∆(φ)
+
+If ∆ is ﬁnite then the set sol∆(φ) is ﬁnite, while solR+(φ) is usually inﬁnite. If furthermore
+φ is a conjunctive formula, we can compute the set sol∆(φ) by a ﬁnite domain constraint solver
+
+19
+
+from φ and the tables of ∆ (such as e.g. Minizinc [12]). In contrast, it remains unclear how to
+compute the ﬁnite set h ◦ diﬀ(solS(φ)) for inﬁnite structures S. The problem is open, even if φ
+is a system of homogeneous linear equations and S = R+, so that the inﬁnite set solS(φ) can be
+ﬁnitely represented by a triangular matrix.
+
+This is the core of the problem that we will solve in the present paper. Our approach will be
+
+to rewrite formulas φ to R+-equivalent formulas that are h-exact in the following sense:
+
+Deﬁnition 25. Let h : S → ∆ be a Σ-abstraction. We call a Σ-formula φ h-exact if:
+
+h(solS(φ)) = sol∆(φ).
+
+For h-exact formulas φ, h(solS
+
+V (φ)) can be computed exactly by computing sol∆
+
+V (φ) as de-
+
+scribed above.
+
+9. Exact Boolean Abstraction
+
+We recall a recent result from [15] that permits to characterize the boolean abstraction of
+the R+-solution set of a mixed linear and nonlinear systems by some hB-exact and B-equivalent
+formula, so that the boolean abstraction can be computed exactly by ﬁnite domain constraint
+programming.
+
+The development of this result was motivated by the needs of the present paper, but was
+presented independently for two reasons. First, these results require considerable eﬀort with
+complementary techniques based on elementary modes, and second, they are of interest elsewhere,
+in particular for computing the sign abstraction as needed for the abstract interpretation of
+programming languages.
+
+A linear equation with natural coeﬃcients and no constant term is a formula of FΣ with the
+
+arithmetic signature Σ = F (2)
+
+pos-arith (cid:93) Cpos-arith of the form:
+
+n1x1 + . . . nmxm
+
+.= nm+1xm+1 + . . . + npxp
+
+where m, p, n1, . . . , np ∈ N and x1, . . . , xp ∈ V. An equation e .= e(cid:48) is positive if the right-hand
+side e(cid:48) is equal to 0. It is called quasi-positive if it is positive or the right-hand side has the form
+nx for some natural n and some variable x. A system of equations is a conjunction of equations.
+
+Proposition 26 (Elementary Modes Theorem 15 of [15]). For any system of linear equa-
+tions L of size n with m variables we can compute in time O(2mpoly(n)) an R+-equivalent
+formula of the form ∃x. L(cid:48) of size O(n + m2m) such that L(cid:48) is a system of quasi-positive lin-
+ear equations, in which all variables on the left hand-side belong to x and all variables on the
+right-hand side occur exactly once.
+Proof sketch. An R+-EFM of φ is a variable assignment in α ∈ solR+(φ) with a minimal support,
+i.e. with a minimal number of variables x such that α(x) (cid:54)= 0. It is also well-know that the set
+of all R+-EFM of φ can be computed in O(2mpoly(n)) from φ by using for example the reverse
+search method for the enumeration of polytope vertices and extreme rays [25]. Furthermore,
+any solution in solR+(φ) is equal to a positive linear combination of R+-EFM of φ. This can be
+expressed by an R+-equivalent formula ∃x.φ(cid:48) such that φ(cid:48) is a system of quasi-positive equations,
+in which all variables on some left-hand side belong to x and all variables on some right-hand
+side occur exactly once.
+
+Deﬁnition 27. Consider the signature of arithmetics Σ = F (2)
+pos-arith (cid:93) Cpos-arith. A product-
+.= 0 where z, z(cid:48) ∈ V. A
+zero-equation in FΣ is a positive polynomial equation of the form z ∗ z(cid:48)
+(simple) hB-mixed system is a conjunctive formula in FΣ of the form ∃z. L ∧ P where L is a
+system of linear equations and P a system of product-zero-equations.
+
+20
+
+Note that hB-mixed systems may contain non-positive equations in the linear part L and non-
+linear equations in the positive part P . We could also consider more general hB-mixed systems
+in which P may be any system of polynomial equations without constant terms, but this will
+not be needed in the present paper.
+
+Theorem 28 (Theorem 39 of [15]). For any hB-mixed system φ of size n with m variables
+we can compute in O(2mpoly(n)) time an hB-exact formula φ(cid:48) of size O(n + m2m) that is R+-
+equivalent to φ.
+
+Proof sketch. Consider a hB-mixed system φ = ∃z.(L ∧ P ). We can then replace L by the R+-
+equivalent formula ∃x.L(cid:48) from Proposition 26. Since L(cid:48) is quasi-positive, the variables on the
+right hand-side of some equation in L(cid:48) occur exactly once, and the variables on the left-hand
+sides belong to x, and P is restricted, it can be shown with considerable eﬀort, that the formula
+∃z.((∃x.L(cid:48)) ∧ P ) is indeed hB-exact. So we can chose φ(cid:48) equal to this formula.
+
+In order to compute the hB-abstraction of a hB-mixed system φ exactly, we ﬁrst compute φ(cid:48)
+along the lines of the sketch of the proof ideas of Theorem 28 and Proposition 26. We can then
+compute solB(φ(cid:48)) by ﬁnite domain constraint programming.
+
+10. Characterizing Diﬀerence Abstractions
+
+We next show how to characterize the diﬀerence abstractions to ∆3 and ∆6 of the solution
+set of a linear equation system by the solution set of some ﬁrst-order formulas interpreted over
+the ﬁnite structure B. We do not know how to ﬁnd exact equivalent formulas as provided by
+in Theorem 28 in the case of boolean abstraction. Instead, we will use this theorem to ﬁnd a
+ﬁnitary characterisation of also in the case of diﬀerence abstractions. Hereby, we will strongly
+rely on properties of deﬁnition in the ﬁrst-order tuple logic, so we introduce the ﬁrst.
+
+10.1. First-Order Deﬁnitions
+
+Our strategy for computing diﬀerence abstractions to ∆3 and ∆6 will be to decompose those
+into the B-abstraction and ﬁrst-order deﬁnable functions. Therefore, we deﬁne next what it
+means for function or relation to be deﬁned by a formula of ﬁrst-order tuple logic.
+
+Σ-deﬁnition of arity m is a function F : V m → F n
+
+Deﬁnition 29. A F n
+Σ for which there exists
+a formula ψ ∈ F n
+Σ and a sequence of distinct variables x ∈ V m such that V(ψ) = {x} and
+F (y) = ψ[x/y] for all y ∈ V m. For any Σ-structure S, F deﬁnes the following m-ary relation
+F Sn
+
+on dom(S)n:
+
+F Sn
+
+= {(α(π1(x)), . . . , α(πm(x))) | α ∈ n-solS(ψ)}
+
+The formula F (y) states that the values of y are in the relation deﬁned by the fomula ψ.
+Which precise sequence y of distinct variables is chosen, does not matter since F (y) = F (x)[x/y],
+since the solutions of F (y) and F (x) over structure S correspond to each other modulo renaming
+of variable
+
+Lemma 30. For any ﬁrst-order deﬁnition F : V m → F n
+variables:
+
+Σ and sequence y = y1 . . . ym of distinct
+
+n-solS(F (y)) = {[y1/s1, . . . , ym/sm] | (s1, . . . , sm) ∈ F Sn
+
+}.
+
+Proof This is straightforward.
+
+21
+
+Figure 15: Two examples for the minimal support projection: y1 = msp
+
+R2
++ (x1) and y2 = msp
+
+R2
++ (x2).
+
+10.2. Deﬁning Function Application
+
+We will frequently have to apply functions to relations deﬁned in ﬁrst-order tuple logic. Let S
+be the structure of interest. In the simplest case, we are given a FO-deﬁnition F : V 2 → F n
+Σ that
+deﬁnes a total function F Sn
+: dom(Sn) → dom(Sn), and a ﬁrst-order deﬁnition G : V m → F n
+Σ
+that deﬁnes an m-ary relation GS on dom(S)n. We can then deﬁne the application of F S to all
+m components GS by the ﬁrst-order deﬁnition F m(G) such that for all y = y1 . . . ym:
+
+F m(G)(y) =def
+
+∃z. G(z) ∧
+
+m
+(cid:94)
+
+i=1
+
+F (zi, yi)
+
+where z = z1 . . . zm are fresh variables. A more general deﬁnition where F S : dom(Sn)k →
+dom(Sn)l will be needed later on. It will be given in Section 10.1 together with formal properties
+of such ﬁrst-order deﬁnitions.
+
+10.3. Exact ∆3-Abstraction of Linear Systems
+
+We start with the abstraction of ∆3. We ﬁrst decompose the abstraction h∆3 into the
++ deﬁned by the following hB-
+Σ, containing a non-positive linear equation and a product-zero equation, that
+
+boolean abstraction hB and the minimal support projection in R2
+mixed system in F 2
+is non-linear but positive. For any two variables x, y ∈ V we deﬁne:
+
+msp (x, y) =def
+
+.
+π1(x) +
+
+.
+
+π2(y) .=
+
+.
+π2(x) +
+
+.
+π1(y) ∧
+
+.
+π1(y) ∗
+
+.
+
+π2(y) .= 0
+
+The function mspR2
++ serves for minimal support projection, as illustrated geometrically in
+Figure 15. The value of mspR2
++(z) is the intersection point of the parallel of the diagonal through z
+with either the x-axis or else the y-axis. For any solution α ∈ solR2
++(msp (x, y)), some component
+of α(y) must be equal to zero since π1(α(y)) ∗ π2(α(y)) = 0. The other component must be equal
+to |π1(α(x)) − π2(α(x))| since π1(α(x)) − π2(α(x)) = π1(α(y)) − π2(α(y)). Hence:
+
+msp R2
+
++ = {((r, r(cid:48)), (0, r(cid:48) − r)) | r ≤ r(cid:48)}
+∪ {((r, r(cid:48)), (r − r(cid:48), 0)) | r ≥ r(cid:48)}
+
+Lemma 31. msp R2
+
++ is a total function of type R2
+
++ → R2
+
++ satisfying h∆3 = h2
+
+B ◦ msp R2
++ .
+
+Proof By deﬁnition msp R2
+satisfying the equation from the lemma due to the equation before the lemma.
+
++ is a binary relation on R2
+
++. This binary relation is a total function
+
+22
+
+For any ﬁrst-order deﬁnition G : V m → F 2
+
+Σ we deﬁned in Section 10.1 a ﬁrst-order deﬁnition
+Σ that describes the application of function deﬁned by msp to the m
+
+msp m(G) : V m → F 2
+components of the relation deﬁned by G.
+
+Lemma 32. For any ﬁrst-order deﬁnition G : V m → F 2
+
+Σ and sequence y ∈ V m:
+
+msp R2
+
++ ◦ 2-solR+(G(y)) = 2-solR+(msp m(G)(y)))
+
+Proof This lemma is a consequence of the fact that msp R2
++ deﬁnes a total function by Lemma
+31 and a general property of ﬁrst-order deﬁnitions that will be state in Proposition 47 of Section
+14. We could have given it directly after the section on the ﬁrst-order tuple logic, but prefered
+to do it only at the end, when the full generality of such result needed in this paper has become
+clear. As parameters for the application of Proposition 47 we choose F = msp : V 2 → F 2
+Σ, (cid:96) = 1,
+k = 1, n = 2.
+
+We ﬁx two fresh variable generators ν1, ν2 : V → V and deﬁne ν(x) and ν-1(x) as before.
+
+Theorem 33. For any any linear formula L(y) ∈ FΣ with m free variables {y} and size n
+we can compute in time in time O(22mpoly(n)) a positive conjunctive formula with existential
+quantiﬁers φ(ν(y)) ∈ FΣ with free variables {ν(y)} and of size O(n + m22m) such that:
+
+h∆3 ◦ diﬀ(solR+(L(y))) = ν-1(solB(φ(ν(y))))
+Proof Let L : V m → FΣ be the ﬁrst-order deﬁnition which when applied to y returns the linear
+formula L(y).
+
+h∆3 ◦ diﬀ(solR+(L(y)))
+
+Proposition 20 = h∆3 ◦ solR2
+
++(L(y))
+
+Pair FO Proposition 12 = h∆3 ◦ 2-solR+(L2(y)) with L2(y) = (cid:104)L(y)(cid:105)2
+B ◦ msp R2
+Decomposition Lemma 31 = h2
+B ◦ 2-solR+(msp m(L2)(y))
+FO-Deﬁnition Lemma 32 = h2
+B ◦ ν-1(solR+(˜ν(msp m(L2)(y))))
+Proposition 15 = h2
+Proposition 18 = ν-1(hB ◦ solR+(˜ν(msp m(L2)(y))))
+Deﬁnition of msp m(L2(y)) = ν-1(hB ◦ solR+(˜ν(∃z. L2(z) ∧ (cid:86)m
+
++ ◦ 2-solR+(L2(y)))
+
+i=1 msp (zi, yi))))
+
+where z = z1 . . . zm fresh
+
+hB-Mixted systems Theorem 28 = ν-1(solB(φ(ν(y))))
+
+where φ(ν(y)) is a conjunctive
+
+formula that is hB-exact and R+-equivalent to
+the hB-mixed system ˜ν(∃z. L2(z) ∧ (cid:86)m
+
+i=1 msp (zi, yi))
+
+By the hB-mixed systems Theorem 28, the size of φ(ν(y)) is in O(n + m22m) and the time of its
+computation in O(22mpoly(n)).
+
+This theorem induces a new algorithm for the exact computation of h∆3 ◦ diﬀ(solR+(L(y)))
+in time O(poly(n)28m) where n is the size of L(y) and m the number of variables in y. Note
+that this upper bound is simply exponential in the worst case, such as the alternative algorithm
+sketched in Section 2.
+
+The new algorithm applies Theorem 37 in order to create the formula φ(ν(y)) in time
+O(22mpoly(n)). This formula has size O(n + m22m) and 2m variables ν(y). The set of solutions
+solB(φ(ν(µ(y)))) can then be computed by a naive generate and test algorithm in time O(22m(n+
+m22m)): Given that this set is of cardinality at most 22m, we can compute h∆6 ◦ diﬀ(solR+(L(y)))
+from solB(φ(ν(y))) in time 22m by using the equality of the theorem. The overall time for comput-
+ing h∆3 ◦ diﬀ(solR+(L(y))) is in O(poly(n)22m + m24m) and thus in O(poly(n)24m). In practice,
+we can improve this algorithm by computing the set boolean solutions of φ(ν(y)) by ﬁnite domain
+constraint programming, rather than by a naive generate and test algorithm.
+
+23
+
+10.4. Exact ∆6-Abstraction of Linear Systems
+
+The case of ∆6 following the same approach that for ∆3, but is considerably more evolved in
+
+the usage of ﬁrst-order deﬁnitions.
+
++, where Σ = F (2)
+
+We consider the abstraction h∆6 as an element of the Σ-algebra of total functions of type
+pos-arith (cid:93)Cpos-arith. For any two functions f, f (cid:48) : R2
++ → R2
++, the addition
++ f (cid:48)(p) for every p ∈ R2
++, and similarly the multiplication
++ f (cid:48)(p). The following lemma shows that h∆6 is the sum of h∆3
+
++ f (cid:48)(p) = f (p) +R2
+
++ f (cid:48)(p) = f (p) ∗R2
+
++→R2
+
++→R2
+
++ → R2
+
+R2
+is deﬁned by f +R2
+is by f ∗R2
+and h2
+
+B in this Σ-algebra.
+
+Lemma 34. h∆6 = h2
+Proof Let p = (r, r(cid:48)) ∈ R2
+
+B + h∆3 where + = +R2
+
++→R2
+
++
+
++. We distinguish the cases for all possible values for h∆6(p) ∈ ∆6.
+
+Case h∆6 (p) =↑. Then 0 < r < r(cid:48) so that h2
+B + h∆3 )(p) = (1, 2) =↑= h∆6 (p).
+
+that (h2
+
+B(p) = (1, 1) and h∆3 (p) = (cid:97) = (0, 1). It follows
+
+Case h∆6 (p) =⇑. Then 0 = r < r(cid:48) so that h2
+B + h∆3)(p) = (0, 2) =⇑= h∆6(p).
+
+that (h2
+
+B(p) = (0, 1) and h∆3(p) = (cid:97) = (0, 1). It follows
+
+Case h∆6 (p) =↓. Then 0 < r(cid:48) < r so that h2
+B + h∆3)(p) = (2, 1) =↓= h∆6(p).
+
+that (h2
+
+B(p) = (1, 1) and h∆3(p) = (cid:96) = (1, 0). It follows
+
+Case h∆6(p) =⇓. Then 0 = r(cid:48) < r so that h2
+B + h∆3)(p) = (2, 0) =⇓= h∆6(p).
+
+that (h2
+
+B(p) = (1, 0) and h∆3(p) = (cid:96) = (1, 0). It follows
+
+Case h∆6(p) =∼. Then 0 < r = r(cid:48) so that h2
+B + h∆3)(p) = (1, 1) =∼= h∆6 (p).
+
+that (h2
+
+B(p) = (1, 1) and h∆3(p) = ∼∼∼ = (0, 0). It follows
+
+Case h∆6(p) =≈. Then 0 = r = r(cid:48) so that h2
+B + h∆3)(p) = (0, 0) =≈= h∆6 (p).
+
+that (h2
+
+B(p) = (0, 0) and h∆3(p) = ∼∼∼ = (0, 0). It follows
+
++ : R2
+
++ → (R2
+
+Let id-msp R2
+
++(p)). Fur-
+thermore, we deﬁne for any two functions g : A → B × C and f : B × C → D the pseudo
+composition f • g : A → D such that for all a ∈ A: (f • g)(a) = f (π1(g(a)), π2(g(a))). The
+Σ-abstraction h2
+
++ → B2 allows us to deﬁne (h2
+
++)2 such that for any p ∈ R2
+
++)2 → (B2)2
+
++(p) = (p, msp R2
+
++ id-msp R2
+
+B)2 : (R2
+
+B : R2
+
+Lemma 35 Decomposition. h∆6 = +R2
+Proof For any p ∈ R2
+
++, we have:
+
++ • (h2
+
+B)2 ◦ id-msp R2
++.
+
+h∆6 (p) = h2
+
++(p))
++(p)))
+
+B(p) +R2
++(h2
++((h2
++((h2
++ • (h2
+
+B(msp R2
++ h2
+B(msp R2
+B(p), h2
+B)2(p, msp R2
+B)2(id(p), msp R2
+B)2 ◦ id-msp R2
+
+= +R2
+= +R2
+= +R2
+= +R2
+
++(p)))
+
++ (p)))
++(p)
+
+We can deﬁne the ternary relation id-msp R2
+
++ : R2
+Σ such that for all x, y1, y2 ∈ V:
+
+id-msp : V × V 2 → F 2
+
++ → R2
+
++ × R2
+
++ in the ﬁrst-order pair logic by
+
+id-msp (x, y1, y2) =def (cid:104)x = y1(cid:105)2 ∧ msp (x, y2)
+
+24
+
+We next deﬁne applications of function deﬁned by id-msp in the ﬁrst-order logic. In order to deal
+with the two output arguments, we use two generators of fresh variables µ1, µ2 : V → V. For any
+m(G) : V 2m → F 2
+ﬁrst-order deﬁnition G : V m → F 2
+Σ,
+Σ we deﬁne a ﬁrst-order deﬁnition id-msp µ
+such that for any sequence of variables y ∈ V m and with µ(y) = µ1(y)µ2(y):
+
+id-msp µ
+
+m(G)(µ(y))) =def ∃y. G(y) ∧
+
+m
+(cid:94)
+
+i=1
+
+id-msp (yi, µ1(yi), µ2(yi))
+
+Lemma 36. id-msp R2
+
++ ◦ 2-solR+(G(y)) =
+
+(cid:26) [y/(α(µ1(y)), α(µ2(y))] |
+α ∈ 2-solR+(id-msp µ
+
+m(G)(µ(y))))
+
+(cid:27)
+
+.
+
+Proof This lemma is consequence of the property of ﬁrst-order deﬁnition in the FO-tuple logic
+that we will state in Proposition 49 of Section 14. Here we choose as parameters the ﬁrst-order
+deﬁnition F = id-msp µ : V × V 2 → F 2
+
+Σ, and (cid:96) = 1, k = 2, n = 2.
+We continue with µ1, µ2, ν1, ν2 four generators of fresh variables from which we deﬁne µ and
+
+ν as before.
+
+Theorem 37. For any linear formula L(y) with m free distinct variable y and size n we
+can compute in time O(24mpoly(n)) a positive conjunctive formula with existential quantiﬁers
+φ(ν(µ(y))) ∈ FΣ with free variables in ν(µ(y)) and of size O(n + m24m) such that:
+
+h∆6 ◦ diﬀ(solR+(L(y))) = {[y/(β2(ν(µ1(y))) +R2
+
++ β2(ν(µ2(y))) | y ∈ {y}] | β ∈ solB(φ(ν(µ(y))))}
+
+Proof Let L : V m → FΣ be the ﬁrst-order deﬁnition which when applied to y returns the linear
+formula L(y).
+
+h∆6 ◦ diﬀ(solR+(L(y)))
+
++(L(y))
+
+Proposition 20 = h∆6 ◦ solR2
+Proposition 12 = h∆6 ◦ 2-solR+(L2(y)) with L2(y) = (cid:104)L(y)(cid:105)2
+Dec. Lemma 35 = +R2
++ • (h2
+FO Lemma 36 = +R2
++ • (h2
+hR2
++ • {[y/(β(µ1(y)), β(µ2(y))] | β ∈ h2
+
++ ◦ 2-solR+(L2(y))
+
+B)2 ◦ id-msp R2
+B)2 ◦ {[y/(α(µ1(y)), α(µ2(y))] | α ∈ 2-solR+(id-msp µ
+
+B ◦ 2-solR+(id-msp µ
+
+m(L2)(µ(y)))}
+
+m(L2)(µ(y)))}
+
++ β(µ2(y))] | β ∈ h2
+
+B ◦ 2-solR+(id-msp µ
+
+m(L2)(µ(y)))}
+
+= +
+= {[y/(β(µ1(y)) +R2
+
+We can compute the h2
+
+B abstraction of the above solution set similarly to the case of ∆3.
+
+B ◦ 2-solR+(id-msp µ
+h2
+
+m(L2)(µ(y)))
+
+B ◦ ν-1(solR+(˜ν(id-msp µ
+Proposition 15 = h2
+Proposition 18 = ν-1(hB ◦ solR+(˜ν(id-msp µ
+
+m(L2)(µ(y)))))
+m(L2)(µ(y)))))
+
+Def. of id-msp µ
+
+m = ν-1(hB ◦ solR+(˜ν(∃y. L2(y) ∧ (cid:86)m
+
+Theorem 28 = ν-1(solB(φ(ν(µ(y)))))
+
+i=1 id-msp (yi, µ1(yi), µ2(yi))))
+
+on hB-mixed systems
+
+where φ(ν(µ(y))) is a conjunctive formula equivalent to the
+hB-mixed system ˜ν(∃y. L2(y) ∧ (cid:86)m
+
+i=1 id-msp (yi, µ1(yi), µ2(yi))
+
+The combination of the above two calculations and the moving of ν-1 to the left yields the
+equation stated in the theorem. By the hB-mixed systems Theorem 28, the size of φ(ν(µ(y))) is
+in O(n + m24m) and the time of its computation in O(24mpoly(n)).
+
+Note that upper complexity bound of Theorem 37 is slightly diﬀerent to that of Theorem
+33, since we have to create 4m variables for ∆6, in contrast to 2m variables for ∆3. Theorem
+
+25
+
+37 induces a new algorithm for the exact computation of h∆6 ◦ diﬀ(solR+(L(y))).
+It requires
+time in O(poly(n)28m) where n is the size of L(y). Hence it is simply exponential in the worst
+case, such as the existing algorithm sketched in Section 2. But now we can use ﬁnite domain
+constraint programming to avoid the naive generate and test approach. This will prove beneﬁcal
+in practice.
+
+11. Exact Computation of Diﬀerence Abstraction with Constraints
+
+We now formalize the general problem of diﬀerence abstraction with constraints, and show
+
+how to solve it for h∆3 and h∆6.
+
+11.1. General Problem
+
+Let Σ = F (2)
+
+pos-arith (cid:93) Cpos-arith. The parameter of the problem is a Σ-abstraction h : R2
+
++ → ∆
+into some ﬁnite Σ-structure ∆. We recall that Σ[dom(∆)] is the extension of signature Σ with
+additional constants from dom(∆).
+
+Deﬁnition 38. The algorithmic problem of diﬀerence abstraction with constraints is parame-
+terized by a Σ-abstraction h : R2
+System of linear equations L ∈ FΣ: this system is to be interpreted over R+.
+Constraint C ∈ FΣ[dom(∆)]: a ﬁrst-order formula which is to be interpreted over ∆.
+
++ → ∆ and has the following three inputs:
+
+Set of observable variables V ⊆ V(L) ∪ V(C): a ﬁnite subset of the free variables of the lin-
+
+ear equation system and the constraint.
+
+The output is the h-abstraction of diﬀerences of R+-solutions of L, constrained to the ∆-solutions
+of C, and projected to the observable variables in V . With V (cid:48) = V(L) ∪ V(C) this is:
+
+{β|V | β ∈ h ◦ sol
+
+R2
+V (cid:48) (L) ∩ sol∆
++
+
+V (cid:48)(C)}
+
+In the example of the introductory reaction network in Figure 3, the system of linear equations
+L ∈ FΣ is given in Figure 4. As non nonlinear constraint C ∈ FΣ[dom(∆)] we can choose the
+.==↑. As set
+kinetic constraints in Figure 4 in conjunction with the overproduction target vout-B
+observable variables, we may choose whose values represent changes that are controlled externally,
+which is the inﬂow of A and the reactions subject to knockout 3 and 4.
+
+V = {vin-A, v3, v4}
+
+In contrast to the system of linear equation system L, the constraint C may contain arbitrary
+arithmetic formulas including non-linear polynomial equations and universal quantiﬁers. This
+is needed to deal with nonlinear kinetic information. This does not make increase the diﬃculty
+of the problem to much, since the constraints are to be interpreted over the ﬁnite structure
+∆, so that the universal quantiﬁers in C can be replaced by conjunctions, and the existential
+quantiﬁeres by disjunctions.
+
+The general problem could be simpliﬁed, if we could compute an h-exact formula φ that is
+
+R2
+
++-equivalent to L. In this case, it would be suﬃcient to compute:
+
+sol∆(∃V. φ ∧ C)
+
+which can be done by ﬁnite domain constraint programming. However, the characterizations of
+the diﬀerence abstractions to ∆3 and ∆6 in Theorems 33 and 37 do not provide such h-exact
+formulas, so further eﬀorts are needed to solve the above problem. This is what we will do next
+for h∆3 and h∆6.
+
+26
+
+11.2. Mixed Structures
+
+For adding a treatment of kinetic constraints over ∆n where n ∈ {3, 6}, we consider the union
+B ∪ ∆n as a relational structure, unifying the functionalities of both structures B and ∆n. For
+this, we deﬁned the mixed signature by:
+
+Σmixed
+n
+
+= {+B, ∗B, +∆n, ∗∆n } ∪ B ∪ ∆n
+
+Here we reuse the binary functions of B and ∆n as the binary function symbols of Σmixed
+the values of B ∪ ∆n as the constants of Σmixed
+
+n
+
+.
+
+n
+
+and
+
+Deﬁnition 39. For any n ∈ {3, 6}, the mixed structure B ∪ ∆n is the Σmixed
+mixed domain B ∪ ∆n in which all symbols of Σmixed
+the mixed domain.
+
+-structure with the
+are by themselves, but now with respect to
+
+n
+
+n
+
+11.3. Diﬀerence Abstraction with Constraints for ∆3
+
+Any pair of booleans in B2 \ (1, 1) is an element in ∆3, and vice versa. For solving the
+general problem for ∆3 we need to capture this relationship in the mixed ﬁrst-order logic over
+B ∪ ∆3. For this we consider the partial function pair ∆3 ⊆ (B ∪ ∆3)2 × (B ∪ ∆3) such that for
+all v1, v2 ∈ B ∪ ∆3:
+
+pair ∆3 (v1, v2) =
+
+(cid:26) (v1, v2)
+
+if v1 ∗B v2 = 0 so that (v1, v2) ∈ ∆3
+
+undeﬁned else
+
+The domain of this partial function is dom(pair ∆3) = B2 \ {(1, 1)} = ∆3. Any pair from the
+domain is mapped to itself. We can deﬁne the ternary relation pair ∆3 in the ﬁrst-order logic of
+the mixed structure B ∪ ∆3 by the function Pair ∆3 : V 2 × V → FΣmixed
+such that for all variables
+y1, y2, y ∈ V:
+
+3
+
+Pair ∆3 (y1, y2, y) =def
+∨
+∨
+
+(y1 = 0 ∧ y2 = 0 ∧ y = ∼∼∼)
+(y1 = 0 ∧ y2 = 1 ∧ y = (cid:97))
+(y1 = 1 ∧ y2 = 0 ∧ y = (cid:96))
+
+According to deﬁnition 29, the ﬁrst-order deﬁnition Pair ∆3 indeed deﬁnes the relation pair ∆3
+in the mixed structure, that is pair ∆3 = Pair B∪∆3
+In order to deal with the two inputs of
+∆3
+pair ∆3 , we reconsider two new variable generators ν1, ν2 : V → V. Recall that for any subset
+V ⊆ V, structure S, and variable assignment α : ν1(V ) ∪ ν2(V ) → dom(S) we deﬁned ν-1(α) :
+V → dom(S)2 such that ν-1(α)(y) = (α(ν1(y)), α(ν2(y))) for all y ∈ V . Next we deﬁne for any
+ﬁrst-order deﬁnition G : V 2m → FΣmixed
+such
+that Pair m
+(G)(y) describes an application of Pair ∆3 to the all component of solutions of G(y)
+∆3
+for all sequence of variables y = y1 . . . ym:
+
+a ﬁrst-order deﬁnition Pair m
+∆3
+
+(G) : V m → FΣmixed
+
+.
+
+3
+
+3
+
+Pair m
+∆3
+
+(G)(y) = ∃ν(y). G(ν(y)) ∧
+
+m
+(cid:94)
+
+i=1
+
+Pair ∆3 (ν1(yi), ν2(yi), yi)
+
+Lemma 40. Let m ∈ N, G : V 2m → FΣmixed
+variables and ν(y) = ν1(y)ν2(y).
+
+3
+
+be a ﬁrst-order deﬁnition, y be a sequence of
+
+ν-1(solB(G(ν(y))) ∩ {α : {y} → ∆3} = solB∪∆3 (Pair m
+∆3
+
+(G)(y))
+
+27
+
+Proof The function pair ∆3 maps all pairs of booleans in ∆3 to themselves, while being undeﬁned
+for all elements of (∆3 ∪ B)2 \ ∆3. Hence:
+
+ν-1(solB(G(ν(y))) ∩ {α : {y} → ∆3} = pair ∆3 ◦ ν-1(solB∪∆3(G(ν(y))))
+
+The composition with the partial function pair ∆3 on the right is deﬁned in Section 4.1.
+As stated there, the composition pair ∆3 ◦ α is deﬁned only for total functions α such that
+ran(α) ⊆ dom(pair ∆3) = ∆3. So a total function pair ∆3 ◦ α may belong to the composition on
+the right only if α satisﬁes this condition.
+
+Proposition 48 on ﬁrst-order deﬁnitions with F = Pair ∆3 : V 2 × V → FΣmixed
+
+3
+
+shows that:
+
+Pair B∪∆3
+∆3
+
+◦ ν-1(solB∪∆3(G(ν(y)))) = solB∪∆3 (Pair m
+∆3
+
+(G)(y))
+
+Here, the parameters are (cid:96) = 2, k = 1 and n = 1. In combination with pair ∆3 = Pair B∪∆3
+two equations yield the lemma.
+
+∆3
+
+, these
+
+Since we will work on the structure B ∪ ∆3, we need to introduce for any φ ∈ FΣ the formulas
+φB and φ∆3 that impose the use of ∗B and +B, and respectively ∗∆3 and +∆3 when interpreting
+φ. It follows that solB∪∆3(φB) = solB(φ).
+
+Theorem 41 (Solving Diﬀerence Abstraction with Constraints for h∆3). For any linear
+formula L(y) ∈ FΣ with free variable set {y}, and constraint C(y(cid:48)) ∈ FΣ[dom(∆3)] with free
+variable set {y(cid:48)}, and V ⊆ {y} ∪ {y(cid:48)} = V (cid:48) we can compute at most exponential time a formula
+over the mixed signature M ∈ FΣmixed
+
+such that:
+
+3
+
+solB∪∆3 (M ) = {β|V | β ∈ h∆3 ◦ sol
+
+V (cid:48) (L(y)) ∩ sol∆3
+
+V (cid:48) (C(y(cid:48)))}
+
+R2
++
+
+Proof Without loss of generality we can assume that y = y(cid:48). If not this can be obtained adding
+by for all z ∈ V (cid:48) a redundant equation ν(z) .= ν(z) conjunctively to both L(y) and C(y(cid:48)). Once
+this is done we have V (cid:48) = {y} = {y(cid:48)}.
+
+By Theorem 33 we can compute in at most exponential time a formula φ(ν(y)) ∈ FΣ such
+
+that:
+
+The formula M ∈ FΣmixed
+
+3
+
+h∆3 ◦ diﬀ(solR+(L)) = ν-1(solB(φ(ν(y))))
+can then be deﬁned as follows:
+
+M =def ∃V (cid:48) \ V. Pair m
+∆3
+
+(φ(ν(y))B) ∧ C(y(cid:48))∆3
+
+Note that M can be computed in linear time from φ(ν(y)) and C(y(cid:48)). We need to show that
+formula M satisﬁes the equation from the theorem. First note that:
+
+Lemma 40 on the ﬁrst-order deﬁnition of pair ∆3 shows that:
+
+solB(φ(y)) = solB∪∆3(φ(y)B)
+
+ν-1(solB∪∆3(φ(y)B)) ∩ {α : {y} → ∆3} = solB∪∆3(Pair m
+∆3
+
+(φ(y)B)
+
+Hence:
+
+ν-1(solB∪∆3(φ(y)B)) ∩ solB∪∆3 (C(y)∆3) = solB∪∆3 (Pair m
+∆3
+
+(φ(y)B) ∩ solB∪∆3(C(y)∆3)
+
+28
+
+With the equations we can now conclude as follows:
+
+{β|V | β ∈ ν-1(solB(φ(y))) ∩ sol∆3(C(y))}
+
+= {β|V | β ∈ ν-1(solB∪∆3(φ(y)B) ∩ solB∪∆3(C(y)∆3 )}
+= {β|V | β ∈ solB∪∆3(Pair m
+∆3
+= {β(cid:48) | β(cid:48) ∈ solB∪∆3 (∃V (cid:48) \ V. Pair m
+∆3
+= solB∪∆3 (M )
+
+(φ(y)B) ∩ solB∪∆3 (C(y)∆3 )}
+(φ(y)B) ∧ C(y)∆3)}
+
+The set solB∪∆3(M ) can be computed by a ﬁnite domain constraint programming, since
+B ∪ ∆3 is a ﬁnite structure. Therefore Theorem 41 yields an algorithm for solving the general
+problem of diﬀerence abstraction with constraints in the case of ∆3.
+
+11.4. Diﬀerence Abstraction with Constraints for ∆6
+
+We next consider the partial function pair -sum ∆6 ⊆ (B ∪ ∆6)4 × (B ∪ ∆6) that maps 2 pairs
+
+of booleans to abstract diﬀerence in ∆6 in the sense that for all b1, b2 ∈ B2:
+(cid:26) b1 +R2
+
++ b2
+undeﬁned
+
+if b1, b2 ∈ B2 and b1 +R2
+else
+
+pair -sum ∆6(b1, b2) =
+
++ b2 ∈ ∆6
+
+By using this partial function and Theorem 37 we can rewrite h∆6 ◦ diﬀ(solR+(L(y))) for any
+system of linear equation L(y) as follows where µ, ν, φ can be chosen as stated by the theorem:
+{[y/pair -sum ∆6(β2(ν(µ1(y))), β2(ν(µ2(y)))) | y ∈ {y}] | β ∈ solB(φ(ν(µ(y))))}
+We next deﬁne the relations on pairs pair -sum ∆6 in the mixed pair FO-logic B ∪ ∆6 by the
+function Pair -Sum ∆6 : V 4 × V ∈ FΣmixed
+
+such that for all variables y1, y2, y3, y4, y ∈ V:
+
+6
+
+Pair -Sum ∆6 (y1, y2, y3, y4, y) =def
+
+( y1
+∨(y1
+∨(y1
+∨(y1
+∨(y1
+∨(y1
+
+.= 0 ∧ y2
+.= 1 ∧ y2
+.= 1 ∧ y2
+.= 1 ∧ y2
+.= 0 ∧ y2
+.= 1 ∧ y2
+
+.= 0 ∧ y3
+.= 1 ∧ y3
+.= 0 ∧ y3
+.= 1 ∧ y3
+.= 1 ∧ y3
+.= 1 ∧ y3
+
+.= 0 ∧ y4
+.= 0 ∧ y4
+.= 0 ∧ y4
+.= 0 ∧ y4
+.= 1 ∧ y4
+.= 1 ∧ y4
+
+.= 0 ∧ y .=≈)
+.= 0 ∧ y .=∼)
+.= 1 ∧ y .=⇑)
+.= 1 ∧ y .=↑)
+.= 0 ∧ y .=⇓)
+.= 0 ∧ y .=↓)
+
+According to Deﬁnition 29, the ﬁrst-order deﬁnition Pair -Sum ∆6 indeed deﬁnes the partial func-
+tion pair -sum ∆6 in the mixed structure, that is
+
+pair -sum ∆6 = Pair -Sum B∪∆6
+We continue with four generators of new variables µ1, µ2, ν1, ν2 : V → V. For any ﬁrst-order
+(G) : V m →
+deﬁnition G : V 4m → FΣmixed
+(G)(y) describes
+FΣmixed
+the application of the partial function deﬁned by Pair -Sum ∆6 to the pairs of pairs deﬁned by
+G(ν(µ(y))), i.e.:
+
+. For all sequence of variables y = y1 . . . ym, the formula Pair -Sum m
+∆6
+
+we next deﬁne a ﬁrst-order deﬁnition Pair -Sum m
+∆6
+
+∆6
+
+6
+
+6
+
+Pair -Sum m
+∆6
+
+(G)(y) = ∃ν(µ(y)). G(ν(µ(y))) ∧
+
+m
+(cid:94)
+
+i=1
+
+Pair -Sum ∆6 (ν(µ1(yi)), ν(µ2(yi)), yi)
+
+Lemma 42.
+
+solB∪∆6(Pair -Sum m
+∆6
+
+(G)(y)) =
+
+(cid:26) [y/pair -sum ∆6(β2(ν(µ1(y))), β2(ν(µ2(y))) | y ∈ {y}]
+
+| β ∈ solB∪∆6(G(ν(µ(y))))
+
+(cid:27)
+
+29
+
+Proof We use the fact that pair -sum ∆6 = Pair -Sum B∪∆6
+and the general property of ﬁrst-order
+deﬁnition from Proposition 48 with F = Pair -Sum ∆6, (cid:96) = 4, k = 1 and n = 1. As four new
+variable generators there we use {νi ◦ µj | i, j ∈ {1, 2}}.
+
+∆6
+
+solB∪∆6(Pair -Sum m
+∆6
+
+(G)(y)) = pair -sum ∆6 ◦
+
+(cid:26) α : {y} → B ∪ ∆6 | ∃β ∈ solB∪∆6(G(ν(µ(y)))).
+∀y ∈ {y}. α(y) = β2(ν(µ1(y))), β2(ν(µ2(y)))
+
+(cid:27)
+
+Proposition 43. For any formula φ(ν(µ(y))) ∈ FΣ and constraint C(y) ∈ FΣ[dom(∆6)] with
+the same free variables {y}, and any subset V ⊆ {y} we can compute in linear time a formula
+M ∈ FΣmixed
+
+with fv (M ) = V such that:
+
+6
+
+solB∪∆6 (M ) =
+
+(cid:26)
+
+α|V |
+
+α = [y/pair -sum ∆6(β2(ν(µ1(y))), β2(ν(µ2(y)))) | y ∈ {y}],
+β ∈ solB(φ(ν(µ(y))))}
+
+(cid:27)
+
+.
+
+∩{α|V | α ∈ sol∆6(C(y))}
+
+Proof We can chose M = ∃{y} \ V. Pair -Sum m
+∆6
+
+(L(y)) ∧ C(y)∆6 .
+
+(cid:26)
+
+α|V |
+= solB∪∆6(Pair -Sum m
+∆6
+= solB∪∆6(M )
+
+α = [y/pair -sum ∆6 (β2(ν(µ1(y))), β2(ν(µ2(y)))) | y ∈ {y}],
+β ∈ solB(φ(ν(µ(y))))}
+
+(φ(y))} ∩ {α|V | α ∈ solB∪∆6(C(y)∆6 )
+
+(cid:27)
+
+∩ {α|V | α ∈ sol∆6(C(y))}
+
+By Lemma 42
+
+Theorem 44 (Solving Diﬀerence Abstraction with Constraints for h∆6). For any linear
+formula L(y) ∈ FΣ with free variable set {y}, and constraint C(y(cid:48)) ∈ FΣ[dom(∆6)] with free
+variable set {y(cid:48)}, and V ⊆ {y} ∪ {y(cid:48)} = V (cid:48) we can compute in at most exponential time a
+formula over the mixed signature M ∈ FΣmixed
+
+such that:
+
+6
+
+solB∪∆6 (M ) = {β|V | β ∈ h∆6 ◦ sol
+
+V (cid:48) (L(y)) ∩ sol∆6
+
+V (cid:48) (C(y(cid:48)))}
+
+R2
++
+
+Proof As for the diﬀerence abstraction with constraints for ∆3, without loss of generality we
+can assume that y = y(cid:48). Once this is done we have V (cid:48) = {y} = {y(cid:48)}. By Theorem 37, we can
+compute it at most exponential time a formula φ(ν(µ(y))) ∈ FΣ such that:
+h∆6 ◦ diﬀ(solR+(L(y))) = {[y/(β2(ν(µ1(y))) +R2
+
++ β2(ν(µ2(y))) | y ∈ {y}] | β ∈ solB(φ(ν(µ(y))))}
+
+With the deﬁnition of pair -sum ∆6 we obtain:
+(cid:26)
+
+h∆6 ◦ diﬀ(solR+(L(y))) =
+
+α|V |
+
+α = [y/pair -sum ∆6 (β2(ν(µ1(y))), β2(ν(µ2(y)))) | y ∈ {y}],
+β ∈ solB(φ(ν(µ(y))))}
+
+(cid:27)
+
+Finally from Proposition 43, we can compute in linear time a formula M ∈ FΣmixed
+
+6
+
+such that
+
+solB∪∆6(M ) =
+
+(cid:26)
+
+α|V |
+
+α = [y/pair -sum ∆6 (β2(ν(µ1(y))), β2(ν(µ2(y)))) | y ∈ {y}],
+β ∈ solB(φ(ν(µ(y))))}
+
+(cid:27)
+
+∩{α|V | α ∈ sol∆6(C(y))}
+
+The set solB∪∆6(M ) can be computed by a ﬁnite domain constraint programming, since B∪∆6
+is a ﬁnite structure. By combining Theorem 37 and Proposition 43 we obtain an algorithm for
+solving the general problem of Section 11 in the case of ∆6.
+
+30
+
+12. Overapproximation Heuristics with Minimal Support Consequences
+
+We propose a new heuristics for approximating the problem of diﬀerence abstractions with
+constraints. Later on, we will see experimentally that this heuristics is close to exact in our main
+application while requiring considerably less computation time.
+
+Let h : R2
+
++ → ∆ be some Σ-abstraction into a ﬁnite Σ-structure ∆. The general idea of the
+[8]) for approximating the problem of diﬀerence abstractions with
+existing heuristics (see e.g.
+constraints from Deﬁnition 38 is as follows. Given a linear equation system L ∈ FΣ, a constraint
+C ∈ FΣ[dom(∆)] and subsets of variable V ⊆ V (cid:48) = V(L) ∪ V(C), we ﬁrst compute some linear
+equation system L(cid:48) ∈ FΣ that is a logical consequence of L over R+ with V(L(cid:48)) ⊆ V (cid:48), and in a
+second step the set of abstract solutions:
+
+sol∆(∃V. (L ∧ L(cid:48) ∧ C))
+
+by ﬁnite domain constraint programming. By John’s theorem in Corollary 24, this set is an
+overapproximation of the target of the problem {β|V | β ∈ sol
+
+R+
+V (cid:48) (L)∆ ∩ sol∆
+
+The choice of which R+-consequence L(cid:48) of L to add to L is critical. Generally, L(cid:48) is a ﬁnite
+conjunction of linear equations that are R+-consequences of L. These are all the linear combi-
+nations of equations in L. Unfortunately, there are inﬁnitely many such linear combinations, of
+which L(cid:48) has to choose some ﬁnite subset.
+
+We call an equation E ∈ FΣ linear if E has the form n1x1 + . . . nkxk
+
+.= m1y1 + . . . mlyl for
+some pairwise distinct variables xi and yj, natural numbers k, l ≥ 0 and nonzero natural numbers
+ni, mj > 0. We call E nontrivial if not k = 0 and l = 0. The support of E is the set of its free
+1, . . . m(cid:48)
+variables V(E). We call E normalized if there not exists a natural number p, n(cid:48)
+n
+such that ni = p ∗N n(cid:48)
+
+i and mj = p ∗N m(cid:48)
+
+j for all i, j.
+
+V (cid:48)(C)}.
+
+1, . . . n(cid:48)
+
+l, m(cid:48)
+
+Deﬁnition 45 (Minimal support linear R+-consequences). A linear equation E ∈ FΣ is
+a minimal support linear R+-consequence of a system of linear equations L ∈ FΣ if it satisﬁes
+the following three conditions:
+
+• E is a nontrivial R+-consequence of L,
+
+• not other nontrivial R+-consequence of L has a smaller support than E, and
+
+• E is normalized.
+
+It is not diﬃcult to see that no two diﬀerent minimal support linear R+-consequences of L
+may have the same support. Therefore, the set of minimal support linear R+-consequences of L
+is ﬁnite and of cardinality at most 2|V(E)|. Given a system of linear equations L ∈ FΣ we denote
+the conjunction of all its minimal support linear R+-consequences by:
+
+Lmsc ∈ FΣ
+
+We next show how to compute Lmsc from L. First, we transform L into an integer matrix A
+in linear time, such L is equivalent to Ax .= 0, where V(L) = {x}. The R+-consequences of L
+are thus the linear combination of the rows of A. Since we want to combine the rows of A and
+not its columns, we consider the transposed matrix AT . Given a sequence z of with as many
+fresh variables as A has rows, the linear combinations of the rows of A (the row space) can be
+identiﬁed with the following set of integer solutions:
+
+solZ(∃y.AT y .= z)
+
+31
+
+Since the row space is the orthogonal complement of A’s nullspace solZ(Ax .= 0), we have that
+each vector corresponding to a R+-consequence of L must be orthogonal to every vector in the
+nullspace, and in particular to any of its bases. Let A⊥ be some basis of the nullspace of A,
+which can be easily computed by using Gauß algorithm. Then the row space is given by:
+
+solZ(A⊥z .= 0)
+
+Since we are interested only in the subset of solutions of the above system which are nonzero,
+normalized and with a minimal support, the problem of ﬁnding them is simply a particular case
+of the computation of the elementary modes of the orthogonal complement of the nullspace of A,
+with basis A⊥, but such that nonpositive solutions are considered too. The usual software pack-
+ages for computing elementary modes can then be applied to A⊥ to compute such “reversible”
+elementary modes [26], or equivalently the problem can be reduced to computing the extreme
+rays of a cone and solved with any library for the analysis of polytopes, such as [27, 25].
+
+13. Implementation and Experimentation
+
+We have implemented the algorithm solving the diﬀerences abstraction problem with con-
+straints in the case of diﬀerence abstraction h∆6 and applied them to change prediction in systems
+biology
+
+13.1. Implementation
+
+First, we implemented the exact rewriting of linear equation systems for the boolean abstrac-
+tion hB. We implemented the rewriting in Python while using the libcdd library for computing
+elementary modes [27, 28].
+
+Second, we implemented a solver for ﬁrst-order constraint in the mixed structure B ∪ ∆6 by
+
+ﬁnite domain constraint programming with the Minizinc tool [12].
+
+Third, we implemented the exact computation of diﬀerence abstractions for h∆6. This was
+
+done in Python based on implementation obtained in the ﬁrst and second step.
+
+Fourth, we use BioComputing’s Reaction-Network tool to represent reaction networks with
+partial kinetic information in XML-format and to infer the linear equation systems and the
+nonlinear kinetic constraints. The tools does also support John’s overapproximation algorithm.
+We then integrated our exact algorithm for computing diﬀerence abstraction with h∆6 into the
+tool, so that it can be applied the systems of linear equation and nonlinear constraints obtained
+from a reaction network.
+
+Fifth, we implemented the minimal support heuristics again in Python. For this we had to
+compute “reversible” elementary modes. We again used the libccd library for this, by reducing the
+computation of reversible elementary modes to the computation of irreversible elementary modes.
+We used standard Python libraries to applying Gauß algorithm to compute the orthogonal matrix
+A⊥.
+
+Sixth, we integrated the minimal support heuristics into BioComputing’s Reaction-Network
+tool [29]. We also added a support to compare the solutions sets obtained by John’s overapprox-
+imation, the minimal support heuristics, and the exact algorithm.
+
+The graphical output of reaction networks is done with BioCompting’s Network-Graph tool.
+It also allows to annotate abstract solution or the elementary ﬂux modes to the network graph,
+and is integrated into the Reaction-Network tool. BioComputing’s Network-Graph tool is pub-
+licly available, while the other components of BioComputing Reaction-Network tool are not yet
+made publicly available.
+
+32
+
+Network
+
+Count type
+
+John’s over- min. support
+consequences
+
+approx.
+
+exact
+
+Simple loop
+
+(Figure 6)
+
+Leucine overproduction
+
+(Figure 20)
+
+Counter example
+(Figure 17a)
+
+abstract solutions
+
+knockouts
+abstract solutions
+
+19
+
+16
+292
+
+6
+
+14
+228
+
+6
+
+14
+228
+
+abstract solutions
+
+≥ 10000
+
+4454
+
+4374
+
+Figure 16: Predictions for the networks analysed in this paper, obtained respectively by pure abstract interpre-
+tation, the heuristics based on minimal support consequences and the exact algorithm.
+
+13.2. Application to Change Prediction of Reaction Networks
+
+The main application of the change prediction algorithm for reaction networks with partial
+kinetic information [8, 10] concerns overproduction of the branched chain amino acid Leucine by
+the reaction network in Figure 20. Leucine is a predecessor of of the surfactin, a nonribosomal
+peptide, that can be used as a surfactant and produced industrially by the bacteria B. Subtilis.
+Some of the change predictions obtained for this application where veriﬁed successfully in the
+bioreactor.
+
+We compare the results of John’s overapproximation, the minimal support heuristics and the
+exact algorithm in Figure 16. Beside of the leucine network we also consider the simple loop
+network and the counter example in Figure 17a.
+
+For the simple loop network, the exact algorithm shows that there are 6 abstract solutions,
+one for each value of ∆6. The minimal support heuristics ﬁnds the same 6 abstract solutions,
+while by John’s overapproximation returns 19 abstract solutions, of which 13 are not justiﬁed.
+
+For the leucine network from Figure 20 the minimal support heuristics ﬁnds the same 228
+solutions as the exact algorithm. John’s overapproximation algorithm produces 292 solutions
+instead, including the 228 justiﬁed solutions.
+
+On the other hand, the minimal support heuristics is remarkably faster than the exact algo-
+
+rithm – in the benchmark on leucine overproduction, we have 5 minutes versus 5 hours.
+
+13.3. Counter Example for the Minimal Support Heuristics
+
+We found and implemented the minimal support heuristics some years before ﬁnding the
+exact algorithm. At that time it was impossible to us to see whether the minimal support
+heuristics was exact or not. After having developed and implemented the exact algorithm, we
+could eventually evaluate this question. Our experiments showed that the heuristics is indeed
+exact for all applications to change prediction of reaction networks in systems biology that we
+tested. We then tried to prove in the case of ∆3 that the minimal support heuristics was always
+exact, but failed to do so.
+
+Next, we tried to ﬁnd a counter example in the case of ∆6. For this we developed a random
+generator of reaction networks and compared the minimal support heuristics with the exact
+algorithm that we implemented for ∆6 only. This made us indeed ﬁnd a counter example for ∆6
+that is given in Figure 17a.
+
+Why the minimal support heuristics admits abstract solutions that are not justiﬁed is not
+
+easy to understand.
+
+We can see for instance that v4
+
+.= v5 + vin-B is a minimal support linear consequence, by
+looking at the elementary ﬂux modes of the counter example network in Figure 17b. The list
+of all other minimal support linear consequences are given in Figure 18. We can also recognize,
+
+33
+
+in-A
+in-A
+
+in-D
+in-D
+
+in-B
+in-B
+
+in-A
+
+in-D
+
+in-B
+
+B
+B
+
+5
+5
+
+A
+A
+
+4
+4
+
+D
+D
+
+6
+6
+
+C
+C
+
+in-E
+in-E
+
+E
+E
+
+in-C
+in-C
+
+B
+
+5
+
+A
+
+4
+
+D
+
+6
+
+C
+
+in-E
+
+E
+
+in-C
+
+(a) Graphical representation.
+
+(b) Elementary ﬂux modes.
+
+Figure 17: Counter example for exactness of the minimal support heuristics for ∆6.
+
+.= vin-B + vin-C + v6
+
+.= vin-B + vin-C + v6
+
+.= vin-B + vin-C + vin-D
+.= vin-B + 2 v5
+
+.= vin-B + 2 v5
+.= vin-B + vin-C + vin-D
+.= vin-C + v6
+
+2 vin-E
+2 v4
+2 vin-E
+vin-C + v6
+vin-C + vin-D
+2 v4
+vin-E + v5
+v4 + v5
+
+.= vin-C + v6
+
+.= vin-C + vin-D
+
+.= vin-C + vin-D
+
+.= vin-A + vin-D
+
+vin-E + v5
+v4 + v5
+vin-E
+v4
+vin-E
+v4
+vin-B + v5
+vin-B + v5
+vin-B + vin-C
+
+.= vin-A + vin-D
+.= vin-A + v6
+
+.= vin-A + v6
+
+.= vin-A + v6
+.= vin-A + vin-D
+
+.= 2 vin-A + v6
+
+.= vin-A + vin-E
+.= 2 vin-A + vin-D
+.= vin-A + v4
+
+vin-B + vin-C
+vin-B + vin-C
+vin-B + vin-C
+.= vin-D
+v6
+vin-C
+v4
+v4
+vin-E
+
+.= vin-E
+.= vin-B + v5
+
+.= vin-B + v5
+
+.= vin-A + v5
+
+Figure 18: Minimal support consequences
+
+which of the abstract solutions are unjustiﬁed. An example is given in Figure 19. But we could
+not explain why this solution is unjustiﬁed, or ﬁnd some nonminimal support consequence that
+it violates.
+
+34
+
+⇓
+
+in-A
+
+⇑
+
+in-D
+
+↓
+
+in-B
+
+↓
+
+A
+
+⇑
+
+D
+
+∼
+
+B
+
+in-E
+
+∼
+
+∼
+
+E
+
+⇑
+
+6
+
+↑
+
+5
+
+4
+∼
+
+↑
+
+in-C
+
+↑
+
+C
+
+Figure 19: An unjustiﬁed solution found with the minimal support heuristics.
+
+14. First-Order Function Application
+
+Our next objective is to generalize the deﬁnition of function appliction in ﬁrst-order logic to
+functions with higher arities, as used already in special cases, and to prove formal properties of
+such deﬁntions.
+
+We will use vector notation all over. We ﬁx (cid:96), k, n ∈ N and consider ﬁrst-order deﬁnitions
+⊆ dom(Sn)(cid:96) ×dom(Sn)k for the Σ-structure
+F : V (cid:96) ×V k → F n
+S under consideration. For any m, we can lift the ﬁrst-order deﬁnition F to a ﬁrst-order deﬁnition
+Σ where F is applied m-times, such that for all sequences x1, . . . , x(cid:96),
+F m : V m(cid:96) × V mk → F n
+y1, . . . , yk ∈ V m:
+
+Σ that deﬁne a partial function F Sn
+
+F m(x1 . . . x(cid:96)y1 . . . yk) =def
+
+F (x1
+
+i . . . x(cid:96)
+
+i y1
+
+i . . . yk
+i )
+
+m
+(cid:94)
+
+For any ﬁrst-order deﬁnition G : V m(cid:96) → F n
+V mk → F n
+Σ such that for all y ∈ V mk:
+
+Σ, we introduce a ﬁrst-order deﬁnition F m(G) :
+
+i=1
+
+F m(G)(y) =def ∃x. G(x) ∧ F m(x, y)
+
+where x = (x1 . . . x(cid:96)) ∈ V m(cid:96) is some sequence of fresh variables. Note that fv (F m(G)(y)) = {y}
+so that the precise choice of x is irrelevant.
+
+Lemma 46. Let F : V (cid:96)+k → F n
+S. If the relation F Sn
+the relation (F m)Sn
+
+Σ and G : V m(cid:96) → F n
+
+Σ be ﬁrst-order deﬁnitions and S a Σ-structure
+⊆ dom(Sn)(cid:96)+k is a partial function of type dom(Sn)(cid:96) × dom(Sn)k then
+
+is a partial function of type dom(Sn)m(cid:96) × dom(Sn)mk such that:
+
+Proof Let x = x1 . . . x(cid:96) ∈ V m(cid:96) and y = y1 . . . yk ∈ V mk be sequences of variables such that no
+
+(F m)Sn
+
+(GSn
+
+) = F m(G)Sn
+
+35
+
+variables occurs twice in xy. Then:
+
+(F m)Sn
+
+(GSn
+
+) = {(F m)Sn
+
+(α(x)) | α ∈ n-solS(G(x))}
+
+= {α(cid:48)(y) | α(cid:48) ∈ n-solS(F m(xy)), α(cid:48)
+= {α(cid:48)(y) | α(cid:48) ∈ n-solS(G(x) ∧ F m(xy))}
+= {α(cid:48)(cid:48)(y) | α(cid:48)(cid:48) ∈ n-solS(∃x. G(x) ∧ F m(xy))}
+= F m(G)Sn
+
+|{x} ∈ n-solS(G(x))}
+
+For the previous last step note that for any α(cid:48) ∈ n-solS(G(x) ∧ F m(xy)) we can chose α(cid:48)(cid:48) as
+the restriction α(cid:48)
+|V\{x}. Conversely, for any α(cid:48)(cid:48) ∈ n-solS(∃x. G(x) ∧ F m(xy)) there must exist a
+solution α(cid:48) ∈ n-solS(G(x) ∧ F m(xy)) such that α(cid:48)(cid:48) is the restriction α(cid:48)
+
+|V\{x}.
+For the case k = 1 and (cid:96) = 1 Lemma 46 yields the following consequence.
+
+Proposition 47 ((cid:96) = 1 and k = 1). For any FO deﬁnition G : V m → F n
+sequence of variables y ∈ V m and Σ-structure S for which the relation F Sn
+of type dom(Sn) × dom(Sn):
+
+Σ and F : V × V → F n
+Σ,
+is a partial function
+
+F Sn
+
+◦ n-solS(G(y)) = n-solS(F m(G)(y))
+
+Proof From Lemmata 30 and 46:
+
+◦ n-solS(G(y))
+
+F Sn
+Lemma 30
+
+Lemma 46
+Lemma 30
+
+◦ {[y/s] | s ∈ GSn
+
+= F Sn
+= {[y/s] | s ∈ (F m)Sn
+= {[y/s] | s ∈ F m(G)Sn
+= n-solS(F m(G)(y))
+
+}
+(GSn
+}
+
+)}
+
+For the case of general (cid:96) and k = 1, Proposition 47 can be generalized as follows:
+
+Proposition 48 ((cid:96) ≥ 1 and k = 1). Let G : V m(cid:96) → F n
+Σ be a
+ﬁrst-order deﬁnition, and S a Σ-structure such that the relation F Sn
+is a partial function of type
+dom(Sn)(cid:96) × dom(Sn). Then for any y ∈ V m and fresh variable generators ν1, . . . , ν(cid:96) the sequence
+of variables ν(y) = ν1(y) . . . ν(cid:96)(y) satisﬁes:
+
+Σ and F : V (cid:96) × V → F n
+
+F Sn
+
+◦ ν-1(n-solS(G(ν(y)))) = n-solS(F m(G)(y))
+
+where ν-1(α)(y) = (α(ν1(y)), . . . , α(ν(cid:96)(y))) for all y ∈ V(y) and α : ∪(cid:96)
+
+i=1V(νi(y)) → dom(Sn).
+
+Proof Again from Lemmata 30 and 46, by generalizing and adpatation of the proof of Propo-
+sition 47:
+
+◦ ν-1(n-solS(G(ν(y))))
+
+F Sn
+Lemma 30
+
+Lemma 46
+Lemma 30
+
+◦ {ν-1[ν(y)/s] | s ∈ GSn
+
+}
+
+= F Sn
+= {[y/s] | s ∈ (F m)Sn
+= {[y/s] | s ∈ F m(G)Sn
+= n-solS(F m(G)(y))
+
+)}
+
+(GSn
+}
+
+For general k ≥ 1 and l = 1, Lemma 46 yields the following generalization of Proposition 47:
+
+Proposition 49 ((cid:96) = 1 and k ≥ 1). For any ﬁrst-order deﬁnition G : V m → F n
+Σ and any structure S such that the relation F Sn
+V × V k → F n
+dom(Sn) × dom(Sn)k, and any sequences of fresh variables y, y1, . . . , yk ∈ V m:
+
+Σ and F :
+is a partial function of type
+
+(F m)Sn
+
+◦ n-solS(G(y)) = {[y/(α(y1), . . . , α(yk)] | α ∈ n-solS(F m(G)(y1, . . . , yk))}
+
+36
+
+Proof This is another generalization of the proof of Proposition 47:
+
+◦ n-solS(G(y))
+
+F Sn
+Lemma 30
+
+◦ {[y/s] | s ∈ GSn
+
+= F Sn
+= {[y/(s1, . . . , sk)] | (s1, . . . , sk) ∈ (F m)Sn
+= {[y/(s1, . . . , sk)] | (s1, . . . , sk) ∈ F m(G)Sn
+= {[y/(α(y1), . . . , α(yk)] | α ∈ n-solS(F m(G)(y1, . . . , yk))}
+
+(GSn
+)}
+
+)}
+
+}
+
+Lemma 46
+Lemma 30
+
+15. Conclusion
+
+We presented a new algorithm for computing the diﬀerence abstraction over ∆3 and ∆6 of the
+solution set of a system of linear equation systems with nonlinear constraints on the diﬀerence
+abstractions. The algorithm relies on an exact rewriting of linear equation systems with respect
+to the boolean abstraction, which can be based on elementary modes. Our reduction uses
+decompositions of the diﬀerence abstractions h∆3 and h∆6 into the boolean abstractions and
+functions on pair algebra R2
++ that can be deﬁned in ﬁrst-order logic with pairs. Eventually,
+we can compute the diﬀerence abstractions for systems of linear equation with constraints by
+ﬁnite domain constraint programming. We implemented our algorithm and applied it to change
+prediction of reaction networks with partial kinetic information in systems biology.
+
+We also presented the minimal support heuristics, for approximating the diﬀerence abstrac-
+tion over ∆3 and ∆6 of the solution set of a system of linear equation systems with nonlinear
+constraints. It turns out that the minimal support heuristics is exact for the prime application of
+change prediction while requiring much less computation time. It was diﬃcult to ﬁnd a counter-
+example shown that the minimal support heuristics is not always exact. We ﬁnally succeeded in
+for the case of ∆6 by randomly generating and testing reaction networks. In the case of ∆3 the
+question remains open though.
+
+We believe that the presented algorithms are fundamental to develop better change prediction
+methods in the future. For this, it is important to not only deal with cycles in the metabolic
+parts of reaction networks but also deal with cycles through the regulatory part. An important
+challeange in practice is to provide multiple changes prediction. The current approaches, however,
+are not suﬃciently precise to do so. This is due to the lack of kinetic information. Furthermore,
+the current approach can only abstract the diﬀerences of steady states, but not account for their
+relationship to initial states.
+
+In the longer run, it would be of interest to obtain more quantitative predictions and not only
+qualitative predictions. But this would require more precise kinetic information in the reaction
+networks and to use more reﬁned diﬀerence abstractions for the abstract interpretation.
+
+Acknowledgements. We thank the anonymous reviewers of this journal version and also the
+reviewers of the CMSB’2019 version for their helpful and constructive feedback.
+
+References
+
+[1] Emilie Allart, Joachim Niehren, and Cristian Versari. Computing diﬀerence abstractions of
+metabolic networks under kinetic constraints. In Luca Bortolussi and Guido Sanguinetti,
+editors, Computational Methods in Systems Biology - 17th International Conference, CMSB
+2019, Trieste, Italy, September 18-20, 2019, Proceedings, volume 11773 of Lecture Notes
+in Computer Science, pages 266–285. Springer, 2019. doi: 10.1007/978-3-030-31304-3\ 14.
+URL https://doi.org/10.1007/978-3-030-31304-3_14.
+
+37
+
+[2] Jeﬀrey D Orth, Ines Thiele, and Bernhard O Palsson. What is ﬂux balance analysis? Nature
+
+biotechnology, 28(3):245–248, 2010.
+
+[3] Jason A Papin, Joerg Stelling, Nathan D Price, Steﬀen Klamt, Stefan Schuster, and Bern-
+hard O Palsson. Comparison of network-based pathway analysis methods. Trends in biotech-
+nology, 22(8):400–405, 2004.
+
+[4] Martin Feinberg. Chemical reaction network structure and the stability of complex isother-
+mal reactors. Chemical Engineering Science, 42(10):2229 – 2268, 1987. ISSN 0009-2509.
+doi: http://dx.doi.org/10.1016/0009-2509(87)80099-4. URL http://www.sciencedirect.
+com/science/article/pii/0009250987800994.
+
+[5] Laurence Calzone, Francois Fages, and Sylvain Soliman. BIOCHAM: an environment for
+modeling biological systems and formalizing experimental knowledge. Bioinformatics, 22
+(14):1805–1807, July 2006. doi: 10.1093/bioinformatics/btl172. URL http://dx.doi.org/
+10.1093/bioinformatics/btl172.
+
+[6] Stefan Hoops, Sven Sahle, Ralph Gauges, Christine Lee, J¨urgen Pahle, Natalia Simus, Mu-
+dita Singhal, Liang Xu, Pedro Mendes, and Ursula Kummer. Copasi—a complex pathway
+simulator. Bioinformatics, 22(24):3067–3074, 2006.
+
+[7] Fran¸cois Fages, Steven Gay, and Sylvain Soliman. Inferring reaction systems from ordinary
+diﬀerential equations. Theor. Comput. Sci., 599:64–78, 2015. doi: 10.1016/j.tcs.2014.07.032.
+URL http://dx.doi.org/10.1016/j.tcs.2014.07.032.
+
+[8] Joachim Niehren, Cristian Versari, Mathias John, Fran¸cois Coutte, and Philippe Jacques.
+Predicting Changes of Reaction Networks with Partial Kinetic Information. BioSystems,
+149:113–124, July 2016. URL https://hal.inria.fr/hal-01239198.
+
+[9] Fran¸cois Coutte, Joachim Niehren, Debarun Dhali, Mathias John, Cristian Versari, and
+Philippe Jacques. Modeling Leucine’s Metabolic Pathway and Knockout Prediction Im-
+proving the Production of Surfactin, a Biosurfactant from Bacillus Subtilis. Biotechnol-
+ogy Journal, 10(8):1216–34, August 2015. doi: 10.1002/biot.201400541. URL https:
+//hal.inria.fr/hal-01153704.
+
+[10] Mathias John, Mirabelle Nebut, and Joachim Niehren. Knockout Prediction for Reaction
+Networks with Partial Kinetic Information. In 14th International Conference on Veriﬁcation,
+Model Checking, and Abstract Interpretation, Rom, Italy, January 2013. URL http://hal.
+inria.fr/hal-00692499.
+
+[11] Kim Marriott, Peter J. Stuckey, and Mark Wallace. Constraint logic programming.
+
+In
+Francesca Rossi, Peter van Beek, and Toby Walsh, editors, Handbook of Constraint Pro-
+gramming, volume 2 of Foundations of Artiﬁcial Intelligence, pages 409–452. Elsevier, 2006.
+doi: 10.1016/S1574-6526(06)80016-7. URL https://doi.org/10.1016/S1574-6526(06)
+80016-7.
+
+[12] Nicholas Nethercote, Peter J. Stuckey, Ralph Becket, Sebastian Brand, Gregory J. Duck, and
+Guido Tack. Minizinc: Towards a standard CP modelling language. In Christian Bessiere,
+editor, Principles and Practice of Constraint Programming - CP 2007, 13th International
+Conference, CP 2007, Providence, RI, USA, September 23-27, 2007, Proceedings, volume
+4741 of Lecture Notes in Computer Science, pages 529–543. Springer, 2007. doi: 10.1007/
+978-3-540-74970-7\ 38. URL https://doi.org/10.1007/978-3-540-74970-7_38.
+
+38
+
+[13] Julien Gagneur and Steﬀen Klamt. Computation of elementary modes: a unifying framework
+
+and the new binary approach. BMC bioinformatics, 5(1):1, 2004.
+
+[14] Dr.J¨urgen Zanghellini, David E. Ruckerbauer, Michael Hanscho, and Christian Jungreuth-
+mayer. Elementary ﬂux modes in a nutshell: Properties, calculation and applications.
+Biotechnology Journal, pages 1009–1016, 2013.
+
+[15] Emilie Allart, Joachim Niehren, and Cristian Versari. Reaction Networks to Boolean Net-
+works: Exact Boolean Abstraction for Linear Equation Systems. In Preprint, May 2021.
+URL https://hal.archives-ouvertes.fr/hal-02279942.
+
+[16] Narendra Karmarkar. A new polynomial-time algorithm for linear programming. Comb.,
+URL https://doi.org/10.1007/
+
+10.1007/BF02579150.
+
+doi:
+
+4(4):373–396, 1984.
+BF02579150.
+
+[17] K. Lotz, A. Hartmann, E. Grafahrend-Belau, and B.H. Schreiber, F.and Junker. Elemen-
+tary ﬂux modes, ﬂux balance analysis, and their application to plant metabolism. Plant
+Metabolism. Methods in Molecular Biology (Methods and Protocols), 2014.
+
+[18] Costas D. Maranas and Ali R. Zomorrodi. Flux Balance Analysis and LP Problems,
+10.
+chapter 3, pages 53–80. Wiley-Blackwell, 2016.
+1002/9781119188902.ch3. URL https://onlinelibrary.wiley.com/doi/abs/10.1002/
+9781119188902.ch3.
+
+ISBN 9781119188902.
+
+doi:
+
+[19] Giuseppe Facchetti and Claudio Altaﬁni. Partial inhibition and bilevel optimization in ﬂux
+
+balance analysis. BMC Bioinformatics, pages 344–344, 2013.
+
+[20] Patrick Cousot and Radhia Cousot. Systematic design of program analysis frameworks. In
+
+POPL, pages 269–282, 1979.
+
+[21] Fran¸cois Fages and Sylvain Soliman. Abstract interpretation and types for systems biology.
+
+Theor. Comput. Sci., 403(1):52–70, 2008.
+
+[22] Vincent Danos, J´erˆome Feret, Walter Fontana, Russell Harmer, and Jean Krivine. Abstract-
+ing the diﬀerential semantics of rule-based models: Exact and automated model reduction.
+In LICS, pages 362–381. IEEE Computer Society, 2010. ISBN 978-0-7695-4114-3.
+
+[23] Stefan Schuster, Thomas Dandekar, and David A Fell. Detection of elementary ﬂux modes
+in biochemical networks: a promising tool for pathway analysis and metabolic engineering.
+Trends in biotechnology, 17(2):53–60, 1999.
+
+[24] Kenneth D. Forbus. Qualitative reasoning.
+
+In Allen B. Tucker, editor, The Computer
+Science and Engineering Handbook, pages 715–733. CRC Press, 1997. ISBN 0-8493-2909-4.
+
+[25] David Avis. A revised implementation of the reverse search vertex enumeration algorithm.
+
+In Polytopes—combinatorics and computation, pages 177–198. Springer, 2000.
+
+[26] Marco Terzer and J¨org Stelling. Large-scale computation of elementary ﬂux modes with bit
+
+pattern trees. Bioinformatics, 24(19):2229–2235, 2008.
+
+[27] Komei Fukuda and Alain Prodon. Double description method revisited. In Franco-Japanese
+and Franco-Chinese Conference on Combinatorics and Computer Science, pages 91–111.
+Springer, 1995.
+
+[28] M Troﬀaes. pycddlib-a python wrapper for komei fukudals cddlib, 2018.
+
+39
+
+[29] BioComputing. Biocomputing’s network-graph tool. http://researchers.lille.inria.
+
+fr/~niehren/BioComputing/Network-Graph/doc.html. 2018-07-10.
+
+40
+
+in-Thr
+in-Thr
+
+Thr
+Thr
+
+41
+41
+
+Akb
+Akb
+
+20
+20
+
+IlvA
+IlvA
+
+Ile
+Ile
+
+21
+21
+
+22
+22
+
+Val
+Val
+
+17
+17
+
+15
+15
+
+Gtp
+Gtp
+
+in-Gtp
+in-Gtp
+
+CodY
+CodY
+
+IlvD
+IlvD
+
+25
+25
+
+BSCodY
+BSCodY
+
+1
+1
+
+in-Pyr
+in-Pyr
+
+Pyr
+Pyr
+
+IlvBH
+IlvBH
+
+23
+23
+
+BSCcpa
+BSCcpa
+
+77
+77
+
+27
+27
+
+IlvC
+IlvC
+
+24
+24
+
+PIlv−Leu
+PIlv−Leu
+
+2
+2
+
+CcpA
+CcpA
+
+30
+30
+
+LeuBCD
+LeuBCD
+
+Keta
+Keta
+
+38
+38
+
+37
+37
+
+Tbox
+Tbox
+
+9
+9
+
+14
+14
+
+LeuA
+LeuA
+
+40
+40
+
+BSTrnA
+BSTrnA
+
+7
+7
+
+28
+28
+
+Ketb
+Ketb
+
+33
+33
+
+39
+39
+
+Leu
+Leu
+
+31
+31
+
+Ketc
+Ketc
+
+34
+34
+
+Acyl−Coa
+Acyl−Coa
+
+12
+12
+
+Ile
+Ile
+
+13
+13
+
+TnrA
+TnrA
+
+Val
+Val
+
+BkdR
+BkdR
+
+16
+16
+
+18
+18
+
+3
+3
+
+out-Acyl − Coa
+out-Acyl − Coa
+
+BkL
+BkL
+
+11
+11
+
+26
+26
+
+36
+36
+
+45
+45
+
+Glu
+Glu
+
+OxoGlu
+OxoGlu
+
+OPBkL−Bcd
+OPBkL−Bcd
+
+Bcd
+Bcd
+
+10
+10
+
+4
+4
+
+29
+29
+
+32
+32
+
+35
+35
+
+Ile
+Ile
+
+Val
+Val
+
+Leu
+Leu
+
+in-Glu
+in-Glu
+
+out-Ile
+out-Ile
+
+out-Val out-Leu
+out-Val out-Leu
+
+YwaA+YbgE
+YwaA+YbgE
+
+19
+19
+out-OxoGlu
+out-OxoGlu
+
+47
+47
+
+YwaA
+YwaA
+
+YbgE
+YbgE
+
+46
+46
+
+6
+6
+
+5
+5
+
+Figure 20: Graphical representation of the model that represents a part of the metabolism of the bacteria B.
+Subtilis, the branched chain amino-acid: Isoleucine, Leucine and Valine.
+
+41
+
+Appendix A. Proofs for Section 7 (First-Order Logic)
+
+Lemma 11. For any e ∈ EΣ, Σ-algebra S, n ≥ 1, and β : V → dom(S)n with V(φ) ⊆ V ⊆ V:
+
+β,Sn
+
+=
+
+e
+
+(cid:74)
+
+(cid:75)
+
+(cid:74)
+
+(Π1(e), . . . , Πn(e))
+
+β,S
+
+(cid:75)
+
+Proof. By induction on the structure of expressions in EΣ.
+Cas of constants c ∈ C.
+
+c
+(cid:75)
+Cas of variables x ∈ V.
+
+(cid:74)
+
+β,Sn
+
+= cSn
+
+= (cS, . . . , cS) =
+
+(Π1(c), . . . , Πn(c))
+(cid:75)
+
+(cid:74)
+
+β,S
+
+(cid:74)
+Cas of expressions e1 (cid:12) e2 where e1, e2 ∈ EΣ and (cid:12) ∈ F (2).
+
+(cid:74)
+
+= β(x) = β((π1(x), . . . , πn(x))) =
+
+x
+
+β,Sn
+(cid:75)
+
+(Π1(x), . . . , Πn(x))
+(cid:75)
+
+β,S
+
+β,Sn
+
+e1 (cid:12) e2
+(cid:74)
+(cid:75)
+ind.hyp.
+
+= ∪{(s1 (cid:12)Sn
+= ∪{(s1 (cid:12)Sn
+=
+
+s2) | sj ∈
+s2) | sj ∈
+
+ej
+(cid:74)
+β,S}
+(Π1(ej), . . . , Πn(ej))
+(cid:75)
+(cid:74)
+β,S
+(Π1(e1) (cid:12)S Π1(e2), . . . , Πn(e1) (cid:12)S Πn(e2)
+(cid:75)
+(cid:74)
+
+β,Sn
+
+}
+
+(cid:75)
+
+Proposition 12. For any φ ∈ FΣ, Σ-algebra S, and n ≥ 1: solSn
+
+(φ) = n-solS((cid:104)φ(cid:105)n).
+
+Proof. By induction on the structure of formulas in FΣ. The base case of Σ-equations follows
+essentially from Lemma 11. Let β be an assignment variables β : V → dom(S)n with V ⊆ V.
+Cas e .= e(cid:48) where e, e(cid:48) ∈ EΣ.
+
+(e .= e(cid:48))
+
+solSn
+= {β |
+by prev. claim = {β |
+= {β |
+= n-solS((cid:104)e .= e(cid:48)(cid:105)n)
+(cid:75)
+
+e .= e(cid:48)
+(cid:86)n
+(cid:74)
+(cid:104)e .= e(cid:48)(cid:105)n
+(cid:74)
+(cid:74)
+
+β,Sn
+
+(cid:75)
+
+i=1 Πi(e) .= Πi(e(cid:48))
+(cid:75)
+β,S = 1}
+
+= 1}
+
+β,S = 1}
+
+Cas φ ∧ φ(cid:48) where φ, φ(cid:48) ∈ FΣ.
+
+solSn
+
+ind.hyp.
+
+β,Sn
+φ(cid:48)
+
+(φ ∧ φ(cid:48)) = {β |
+φ ∧ φ(cid:48)
+= 1}
+(cid:75)
+β,Sn
+β,Sn
+= {β |
+= 1}
+φ
+∧
+(cid:75)
+(cid:74)
+(cid:75)
+β,S = 1}
+(cid:104)φ(cid:48)(cid:105)n
+β,S ∧
+(cid:104)φ(cid:105)n
+= {β |
+(cid:74)
+(cid:75)
+(cid:75)
+β,S = 1}
+(cid:104)φ ∧ φ(cid:48)(cid:105)n
+= {β |
+(cid:75)
+= n-solS((cid:104)φ ∧ φ(cid:48)(cid:105)n)
+
+(cid:74)
+(cid:74)
+(cid:74)
+(cid:74)
+
+Cas ¬φ were φ ∈ FΣ.
+
+solSn
+
+(¬φ) = {β |
+
+ind.hyp.
+
+β,Sn
+β,Sn
+
+= 1}
+(cid:74)
+= 1}
+= {β | ¬
+β,S = 1}
+= {β | ¬
+(cid:75)
+β,S = 1}
+= {β |
+(cid:75)
+(cid:74)
+β,S = 1}
+= {β |
+(cid:75)
+(cid:74)
+= n-solS((cid:104)¬φ(cid:105)n)
+
+¬φ
+(cid:75)
+φ
+(cid:74)
+(cid:75)
+(cid:104)φ(cid:105)n
+(cid:74)
+¬(cid:104)φ(cid:105)n
+(cid:104)¬φ(cid:105)n
+
+42
+
+Cas ∃x.φ were φ ∈ FΣ.
+solSn
+
+(∃x. φ) = {β |
+
+∃x. φ
+
+β,Sn
+
+= 1}
+
+ind.hyp.
+
+(cid:74)
+
+(cid:75)
+= {β | exists s ∈ dom(S)n.
+= {β | exists s ∈ dom(S)n.
+∃x. (cid:104)φ(cid:105)n
+β,S = 1}
+= {β |
+(cid:75)
+β,S = 1}
+(cid:104)∃x. φ(cid:105)n
+= {β |
+(cid:75)
+= n-solS((cid:104)∃x. φ(cid:105)n)
+
+(cid:74)
+(cid:74)
+
+φ
+(cid:74)
+(cid:75)
+(cid:104)φ(cid:105)n
+(cid:74)
+
+β[x/s],Sn
+
+= 1}
+
+β[x/s],S = 1}
+
+(cid:75)
+
+Lemma 14. For any expression o ∈ On
+V(o) ⊆ V ⊆ V we have
+
+Σ and variable assignment β : V → dom(S)n with
+β,S.
+
+o
+
+˜ν(o)
+(cid:74)
+
+S,ν(β) =
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+
+Proof. By induction on the structure of Σ-expressions o ∈ On
+Σ.
+Cas of constants c ∈ C.
+
+(cid:74)
+.
+πi(x) where x ∈ V and 1 ≤ i ≤ n.
+
+˜ν(c)
+(cid:75)
+
+Cas
+
+S,ν(β) =
+
+β,S
+
+c
+(cid:75)
+
+(cid:74)
+
+.
+πi(x))
+
+˜ν(
+
+(cid:74)
+
+(cid:75)
+
+S,ν(β) = {ν(β)(νi(x))}
+
+= {πi(β(x))}
+β,S
+=
+
+o
+
+(cid:74)
+
+(cid:75)
+
+Cas o1 (cid:12) o2 where o1, o2 ∈ On
+
+Σ and (cid:12) ∈ F (2).
+S,ν(β) =
+
+˜ν(o1 (cid:12) o2)
+(cid:75)
+
+(cid:74)
+ind.hyp.
+
+Cas
+
+.
+πi(o1, . . . , on) where o1, . . . , on ∈ On
+Σ.
+
+S,ν(β)
+
+(cid:74)
+
+˜ν(o1) (cid:12) ˜ν(o2)
+= ∪{(s1 (cid:12)S s2 | si ∈
+= ∪{(s1 (cid:12)S s2 | si ∈
+=
+
+o1 (cid:12) o2
+
+β,S
+
+(cid:75)
+
+(cid:74)
+
+(cid:75)
+
+S,ν(β)}
+
+˜ν(oi)
+(cid:75)
+β,S}
+oi
+
+(cid:75)
+
+(cid:74)
+(cid:74)
+
+.
+πi(o1, . . . on))
+(cid:75)
+
+˜ν(
+(cid:74)
+ind.hyp.
+
+S,ν(β) =
+=
+=
+
+(cid:74)
+(cid:74)
+(cid:74)
+
+S,ν(β)
+
+˜ν(oi)
+(cid:75)
+β,S
+oi
+.
+πi(o1, . . . on)
+(cid:75)
+
+(cid:75)
+
+β,S
+
+Claim 16. For any variable assignment β : V → dom(S)n with V ⊆ V and formula ψ ∈ F n
+have
+
+S,ν(β) =
+
+ψ
+
+Σ we
+
+˜ν(ψ)
+(cid:75)
+
+(cid:74)
+
+β,S.
+(cid:75)
+
+(cid:74)
+
+Proof. The proof of the claim is by induction on the structure of Σ-formulas in F n
+Σ.
+Cas o .= o(cid:48) where o, o(cid:48) ∈ On
+Σ.
+o .= o(cid:48)
+(cid:74)
+Lemma 14
+
+S,ν(β) (cid:54)= ∅
+
+(cid:75)
+
+β,S = 1 ⇔
+⇔
+⇔
+⇔
+
+β,S ∩
+o
+o
+(cid:74)
+(cid:75)
+(cid:75)
+S,ν(β) ∩
+˜ν(o)
+˜ν(o) .= ˜ν(o(cid:48))
+(cid:75)
+˜ν(o .= o(cid:48))
+(cid:75)
+
+β,S (cid:54)= ∅
+˜ν(o)
+(cid:74)
+(cid:75)
+S,ν(β) = 1
+S,ν(β) = 1
+(cid:75)
+
+(cid:74)
+(cid:74)
+(cid:74)
+(cid:74)
+
+Cas ψ ∧ ψ(cid:48) where ψ, ψ(cid:48) ∈ F n
+Σ.
+ψ ∧ ψ(cid:48)
+(cid:74)
+(cid:75)
+ind.hyp
+
+β,S = 1 ⇔
+⇔
+⇔
+⇔
+
+β,S ∧
+
+ψ(cid:48)
+ψ
+(cid:74)
+(cid:74)
+(cid:75)
+(cid:75)
+S,ν(β) ∧
+˜ν(ψ)
+(cid:75)
+(cid:74)
+˜ν(ψ) ∧ ˜ν(ψ)(cid:48)
+(cid:74)
+˜ν(ψ ∧ ψ(cid:48))
+(cid:75)
+(cid:74)
+
+β,S = 1
+S,ν(β) = 1
+˜ν(ψ)(cid:48)
+(cid:75)
+(cid:74)
+S,ν(β) = 1
+S,ν(β) = 1
+
+(cid:75)
+
+43
+
+Cas ¬ψ where ψ ∈ F n
+Σ.
+
+Cas ∃x.ψ where ψ ∈ F n
+Σ.
+
+β,S = 1
+
+¬ψ
+(cid:74)
+(cid:75)
+ind.hyp.
+
+β,S = 1 ⇔ ¬
+ψ
+(cid:75)
+(cid:74)
+˜ν(ψ)
+⇔ ¬
+(cid:74)
+¬˜ν(ψ)
+⇔
+˜ν(¬ψ)
+⇔
+
+S,ν(β) = 1
+(cid:75)
+S,ν(β) = 1
+(cid:75)
+S,ν(β) = 1
+(cid:75)
+
+(cid:74)
+(cid:74)
+
+∃x.ψ
+(cid:74)
+ind.hyp.
+
+(cid:75)
+
+S,β[x/s] = 1
+
+β,S = 1 ⇔ exist s ∈ dom(S)n.
+(cid:74)
+⇔ exist s ∈ dom(S)n.
+(cid:74)
+⇔ exist s1 ∈ dom(S) . . . sn ∈ dom(S).
+(cid:74)
+⇔
+⇔
+
+ψ
+(cid:75)
+˜ν(ψ)
+(cid:75)
+S,ν(β) = 1
+
+∃ν1(x) . . . ∃νn(x).˜ν(ψ)
+(cid:75)
+∃x.˜ν(ψ)
+(cid:75)
+
+S,ν(β) = 1
+
+(cid:74)
+(cid:74)
+
+S,ν(β[x/s]) = 1
+
+S,ν(β[νi(x)/si]) = 1
+
+ψ
+
+(cid:75)
+
+Appendix B. Proofs for Section 8 (Diﬀerence Abstraction)
+
+Lemma 21. Let h : S(cid:48) → ∆ be a Σ-abstraction and α : V → dom(S(cid:48)) and a variable assignment.
+e
+For any expression e ∈ EΣ with V (e) ⊆ V : h(
+(cid:75)
+Proof. The proof is by induction on the structure of expressions e ∈ EΣ. Let α be a variable
+assignment into dom(S(cid:48)). For any expressions e = e1 (cid:12) e2 where (cid:12) ∈ F (2) we have:
+
+S(cid:48),α) ⊆
+
+∆,h◦α.
+
+e
+(cid:74)
+
+(cid:74)
+
+(cid:75)
+
+e1 (cid:12) e2
+
+h(cid:48)(
+
+(cid:74)
+
+(cid:75)
+
+S(cid:48),α (cid:12)S(cid:48)
+S(cid:48),α) = h(cid:48)(
+S(cid:48),α)
+e1
+e2
+(cid:74)
+(cid:75)
+(cid:75)
+S(cid:48),α) (cid:12)∆ h(cid:48)(
+⊆ h(cid:48)(
+e1
+e2
+(cid:74)
+(cid:75)
+(cid:74)
+(cid:75)
+∆,h◦α
+∆,h◦α (cid:12)∆
+⊆
+e1
+(cid:74)
+(cid:75)
+∆,h◦α
+e1 (cid:12) e2
+=
+
+(cid:74)
+e2
+
+(cid:75)
+
+S(cid:48),α) homomorph.
+
+ind. hyp.
+
+(cid:74)
+(cid:74)
+For any expression e = x ∈ V we have:
+
+(cid:75)
+
+For constant expressions e = c ∈ C we have:
+
+S(cid:48),α) = h(cid:48)({α(x)}) =
+
+h(cid:48)(
+
+x
+(cid:74)
+
+(cid:75)
+
+∆,h◦α
+
+x
+
+(cid:74)
+
+(cid:75)
+
+S(cid:48),α) = h(cS(cid:48)
+
+) = c∆ =
+
+h(cid:48)(
+
+c
+(cid:75)
+
+(cid:74)
+
+∆,h◦α
+
+c
+(cid:75)
+
+(cid:74)
+
+homomorphism
+
+44
+
+

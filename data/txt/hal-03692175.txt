@@ -1,0 +1,1849 @@
+Data Leakage Mitigation of User-Defined Functions on
+Secure Personal Data Management Systems
+Robin Carpentier, Iulian Sandu Popa, Nicolas Anciaux
+
+To cite this version:
+
+Robin Carpentier, Iulian Sandu Popa, Nicolas Anciaux. Data Leakage Mitigation of User-Defined
+SSDBM 2022 - 34th International
+Functions on Secure Personal Data Management Systems.
+Conference on Scientific and Statistical Database Management, Jul 2022, Copenhagen, Denmark.
+￿10.1145/3538712.3538741￿. ￿hal-03692175￿
+
+HAL Id: hal-03692175
+
+https://inria.hal.science/hal-03692175
+
+Submitted on 9 Jun 2022
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Data Leakage Mitigation of User-Defined Functions on Secure
+Personal Data Management Systems
+
+Robin Carpentier
+Univ. Versailles St-Q.-en-Yvelines
+Versailles, France
+robin.carpentier@uvsq.fr
+
+Iulian Sandu Popa
+Univ. Versailles St-Q.-en-Yvelines
+Versailles, France
+iulian.sandu-popa@uvsq.fr
+
+Nicolas Anciaux
+Inria Saclay Île-de-France
+Palaiseau, France
+nicolas.anciaux@inria.fr
+
+ABSTRACT
+Personal Data Management Systems (PDMSs) arrive at a rapid pace
+providing individuals with appropriate tools to collect, manage
+and share their personal data. At the same time, the emergence of
+Trusted Execution Environments (TEEs) opens new perspectives in
+solving the critical and conflicting challenge of securing users’ data
+while enabling a rich ecosystem of data-driven applications. In this
+paper, we propose a PDMS architecture leveraging TEEs as a basis
+for security. Unlike existing solutions, our architecture allows for
+data processing extensiveness through the integration of any user-
+defined functions, albeit untrusted by the data owner. In this context,
+we focus on aggregate computations of large sets of database objects
+and provide a first study to mitigate the very large potential data
+leakage. We introduce the necessary security building blocks and
+show that an upper bound on data leakage can be guaranteed to
+the PDMS user. We then propose practical evaluation strategies
+ensuring that the potential data leakage remains minimal with a
+reasonable performance overhead. Finally, we validate our proposal
+with an Intel SGX-based PDMS implementation on real data sets.
+
+1 INTRODUCTION
+Successive steps have been taken in recent years to give individuals
+new ways to retrieve and use their personal data. In particular, the
+introduction of the right to data portability [20] allows individuals
+to retrieve their personal data from different sources (e.g., health,
+energy, GPS tracks, banks). Personal Data Management Systems
+(PDMSs) are emerging as a technical corollary, providing mech-
+anisms for automatic data collection and the ability to use data
+and share computed information with applications. This is giving
+rise to new PDMS products such as Digi.me, Cozy Cloud, Personal
+Infomediaries [27], Solid/PODS [40] to name a few (see e.g., [7]
+for a recent survey), and to large initiatives such as Mydata.org
+supported by data protection agencies.
+
+Context. PDMSs introduce a new paradigm for data-driven
+computations where specialized computation functions, written
+by third-parties, can be sent to the PDMS for execution. Only the
+result of the computation (but not the raw personal data used as
+input) is shared with the third-party. This paradigm is in contrast
+to traditional solutions, where the user’s personal data is sent to
+a third-party application or service that performs the required
+computation. The example below illustrates this new paradigm.
+
+Figure 1: PDMS computation scenario (’Energy’)
+
+’Energy’ running example. An energy supplier wishes to offer
+services, precisely calibrated according to the energy consump-
+tion of its future customers. In order to establish a tailor-made
+offer, the provider needs to evaluate different statistical compu-
+tations on the customer’s consumption. Thanks to their PDMS
+offering confidentiality guarantees and a smart meter, customers
+agree to disclose these statistics but not their detailed consump-
+tion, and thus install the function sent by the supplier. The attesta-
+tions provided by the PDMS even allow the supplier to commit to
+a quote since they obtain guarantees on the computation made.
+
+This scenario is challenging since it calls for (i) extensiveness to
+ensure suppliers that ad hoc function code necessary to evaluate
+the desired results can be specified and used for their computation,
+and (ii) security to ensure customers that their detailed personal
+data is not disclosed to third parties (including their future supplier)
+outside of the sphere of control of their PDMS. Several similar
+scenarios are realistic, in other contexts than energy, to establish
+service offers based on statistical analysis of historical personal
+factual data related to a user, e.g., health services (based on medical
+and prescription history), car insurance (GPS traces), banking or
+financial services (bank records) or ecological services (ecological
+bonus based on mobility history).
+
+Objective. Our goal in this paper is to solve this conflict between
+extensiveness and security for processing functions dealing with
+large volumes of personal data (typically, aggregation functions),
+whose code, defined by a third-party application querying the PDMS
+called App, is evaluated in the PDMS environment but cannot be
+considered fully trusted from the point of view of the PDMS user
+(owner of the data and of the PDMS). More precisely, we focus
+on controlling potential information leakage in legitimate query
+results during successive executions of such functions.
+
+EnergytracesComputeenergyconsumption28personaldatabaseEnergyin KW-h(on givenperiod)User-controlledsideQueries/resultsHealthInsuranceEnergyConference’17, July 2017, Washington, DC, USA
+
+Robin Carpentier, Iulian Sandu Popa, and Nicolas Anciaux
+
+Limitations of existing approaches. Traditional DBMSs sup-
+port user-defined functions (UDFs) to ensure extensiveness of com-
+putations. But their security relies on administrators, e.g., check-
+ing/auditing UDF code and their semantics. In contrast, a layman
+PDMS user cannot endorse this task nor rely on third-party admin-
+istrators. The UDF code being actually implemented by an external
+App, it should be considered untrusted to the PDMS user. Fur-
+thermore, having authorized access to large volumes of personal
+data and the ability to externalize results to third-party App could
+raise privacy concerns and even be perceived as a risk of mass
+surveillance for PDMS users. An alternative approach is to employ
+information flow analysis techniques [33, 39, 41] to detect data leak-
+age. But existing work essentially guarantees a non-interference
+property between the output of the computation and the sensitive
+inputs, which is not applicable to functions whose intrinsic goal
+is to produce aggregate results that depend on all sensitive inputs.
+Another approach would be to use anonymization (e.g., differential
+privacy [17, 38]) to protect the input of the computed function,
+but this method is not generic thus undermining the extensiveness
+property, and can hardly preserve result accuracy. Similarly, em-
+ploying secure multiparty cryptographic computation techniques
+can hurt genericity (e.g., semi-homorphic encryption [19]) or per-
+formance (e.g., fully homomorphic encryption [21]), and cannot
+completely solve the problem of data leakage through legitimate
+results computed by untrusted code.
+
+Proposed approach. We resort to a security model where trust
+relies on hardware properties provided by Trusted Execution Envi-
+ronments (TEEs), such as Intel SGX [14] or ARM TrustZone [35],
+and sandboxing techniques within enclaves, like Ryoan [28] or SGX-
+Jail [42]. Our approach consists in considering split execution tech-
+niques [11] between a set of ’data tasks’ within sandboxed enclaves
+running untrusted UDF code on partitions of the input dataset
+to ensure extensiveness, and an isolated ’core’ enclave running a
+trusted PDMS engine in charge of orchestrating the evaluation to
+mitigate personal data leakage and ensure security.
+
+Contributions. We rely on [11] which formalizes the threat and
+computation models adopted in the PDMS context and introduces
+three security building blocks to bound the information leakage
+from user-defined computation results on large personal datasets. In
+this paper, we propose a set of execution strategies combining these
+building blocks to conciliate good performance and information
+leakage mitigation. Then, we validate our proposal using represen-
+tative user-defined computations over two real-world datasets, on
+an SGX-based PDMS prototype platform.
+
+The paper is organized as follows. Section 2 introduces the main
+components of the PDMS and the security properties considered.
+Section 3 introduces our computing and threat models and formu-
+lates the problem. Section 4 provides the security building blocks
+on which our proposal is based, analyzes their impact on informa-
+tion control and identifies an upper bound for information leakage
+at computation time. Section 5 gradually presents our execution
+strategies to mitigate information leakage while respecting good
+performance. Experiments are conducted in Section 6. Related work
+is presented in Section 7 and Section 8 concludes.
+
+2 EXTENSIVE AND SECURE PDMS
+We first present the PDMS architecture proposed in [7], to reconcile
+extensiveness and security. Next, we present the security properties
+we consider for the elements of this architecture preliminarily intro-
+duced in [10]. This background section is needed to formulate the
+problem (next section). We refer the reader to [7] for details about
+the logical architecture and to [12] for a concrete PDMS instance
+on Intel SGX.
+
+2.1 Architecture Outline
+Designing a PDMS architecture that offers security and extensive-
+ness as defined above is a significant challenge due to a fundamental
+tension: security requires trusted code and environment to manip-
+ulate data, while extensiveness relies on user-defined, and thus
+potentially untrusted, code. We proposed in [7] a three-layers logi-
+cal architecture to handle this tension, where Applications (Apps)
+on which no security assumptions are made, communicate with a
+Secure Core (Core) implementing basic operations on personal data,
+extended with Data Tasks (Data tasks) isolated from the Core and
+running user-defined code (see Figure 2), as described below:
+
+Core. The Core is a secure subsystem that is a Trusted Com-
+puting Base (TCB). It is ideally minimal, inextensible śpotentially
+proven correct by formal methodsś and is isolated from the rest of
+the system. It constitutes the sole entry/exit point to manipulate
+PDMS data and retrieve results, and hence provides the basic DBMS
+operations required to ensure data confidentiality, integrity, and
+resiliency. It therefore implements a data storage module, a policy
+enforcement module to control access to PDMS data and a basic
+query module (as needed to evaluate simple selection predicates on
+database objects metadata to retrieve sets of authorized objects) and
+a communication manager for securing data exchanges with other
+layers of the architectures and with Apps accessing the PDMS.
+
+Data tasks. Data tasks are introduced as a means to handle
+the code extensions needed to support user-defined functions kept
+isolated from the Core. Data tasks can execute arbitrary, application-
+specific data management code, thus enabling extensiveness (like
+UDFs in traditional DBMSs). The idea is to handle user-defined
+functions by (1) dissociating them from the Core into one or sev-
+eral Data tasks evaluated in a sufficiently isolated environment
+to maintain control on the data sent to them by the Core during
+computations, and (2) scheduling the execution of Data tasks by
+the Core such that security is globally enforced.
+
+Apps. The complexity of these applications (large code base, ex-
+tensible and not proven) and their execution environment (e.g., web
+browser) make them vulnerable. Therefore, no security assumption
+is made on applications, which manipulate only authorized data
+resulting from Data tasks but have no privilege on the raw data.
+
+2.2 Security Properties
+The specificity of our architecture is to remove from local or remote
+Apps any sensitive data-oriented computation, delegating it to Data
+tasks running UDFs under the control of the Core, within the PDMS
+user’s environment. App leverages an App manifest which includes
+essential information about the UDFs to be executed by the App,
+including their purpose, authorized PDMS objects and size of results
+to be transmitted to the App. The manifest should be validated, e.g.
+
+Data Leakage Mitigation of User-Defined Functions on Secure Personal Data Management Systems
+
+Conference’17, July 2017, Washington, DC, USA
+
+by a regulatory agency or the App marketplace, and approved by
+the PDMS user at install time before the App can call corresponding
+functions. Specifically, to maximize security our system implements
+the following architectural security properties:
+P1. Enclaved Core/Data tasks. The Core and each Data task run
+in individual enclaves protecting the confidentiality of the data ma-
+nipulated and the integrity of the code execution from the untrusted
+execution environment (application stack, operating system). Such
+properties are provided by TEEs, e.g., Intel SGX, which guarantees
+that (i) enclave code cannot be influenced by another process; (ii)
+enclave data is hidden from any other process (RAM encryption);
+(iii) enclave can prove that its results were produced by its genuine
+code [14]. Besides, the code of each Data task is sandboxed [28]
+within its enclave to preclude any voluntary data leakage outside
+the enclave by a malicious Data task function code. Such Data
+task containment can be obtained using existing software such as
+Ryoan [28] or SGXJail [42] which provide means to restrict enclave
+operations (bounded address space and filtered syscalls).
+P2. Secure communications. All the communications between
+Core, Data tasks and Apps are classically secured using TLS (see
+Section 6) to ensure authenticity, integrity and confidentiality. Be-
+cause the inter-enclave communication channels are secure and
+attested (e.g., establishing TLS channel with Intel SGX enclaves
+resorts to attestations), the Core can guarantee to Apps or third
+parties the integrity of the UDFs being called.
+P3. End-to-end access control. The input/output of the Data tasks
+are regulated by the Core which enforces access control rules for
+each UDF required by an App as defined at the install time in the
+App manifest. Also, the Core can apply basic selection predicates
+to select the subset of database objects for a given UDF call. For
+instance, in our ’Energy’ running example, a Data task running a
+UDF computing the consumed amount of energy during a certain
+time interval will only be supplied by the Core with the neces-
+sary energy consumption traces (i.e., the ones covering the given
+time interval). If several Data tasks are involved in the evaluation
+of a UDF, the Core guarantees the transmission of intermediate
+results between these Data tasks. Finally, the App only receives
+final computation results from the Core (e.g., the amount of energy
+consumed) without being able to access any other data.
+
+Taken together, the above properties enforce the PDMS security
+and, in particular, the data confidentiality, precluding any data
+leakage, except through the legitimate results delivered to the Apps.
+
+3 PROBLEM FORMULATION
+To formulate the specific problem addressed in this paper, we intro-
+duce first our computation model leveraging UDFs and the consid-
+ered threat model.
+
+3.1 Computation Model
+We seek to propose a computation model for UDFs (defined by any
+external App) that satisfies the canonical use of PDMS computa-
+tions (including the use-cases discussed above). The model should
+not impact the application usages, while allowing to address the
+legitimate privacy concerns of the PDMS users. Hence, we exclude
+from the outset UDFs which are permitted by construction to ex-
+tract large sets of raw database objects (like SQL select-project-join
+
+queries). Instead, we consider UDFs (denoted as a function 𝑓 ) with
+the following characteristics: (1) 𝑓 has legitimate access to large
+sets of database objects and (2) 𝑓 is authorized to produce various
+results of fixed and small size.
+
+The above conditions are valid, for instance, for any aggregate
+UDF applied to sets of PDMS objects. As our running example
+illustrates, such functions are natural in PDMS context, e.g., to
+produce statistics using time series of user energy consumption
+within some given time intervals, or leveraging user GPS traces for
+statistics of physical activities, the traveled distance or the used
+modes of transportation over given time periods.
+
+As illustrated by these examples, aggregates in a PDMS are gen-
+erally applied on complex objects (e.g., time series, GPS traces,
+documents, images), which requires adapted and advanced UDFs at
+the object level. Specifically, to evaluate an aggregate function 𝑎𝑔𝑔,
+a first function 𝑐𝑚𝑝 needs to be computed for each object 𝑜 of the
+input. For instance, 𝑐𝑚𝑝 can compute the integral of a time series
+indicating the electricity consumption or the length of a GPS trace
+stored in 𝑜, while 𝑎𝑔𝑔 can be a typical aggregate function applied
+subsequently on the set of 𝑐𝑚𝑝 results. Besides, we consider that
+the result of 𝑐𝑚𝑝 over any object 𝑜 has a fixed size in bits of ||𝑐𝑚𝑝 ||
+with ||𝑐𝑚𝑝 || << ||𝑜 || (e.g., in the examples above about time series
+and GPS traces, 𝑐𝑚𝑝 returns a single value śof small siześ computed
+from the data series śof much larger siześ stored in 𝑜).
+
+For simplicity and without lack of generality, we focus in the
+rest of the paper on a single App 𝑎 and computation function 𝑓 .
+Overall, our computation model is as follows:
+
+Computation model. An App (or a third party) 𝑎 is granted
+execution privilege on an aggregate UDF 𝑓 = 𝑎𝑔𝑔 ◦ 𝑐𝑚𝑝 with read
+access to (any subset of) a set 𝑂 of database objects according to
+a predefined App manifest {< 𝑎, 𝑓 , 𝑂 >} accepted by the PDMS
+user at App install time. 𝑎 can freely invoke 𝑓 on any 𝑂𝜎 ⊆ 𝑂,
+where 𝜎 is a selection predicate on some object metadata (e.g.,
+a time interval) chosen at query time by 𝑎. The function 𝑓 com-
+putes 𝑎𝑔𝑔({𝑐𝑚𝑝 (𝑜)}𝑜 ∈𝑂𝜎
+), with 𝑐𝑚𝑝 an arbitrarily complex pre-
+processing applied on each raw database object 𝑜 ∈ 𝑂𝜎 and 𝑎𝑔𝑔 an
+aggregate (or similar) function. We consider that both 𝑎𝑔𝑔 and 𝑐𝑚𝑝
+are deterministic functions and produce fixed-size results.
+
+3.2 Threat Model
+We consider that the attacker cannot influence the consent of the
+PDMS user, which is required to install UDFs. However, neither the
+UDF code nor the results produced can be guaranteed to meet the
+user’s consented purpose. To cover the most problematic situations
+for the PDMS user, we consider an active attacker fully controlling
+the App 𝑎 with execution granted on the UDF 𝑓 . Thus, the attacker
+can authenticate to the Core on behalf of 𝑎, trigger successively the
+evaluation of 𝑓 , set the predicate 𝜎 defining 𝑂𝜎 ∈ 𝑂 its input object
+set and access all the results produced by 𝑓 .
+
+Furthermore, since 𝑎 also provides the PDMS user with the code
+of 𝑓 = 𝑎𝑔𝑔 ◦ 𝑐𝑚𝑝, we consider that the attacker can instrument the
+code of 𝑎𝑔𝑔 and 𝑐𝑚𝑝 such that instead of the expected results, the
+execution of 𝑓 produces some information coveted by the attacker,
+to reconstruct subsets of raw database objects used as input.
+
+On the contrary, we assume that security properties P1 to P3 (see
+Section 2) are enforced. In particular, we assume that the PDMS
+
+Conference’17, July 2017, Washington, DC, USA
+
+Robin Carpentier, Iulian Sandu Popa, and Nicolas Anciaux
+
+Attack example. The code for 𝑓 , instead of the expected purpose
+which users consent to (e.g., analyzing energy consumption traces
+to compute required statistics), implements a function 𝑓𝑙𝑒𝑎𝑘 that
+produces a result called 𝑙𝑒𝑎𝑘 of size ||𝑓 || bits (||𝑓 || is the number
+of bits allowed for legitimate results of 𝑓 ), as follows: (i) 𝑓 sorts
+its input objects set 𝑂, (ii) it encodes on ||𝑓 || bits the information
+contained in 𝑂 next to the previously leaked information and
+considers them as the śnewś 𝑙𝑒𝑎𝑘; (iii) it sends śnewś 𝑙𝑒𝑎𝑘 as
+the result.
+In a basic approach where the code of 𝑓 is successively evaluated
+by a single Data task 𝐷𝑇 𝑓 receiving a same set 𝑂 of database objects
+as input, the attacker obtains after each execution a new chunk of
+information about 𝑂 encoded on ||𝑓 || bits. The attacker could thus
+reconstruct the complete set 𝑂 by assembling the received 𝑙𝑒𝑎𝑘,
+after at most 𝑛 = | |𝑂 | |
+| |𝑓 | | successive executions, with ||𝑂 || the size in
+bits needed to encode the information of 𝑂.
+
+To address the first question, we introduce metrics inspired by
+traditional information flow methods (see e.g., [39]). We denote by
+||𝑥 || the amount of information in 𝑥, measured by the number of
+bits needed to encode it. For simplicity, we consider this value as the
+size in bits of the result if 𝑥 is a function and as its footprint in bits if
+𝑥 is a database object or set of objects. We define the leakage 𝐿𝑓 (𝑂)
+resulting from successive executions of a function 𝑓 on objects in
+𝑂 allowed to 𝑓 , as follows:
+
+Definition 1. Data set leakage. The successive executions of
+a function 𝑓 , taking as input successive subsets 𝑂𝜎 of a set 𝑂 of
+database objects, can leak up to the sum of the leaks generated by
+the non identical executions of 𝑓 . Two executions are considered
+identical if they actually produced the same result on the same
+input (as the case for functions assumed deterministic). Successive
+executions producing 𝑛 non-identical results generate up to a Data
+𝑛 (𝑂) = ||𝑓 || × 𝑛 (i.e., each execution of 𝑓 may
+set leakage of size 𝐿𝑓
+provide up to ||𝑓 || new bits of information about 𝑂).
+
+To quantify the number of executions of 𝑓 required to leak given
+amounts of information, we introduce the leakage rate as the ratio
+𝑛 (𝑂).
+of the leakage on a number 𝑛 of executions, i.e., 𝐿𝑓
+The above leakage metrics express the ’quantitative’ aspect of
+the attack. However, attackers could also focus their attack on a
+(small) subset of objects in 𝑂 that they consider more interesting and
+leak those objects first, and hence optimize the use of the possible
+amount of information leakage. To capture ’qualitative’ aspect of
+an attack, we introduce a second leakage metric:
+
+𝑛 = 1
+
+𝑛 · 𝐿𝑓
+
+Definition 2. Object leakage. For a given śtargetedś object
+𝑛 (𝑜) is the total amount of bits of
+𝑜, the Object leakage denoted 𝐿𝑓
+information about 𝑜 that can be obtained after executing 𝑛 times
+the function 𝑓 on sets of database objects containing 𝑜.
+
+The challenge is to propose execution strategies for evaluating
+untrusted user-defined functions in the PDMS context that on the
+one hand limit Data set and Object leakages (metrics above) to small
+values and on the other hand are efficient and implementable in
+practice. To address this problem, we proceed in two steps: (1) we
+introduce in Section 4 countermeasure building blocks, quantify
+their respective impact on potential leakage and conclude on a
+way to combine them to achieve minimal leakage (regardless of
+performance); (2) we propose in Section 5 optimized execution
+
+Figure 2: Computation and Threat Models.
+Core code is fully trusted as well as the security provided by the
+TEE (e.g., Intel SGX) and the in-enclave sandboxing technique used
+to enforce P1 to P3. Figure 2 illustrates the computation model
+considered for the UDFs and the trust assumptions on each of the
+architectural elements of the PDMS involved in the evaluation.
+
+Note that to foster usage, we impose no restrictions on the 𝜎
+predicate and on the App query budget1. In addition, we do not
+consider any semantic analysis or auditing of the code of 𝑓 since
+this is not realistic in our context (the layman PDMS user cannot
+handle such tasks) and also mostly complementary to our work as
+discussed in Section 7.
+
+3.3 Problem Formulation
+The precise goal of the paper is to address the following two ques-
+tions: (1) Is there an upper bound on the potential leakage of per-
+sonal information that can be guaranteed to the PDMS user, when
+evaluating a user-defined function 𝑓 successively on large sensitive
+data sets, under the considered PDMS architecture, computation
+and threat models? (2) Is there a performance-acceptable execu-
+tion strategy guaranteeing minimal leakage with potentially large
+volumes of personal data?
+
+Answering these questions is critical to bolster the PDMS par-
+adigm. A positive conclusion to the first question is necessary to
+justify a founding principle for the PDMS, insofar as bringing the
+computational function to the data (and not the other way around)
+would indeed provide a quantifiable privacy benefit to PDMS users.
+The second question may lead to a positive assessment of the real-
+ism and practical adoption of the proposed solutions.
+
+Analysis of the problem requires appropriate quantification of
+leakage for attacks conducted using corrupted code, within the
+framework of the computational and threat models described earlier.
+Before presenting our simplified metric and problem formulation,
+let us consider a simple attack example:
+
+1Such restrictions can be indeed envisioned for specific Apps and will be studied in
+our future work.
+
+σ{o}f(O) DATA TASKf=agg∘cmpCommunicationPolicy enforcementData storageUDF executionCOREsealeduser databaseOσf(O){cmp(o)}f(O){o}{cmp(o)}DATA TASKaggDATA TASKaggDATA TASKaggDATA TASKcmpdecomposed executionsecurechannelenclave+ sandboxtrustedcodeApptrusted architectural elements untrustedcodeenclaveuntrusted elements Data Leakage Mitigation of User-Defined Functions on Secure Personal Data Management Systems
+
+Conference’17, July 2017, Washington, DC, USA
+
+strategies and algorithms leveraging these building blocks with
+realistic performance while maintaining bounded data leakage.
+
+4 COUNTERMEASURE BUILDING BLOCKS
+This section introduces three security building blocks previously
+sketched in [10] to control potential data leakage on the set 𝑂 of
+objects accessible to the UDF 𝑓 = 𝑎𝑔𝑔 ◦ 𝑐𝑚𝑝, executed inside a Data
+task 𝐷𝑇𝑓 , through the successive results transmitted to an external
+App.
+
+4.1 Stateless Data Tasks
+Since potential attackers control the code of 𝑓 , an important lever
+that can be exploited is data persistency, as keeping a state between
+successive executions maximizes leakage. For instance, in the At-
+tack example (Section 3.3), 𝑓 maintains a variable 𝑙𝑒𝑎𝑘 according
+to previous executions to avoid leaking same data twice. Persis-
+tent states can be exploited by 𝑓 śalthough executed as Data task
+𝐷𝑇𝑓 ś without hurting the security hypotheses, e.g., in memory or
+resorting to PDMS database or secure file system.
+
+A first building block is to rely on stateless Data tasks (with-
+out negative impact on usage as database queries are evaluated
+independently) with the objective of limiting the leakage rate in
+successive executions:
+
+Definition 3. Stateless Data task. A stateless Data task is
+instantiated for the sole purpose of answering a specific function
+call/query, after which it is terminated and its memory wiped.
+
+Enforcement. On SGX, statelessness can be achieved by destroy-
+ing the Data task’s enclave. It also requires to extend containment
+(security property P1) by preventing variable persistency between
+executions or direct calls to stable storage (e.g., SGX protected file
+system library). Obviously, PDMS database access must also be
+regulated by the Core.
+
+Impact on leakage. A corrupted computation code running as a
+Stateless Data task may only leverage randomness to maximize the
+leakage rate. For instance, in the Attack example, at each execution,
+𝑓𝑙𝑒𝑎𝑘 would select a random fragment of 𝑂 to produce a 𝑙𝑒𝑎𝑘 śeven
+if the same query is run twice on the same inputś. Considering
+a uniform leakage function, the probability of producing a new
+𝑙𝑒𝑎𝑘 is proportional to the remaining amount of data śnot leaked
+yetś present in the data task input 𝑂. That is, the probability is
+high (i.e., close to 1) when none or only a few fragments of 𝑂 have
+been already leaked, and it slowly decreases to 0 when 𝑂 has been
+(nearly) entirely leaked, which increases the necessary executions
+to leak large amounts of data.
+
+4.2 Deterministic Data Tasks
+The stateless property imposes on attackers to (i) employ random-
+ness in selecting data fragments to be leaked in a computation to
+maximize the leakage, and (ii) choose the leaked fragment neces-
+sarily in the current computation input (previous inputs cannot be
+memorized). To further reduce leakage, we enforce a new restriction
+for Data tasks, i.e., determinism:
+
+Definition 4. Deterministic Data task. A deterministic Data
+task necessarily produces the exact same result for the same func-
+tion code executed on the same input, which precludes leakage
+accumulation in the case of identical executions (enforcing Def. 1).
+
+Enforcement. Data task containment (security property P1)
+can be leveraged to enforce data task determinism by preventing
+access to any source of randomness, e.g., system calls to random
+APIs or timer/date. Virtual random APIs can easily be provided to
+preserve legitimate uses, e.g., the need for sampling, as long as they
+are "reproducible", e.g., the random numbers used are forged by
+the Core using a seed based on the function code 𝑓 and its input
+set 𝑂, e.g., 𝑠𝑒𝑒𝑑 = ℎ𝑎𝑠ℎ(𝑓 ||𝑂). The same inputs (i.e., same sets of
+database objects) must also be made identical between successive
+Data task execution by the Core (e.g., sorted before being passed
+to Data tasks). Clearly, to enforce determinism, the Data task must
+be stateless, as maintaining a state between executions provides
+a source of randomness to the Data task. Note that another way
+to enforce determinism is to store the previous results produced
+by the data tasks for any different input objects set, and reuse the
+stored result instead of recomputing (see Section 5.1).
+
+Impact on leakage. With deterministic (and stateless) Data
+tasks, the remaining source of randomness in-between computa-
+tions is the Data task input (i.e., 𝑂𝜎 ⊆ 𝑂). The attacker has to
+provide a different selection predicate 𝜎 at each computation in
+hope of maximizing the leakage rate. Hence, the average leakage
+rate of deterministic Data tasks is upper bounded by that of state-
+less Data tasks. In theory, the number of different inputs of 𝑓 being
+high (up to 2 |𝑂 |, the number of subsets of 𝑂), an attacker can at-
+tain similar Data set leakage with deterministic Data tasks as with
+stateless ones but at lower leakage rates.
+
+4.3 Decomposed Data Tasks
+By changing the selection predicate 𝜎 (i.e., as needed to favor rich
+usage for Apps), attackers may leak new data with each new exe-
+cution of 𝑓 , regardless if Data tasks are stateless and deterministic.
+The attacker could also concentrate leakage (see Def. 2) on a specific
+object 𝑜, by executing 𝑓 on different input sets but each contain-
+ing the object 𝑜. To mitigate the attack vector represented by the
+selection predicate 𝜎, we introduce a third building block based
+on decomposing the execution of 𝑓 = 𝑎𝑔𝑔 ◦ 𝑐𝑚𝑝 into a set of Data
+tasks. On the one side a Data task 𝐷𝑇 𝑎𝑔𝑔 executes the code of 𝑎𝑔𝑔,
+and on the other side a set of Data tasks {𝐷𝑇 𝑐𝑚𝑝
+}𝑖>0 executes the
+code of 𝑐𝑚𝑝 on a partition of the set of authorised objects 𝑂, each
+part 𝑃𝑖 of the partition being of maximum cardinality 𝑘.
+
+𝑖
+
+The goal is to limit the Object leakage since information about
+objects in a given part 𝑃𝑖 can only leak into the 𝑘 results produced
+by 𝐷𝑇 𝑐𝑚𝑝
+. This parameter 𝑘 is called Leakage factor, as it deter-
+𝑖
+mines the number of intermediate results in which information
+about any given object 𝑜 can be leaked. An important observation
+is that to enforce a leakage factor of 𝑘, the partitioning of 𝑂 in parts
+of size at most 𝑘 has to be ’static’, i.e., independent of the compu-
+tation input 𝑂𝜎 , so that any object is always processed within the
+same 𝑘 − 1 others objects across executions, such that the stateless
+deterministic Data task processing that part always produces the
+same result set. This further restriction for Data tasks is defined as
+follows:
+
+Definition 5. Decomposed Data tasks. Let 𝑃 (𝑂) = {𝑃𝑖 } be
+a static partition of the set of objects 𝑂, authorized to function
+𝑓 = 𝑎𝑔𝑔◦𝑐𝑚𝑝, such that any part 𝑃𝑖 is of maximum cardinality 𝑘 > 0
+(𝑘 being fixed beforehand, e.g., at install time). A decomposed Data
+
+Conference’17, July 2017, Washington, DC, USA
+
+Robin Carpentier, Iulian Sandu Popa, and Nicolas Anciaux
+
+App
+
+
+
+f (O)
+
+App
+
+
+
+f (O)
+
+g
+g
+a
+
+p
+m
+c
+
+p
+m
+c
+
+c
+i
+m
+a
+n
+y
+d
+
+g
+g
+a
+
+p
+m
+c
+
+p
+m
+c
+
+…
+…
+sealed user database
+
+data flow
+result of f(O)
+cmp(o), o  O
+cmp(o), o  O
+
+partition of O (k=3)
+secure channel
+data task
+core
+
+static
+…
+
+…
+
+sealed user database
+
+Legend:
+
+object o  O
+object o  O
+
+Figure 3: Decomposed (left) or Adaptive (right) execution.
+
+𝑖
+
+𝑖
+
+tasks execution of 𝑓 over a set of objects 𝑂𝜎 ⊆ 𝑂, involves a set of
+|𝑃𝑖 ∩𝑂𝜎 ≠ ∅}, with each 𝐷𝑇 𝑐𝑚𝑝
+Data tasks {𝐷𝑇 𝑐𝑚𝑝
+being a stateless
+deterministic Data task executing 𝑐𝑚𝑝 on a given part 𝑃𝑖 containing
+at least one objects of 𝑂𝜎 . Each 𝐷𝑇 𝑐𝑚𝑝
+is provided 𝑃𝑖 as input by
+the Core and produces a result set 𝑟𝑒𝑠𝑐𝑚𝑝
+= {𝑐𝑚𝑝 (𝑜), 𝑜 ∈ 𝑃𝑖 } to
+the Core. The Core discards all the results corresponding to the
+objects 𝑜 ∉ 𝑂𝜎 , i.e., not part of the current computation. A stateless
+deterministic Data task 𝐷𝑇 𝑎𝑔𝑔 is used to aggregate the union of the
+results sets part of the computation, i.e., ∪𝑖 {𝑟𝑒𝑠𝑐𝑚𝑝
+= {𝑐𝑚𝑝 (𝑜), 𝑜 ∈
+𝑃𝑖 ∩ 𝑂𝜎 }}, to produce the final result.
+
+𝑖
+
+𝑖
+
+𝑖
+
+As an illustration, Figure 3 (left) shows a decomposed Data task
+execution, on a static partition of 𝑂 with a Leakage factor 𝑘 = 3,
+evaluating 𝑓 on 3 objects matching predicate 𝜎 (in orange) and
+present in 2 parts, with 2 Data tasks allocated to evaluate 𝑐𝑚𝑝 on
+each part, and one Data task evaluating 𝑎𝑔𝑔 on the result of 𝑐𝑚𝑝.
+
+Enforcement. To implement this Decomposed data tasks strat-
+egy, it is sufficient to add trusted code to the Core that implements
+an execution strategy consistent with this definition (Section 5.1
+explains this in detail).
+
+Impact on leakage. Any computation involves one or several
+parts 𝑃𝑖 of 𝑂. Due to our execution strategy leveraging stateless
+deterministic Data tasks, the result set {𝑐𝑚𝑝 (𝑜)}𝑜 ∈𝑃𝑖 is guaranteed
+to be unique for any 𝑜. Hence, the Data set leakage for any part 𝑃𝑖 is
+bounded by ||𝑐𝑚𝑝 || · |𝑃𝑖 |, regardless of the number of the successive
+computations involving any 𝑜 ∈ 𝑃𝑖 . Consequently, the Data set
+leakage over a very large number 𝑛 of computations on 𝑂 is also
+bounded: 𝐿𝑓
+
+𝑖 ||𝑐𝑚𝑝 || · |𝑃𝑖 | = ||𝑐𝑚𝑝 || · |𝑂 |.
+
+𝑛→+∞ (𝑂) ≤
+
+Regarding Object leakage, for any 𝑃𝑖 , the attacker has the liberty
+to choose the distribution of the |𝑃𝑖 | leak fragments among the
+objects in 𝑃𝑖 . At the extreme, all |𝑃𝑖 | fragments can concern a single
+object in 𝑃𝑖 . For any object 𝑜 ∈ 𝑃𝑖 , the Object leakage is thus
+𝑛→+∞ (𝑜 ∈ 𝑂) ≤ 𝑚𝑖𝑛(||𝑐𝑚𝑝 || · 𝑘, ||𝑜 ||), with 𝑘 the
+bounded by 𝐿𝑓
+leakage factor equal to the maximum number of objects in any 𝑃𝑖 .
+Minimal leakage. From above formulas, a decomposed Data
+task execution of 𝑓 = 𝑎𝑔𝑔 ◦ 𝑐𝑚𝑝 is optimal in terms of limiting
+the potential data leakage, with both minimum data set and object
+
+Í
+
+leakages, when a maximum degree of decomposition is chosen, i.e.,
+a partition at the object level fixing 𝑘 = 1 as leakage factor.
+
+However, reaching this minimal leakage requires to allocate at
+runtime one stateless and deterministic Data task per object 𝑜 ∈ 𝑂𝜎
+involved in the computation.
+
+5 PRACTICAL EVALUATION STRATEGIES
+The building blocks presented above theoretically allow an evalua-
+tion of 𝑓 with low and bounded leakage, minimal if 𝑘 = 1. However,
+an evaluation strategy based on a direct implementation may lead
+to unrealistic performance (see Section 6) in the case of large objects
+sets, mainly because (i) too many data tasks must be allocated at
+execution (up to one per object 𝑜 ∈ 𝑂𝜎 to reach minimal leakage)
+and (ii) many unnecessary computations are needed (objects 𝑜 ∉ 𝑂𝜎
+must be processed, given the ’static’ partition, if they belong to
+parts containing objects 𝑜 ∈ 𝑂𝜎 , see Figure 3 (left)).
+
+We need to overcome these obstacles and establish evaluation
+strategies with acceptable performance in practice, while still main-
+taining low data leakage. Therefore, we propose new execution
+strategies leveraging two mechanisms: Result reuse, which avoids
+computations on objects that are not part of the input (objects
+𝑜 ∉ 𝑂𝜎 ) and opens the way to new strategies based on a ’dynamic’
+partitioning of the input objects of 𝑓 ; and Execution replay, which
+allows applying coarser-grained partition schemes with a reduced
+set of Data tasks allocated at execution, while keeping Object leak-
+age low to minimum.
+
+5.1 Decomposed Execution with Result Reuse
+Result reuse consists in storing into the Core any new intermediate
+result 𝑐𝑚𝑝 (𝑜) for any object 𝑜 after its first computation and then
+reusing this value2 for all subsequent evaluations of 𝑓 taking 𝑜 in
+input (i.e., 𝑂𝜎 ⊃ 𝑜).
+
+Result reuse implies processing any raw database object 𝑜 only
+once, without the attacker having the opportunity to consider again
+that object 𝑜 as input of śpotentially corruptedś functions 𝑐𝑚𝑝 or
+𝑎𝑔𝑔, and thus without any means to further impact data leakage
+related to 𝑜. Hence, ’static’ partitioning is not required anymore,
+and this allows adopting ’dynamic’ partition schemes, where the
+set of śnewly computedś objects part of the computation input 𝑂𝜎
+can be partitioned and processed independently of other śalready
+computedś objects in 𝑂 \ 𝑂𝜎 , while still satisfying Def. 5.
+
+This opens to a computation strategy based on (i) a Generic ex-
+ecution algorithm with Result reuse which is the common entry
+point for (ii) a dynamic computation strategy, namely the Adaptive
+execution algorithm presented here, or the Replay execution algo-
+rithm presented next. All these algorithms (the generic part and
+the computation strategy algorithms) are considered trusted and
+are part of the Core, while the codes of 𝑎𝑔𝑔 and 𝑐𝑚𝑝 are considered
+untrusted and run therefore as Data tasks.
+
+Generic execution with Result reuse (Algorithm 1). This
+code module constitutes the generic entry point for any compu-
+tation of 𝑓 . It first determines the set of objects 𝑂𝜎 satisfying the
+
+2In a PDMS context, we deal mainly with historical data (e.g., electricity traces, GPS
+histories, medical data, personal images, etc.). An implicit assumption considered in
+the paper is that the personal database is managed in append only mode (objects
+are inserted or deleted, but not updated). To extend our proposals to support explicit
+updates, these can be considered as deletions followed by insertions (see Section 5.3).
+
+Data Leakage Mitigation of User-Defined Functions on Secure Personal Data Management Systems
+
+Conference’17, July 2017, Washington, DC, USA
+
+Algorithm 1 Generic execution with Result reuse (Core code)
+
+Input: Querier 𝑎, public key 𝑃𝐾𝑎, predicate 𝜎 defining 𝑂𝜎 ⊂ 𝑂
+Output: Value 𝑣 = 𝑎𝑔𝑔 ◦ 𝑐𝑚𝑝 (𝑂𝜎 ) result of computation
+
+1: 𝑂𝜎 ← {𝑜 ∈ 𝑂 | 𝜎 (𝑜) = 𝑡𝑟𝑢𝑒}
+2: 𝑂+ ← {𝑜 ∈ 𝑂𝜎 | 𝑐𝑚𝑝 (𝑜) ≠ 𝑛𝑢𝑙𝑙 }
+3: 𝑂− ← {𝑜 ∈ 𝑂𝜎 | 𝑐𝑚𝑝 (𝑜) = 𝑛𝑢𝑙𝑙 }
+4: 𝐶𝑀𝑃 +
+5: if 𝑂− ≠ ∅ then
+𝐶𝑀𝑃 −
+6:
+store 𝐶𝑀𝑃 −
+
+𝑂 ← compute(sort(𝑂−))
+𝑂 values in PDMS
+
+𝑂 ← {𝑐𝑚𝑝 (𝑜) | 𝑜 ∈ 𝑂+}
+
+7:
+8: end if
+9: 𝐷𝑇 𝑎𝑔𝑔 ← createDT(𝑎𝑔𝑔)
+10: open(𝐷𝑇 𝑎𝑔𝑔)
+11: send(𝐷𝑇 𝑎𝑔𝑔, (𝐶𝑀𝑃 −
+12: 𝑣 ← receive(𝐷𝑇 𝑎𝑔𝑔)
+13: killDT(𝐷𝑇 𝑎𝑔𝑔)
+14: return 𝑒𝑛𝑐𝑟𝑦𝑝𝑡 (𝑣, 𝑃𝐾𝑎)
+
+𝑂 ∪ 𝐶𝑀𝑃 +
+
+⊲ objects in query scope
+⊲ objects with existing 𝑐𝑚𝑝
+⊲ objects with missing 𝑐𝑚𝑝
+⊲ existing 𝑐𝑚𝑝 (𝑜) values
+⊲ compute missing 𝑐𝑚𝑝 (𝑜)
+
+⊲ create Data Task (𝑎𝑔𝑔 code)
+⊲ open secure channel (attestation)
+⊲ send all 𝑐𝑚𝑝
+𝑂 ))
+⊲ receive the result
+⊲ kill 𝐷𝑇 𝑎𝑔𝑔
+⊲ return result encrypted
+
+= ∅, 𝐶𝑃𝑀 = ∅
+
+⊲ number of partitions
+
+𝑂 a set of 𝑐𝑚𝑝 (𝑜) values for these objects
+
+Algorithm 2 Adaptive execution (Core code)
+Input: 𝑂− an ordered set of database objects, 𝑘 the leakage factor
+Output: 𝐶𝑀𝑃 −
+|𝑂 − |
+𝑘 m
+
+1: 𝑚 ← l
+2: {𝑃𝑖 }𝑖 ≤𝑚 ← random partitioning of 𝑂 with |𝑃𝑖 | ≤ 𝑘
+3: 𝐶𝑀𝑃 −
+𝑂
+4: for 𝑖 in (1 : 𝑚) do
+𝐷𝑇 𝑐𝑚𝑝
+5:
+open(𝐷𝑇 𝑐𝑚𝑝
+send(𝐷𝑇 𝑐𝑚𝑝
+𝐶𝑀𝑃 ← receive(𝐷𝑇 𝑐𝑚𝑝
+killDT(𝐷𝑇 𝑐𝑚𝑝
+)
+𝑖
+0 = 𝐶𝑀𝑃 −
+𝐶𝑀𝑃 −
+
+⊲ create a Data Task
+⊲ open secure channel (attestation)
+⊲ send partition
+⊲ receive the results
+⊲ kill the Data Task
+⊲ add results to resultset
+
+𝑖 ← createDT(𝑐𝑚𝑝)
+)
+, 𝑃𝑖 )
+
+𝐶𝑀𝑃
+
+6:
+
+9:
+
+7:
+
+8:
+
+)
+
+𝑖
+
+𝑖
+
+𝑖
+
+10:
+11: end for
+12: sort 𝐶𝑀𝑃 −
+13: return 𝐶𝑀𝑃 −
+𝑂
+
+𝑂 Ð
+
+𝑂 in same order of corresponding objects in 𝑂−
+
+computation (line 1) and splits it into two sets (lines 2-3): 𝑂+ ⊆ 𝑂𝜎
+the objects that have already been computed in previous compu-
+tations of 𝑓 and 𝑂− ⊆ 𝑂𝜎 the objects selected for the first time.
+Then it constructs 𝐶𝑀𝑃 +
+𝑂 by retrieving the 𝑐𝑚𝑝 values stored for
+the objects in 𝑂+ (line 4). For the objects in 𝑂−, it triggers a compute
+process (line 6) based on the selected computation strategy (i.e.,
+Adaptive presented below or Replay introduced in Section 5.2), and
+then stores the results for future use (line 7). Finally, a stateless
+deterministic Data task 𝐷𝑇 𝑎𝑔𝑔 is created to aggregate the entire set
+of all values in {𝑐𝑚𝑝 (𝑜), 𝑜 ∈ 𝑂𝜎 } (lines 9-13) before sending the
+final result to the App encrypted with its public key 𝑃𝐾𝑎.
+
+Adaptive execution (Algorithm 2). This execution strategy
+implements the 𝑐𝑜𝑚𝑝𝑢𝑡𝑒 function (see line 6 in Algorithm 1). It
+is called Adaptive as it leverages the results reuse to perform a
+’dynamic’ partitioning of 𝑂𝜎 , i.e., computed progressively based
+on each input of the queries in the workload, as opposed to the
+’static’ partition method in Section 4.3 (see Figure 3). Given an
+input 𝑂− of database objects never computed before and a value 𝑘
+indicating a maximum cardinality, it builds a random (randomness
+being required to avoid the attacker to have knowledge of the
+objects placed in a same partition) partition {𝑃𝑖, |𝑃𝑖 | ≤ 𝑘 }𝑖 ∈ [1,𝑚] of
+𝑂− with 𝑚 = ⌈ |𝑂 − |
+𝑘 ⌉. Then, a set of 𝑚 stateless deterministic Data
+tasks is instantiated and each 𝐷𝑇 𝑐𝑚𝑝
+with 𝑖 ∈ [1, 𝑚] evaluates the
+𝑖
+function 𝑐𝑚𝑝 on part 𝑃𝑖 producing a result set {𝑐𝑚𝑝 (𝑜)}𝑜 ∈𝑃𝑖 . The
+final result 𝐶𝑀𝑃 −
+𝑂 is the union of all the result sets corresponding
+to the partition.
+
+Leakage analysis. The analysis detailed in Section 4.3 remains
+entirely valid for Adaptive strategy. The reason is that due to Re-
+sult reuse, a unique opportunity per object to leak information is
+permitted, thus Data set and Object leakages results still hold.
+
+Performance considerations. In terms of performance, Adap-
+tive has two advantages compared to the Decomposed solution
+proposed in Def. 5: on the one hand, it allows to process only the
+database objects useful to the computation, i.e., objects 𝑜 ∈ 𝑂𝜎 ; on
+the other hand, the dynamic nature of Adaptive partitioning allows
+to reduce the number of involved Data tasks to 𝑚 = ⌈ |𝑂 − |
+𝑘 ⌉, with
+𝑂− ⊆ 𝑂𝜎 the set of newly computed input objects. However, to
+
+reach minimal leakage, it is necessary (as for the theoretical solu-
+tion of Def. 5) to consider singleton partitions (i.e., a leakage factor
+𝑘 = 1), which imposes one Data task per newly computed object.
+Such a large number of Data tasks may proscribe this solution in
+practice, at least in scenarios (e.g., energy use-case) requiring vari-
+ous computations on large sets of objects, due to the performance
+overhead of creating enclaves to host the numerous Data tasks,
+as confirmed in our measurements in Section 6 (and in line with
+previous studies on data processing in TEEs like [9, 23]).
+
+2
+
+and 𝐷𝑇 𝑐𝑚𝑝
+
+5.2 Decomposed Execution with Replay
+An ultimate solution would enable processing larger sets of objects
+to reduce the number of Data tasks involved in the execution, while
+supporting low leakage factor. Therefore, we propose an execution
+strategy called Replay, which relies on the following observation.
+Consider two sets of objects 𝑂1 and 𝑂2, with one single object 𝑜
+in common, i.e., 𝑂1 ∩ 𝑂2 = {𝑜 }, and two deterministic Data tasks
+𝐷𝑇 𝑐𝑚𝑝
+, which respectively receive 𝑂1 and 𝑂2 as input
+1
+and produce the results sets {𝑟𝑒𝑠1}𝑜 ∈𝑂1 and {𝑟𝑒𝑠2}𝑜 ∈𝑂2 as output.
+If both Data tasks produced for object 𝑜 an identical result value (i.e.
+𝑟𝑒𝑠1 [𝑜] ≡ 𝑟𝑒𝑠2[𝑜]) then this result does not contain information
+about objects in (𝑂1 ∪ 𝑂2) \ {𝑜} (or this information is the same).
+The principle of Replay execution generalizes the above intuition
+for evaluating 𝑓 on a given input set 𝑂−. To guarantee by construc-
+tion an evaluation with a leakage bounded by a leakage factor 𝑘
+(as in Adaptive), the idea is to partition 𝑂− into 𝑚 disjoint parts
+{𝑃1, 𝑃2, ..., 𝑃𝑚 } of (approximately) equal (and large) size, and use
+each Data task 𝐷𝑇 𝑐𝑚𝑝
+to produce the set of results {𝑐𝑚𝑝 (𝑜)}𝑜 ∈𝑃𝑖
+for one 𝑃𝑖 . This is replayed several times, each time with a different
+𝑚-partitioning of 𝑂. The partitioning is computed such that after 𝑅
+replays, for any object 𝑜 ∈ 𝑂−, there remains exactly 𝑘 = |𝑂 − |
+𝑚𝑅 − 1
+common objects in the intersection of the 𝑅 successive partitions
+containing 𝑜. The value of 𝑘 corresponds to the Leakage factor in-
+dicating the number of results in which malicious code may inject
+information about given object 𝑜. Therefore, a number of replays
+𝑅 = ⌈𝑙𝑜𝑔𝑚 (𝑂−)⌉ guarantees a minimum 𝑘 = 1 value, where any
+
+𝑖
+
+Conference’17, July 2017, Washington, DC, USA
+
+Robin Carpentier, Iulian Sandu Popa, and Nicolas Anciaux
+
+Replay
+
+g
+g
+g
+g
+g
+g
+a
+a
+a
+
+f (O)
+
+App
+
+
+
+k
+c
+e
+h
+c
+
+y
+t
+i
+l
+a
+u
+q
+e
+
+4
+4
+4
+p
+p
+p
+m
+m
+m
+c
+c
+c
+
+5
+5
+5
+p
+p
+p
+m
+m
+m
+c
+c
+c
+
+6
+6
+6
+p
+p
+p
+m
+m
+m
+c
+c
+c
+
+1
+1
+1
+p
+p
+p
+m
+m
+m
+c
+c
+c
+
+2
+2
+2
+p
+p
+p
+m
+m
+m
+c
+c
+c
+
+3
+3
+3
+p
+p
+p
+m
+m
+m
+c
+c
+c
+
+Legend:
+
+result of f(O)
+cmp(o), o  O
+data task
+core
+object o  O
+object o  O
+object oi  O
+partition (m=3 parts)
+red, yellow, blue
+colors indicate part
+
+Algorithm 3 Replay execution (Core code)
+Input: 𝑂− = {𝑜 𝑗 } 𝑗 ∈ [1,𝑛] an ordered set of 𝑛 database objects, 𝑘 the
+leakage factor, 𝑚 the number of partitions per replay
+Output: 𝐶𝑀𝑃𝑂 a set of 𝑐𝑚𝑝 (𝑜) values for these objects
+
+1: 𝑅 ← ⌈𝑙𝑜𝑔𝑚 (𝑛/𝑘)⌉
+2: for 𝑟 in [1, 𝑅] do
+3:
+
+for 𝑖 in [1, m] do
+
+⊲ number of replays
+⊲ for each replay iteration
+⊲ for each part
+
+4:
+
+5:
+
+6:
+
+7:
+
+8:
+
+9:
+
+10:
+
+11:
+
+(cid:9)
+
+𝑜 𝑗 ∈ 𝑂, (⌊ 𝑗 · 𝑚𝑟 /𝑛⌋ mod 𝑚) = 𝑖
+𝑃𝑖 ←
+(cid:8)
+𝐷𝑇 𝑐𝑚𝑝
+𝑖 ← createDT(𝑐𝑚𝑝)
+send(𝐷𝑇 𝑐𝑚𝑝
+, 𝑃𝑖 )
+𝑜 𝑗 }𝑜 𝑗 ∈𝑃𝑖 ← receive(𝐷𝑇 𝑐𝑚𝑝
+{𝑟 ∗
+killDT(𝐷𝑇 𝑐𝑚𝑝
+)
+if ∃𝑜 𝑗 ∈ 𝑃𝑖 , 𝑟 ∗
+𝑜 𝑗
+
+)
+
+𝑖
+
+𝑖
+
+𝑖
+
+return ERROR
+
+end if
+
+≠ 𝑟𝑜 𝑗 (𝑟𝑜 𝑗 from previous replays) then
+
+…
+…
+sealed user database
+
+end for
+
+12:
+13: end for
+14: return 𝐶𝑀𝑃 −
+𝑂
+
+=
+
+𝑟𝑜 𝑗 (cid:9) 𝑗 ∈ [1,𝑛]
+(cid:8)
+
+Figure 4: Evaluating 𝑓 with Replay Algorithm.
+object 𝑜 ∈ 𝑂− is the only common object in the intersections of
+the 𝑅 partitions containing 𝑜. The corresponding algorithm, called
+Replay, is illustrated in Figure 4 with 𝑘 = 1, 𝑚 = 3 and a set 𝑂− of 9
+objects. Note for example that the hatched object 𝑜𝑖 is first included
+in a yellow part processed by Data task 𝑐𝑚𝑝2, then in a red part
+processed by 𝑐𝑚𝑝4, and is thus the only object at the intersection
+of these (yellow and red) parts, so that if the result produced for
+this object for each part is identical, it depends only on this object.
+The algorithm works as follows:
+
+Replay execution (Algorithm 3). Given an input objects set
+𝑂−, a leakage factor 𝑘 and a number of partitions 𝑚 (fixed in practice
+to 3 or 4 for performance reasons, see Section 6), the number of
+replay iterations 𝑅 is computed to reach the expected leakage factor
+(line 1). Then at each iteration 𝑟 ∈ [1, 𝑅], the input objects set 𝑂− is
+partitioned into 𝑚 parts such that the object ranked in the position
+𝑗 in the input is included within part 𝑃𝑖 iff (⌊ 𝑗 · 𝑚𝑟 /𝑛⌋ mod 𝑚) = 𝑖
+(line 4). A stateless deterministic Data task 𝐷𝑇 𝑐𝑚𝑝
+is created for
+each part and computes 𝑐𝑚𝑝 on {𝑜 𝑗 }𝑜 𝑗 ∈𝑃𝑖
+. The Core checks that
+𝑜 𝑗 obtained for each 𝑜 𝑗 ∈ 𝑂− is consistent with the
+the results 𝑟 ∗
+previously computed values 𝑟𝑜 𝑗 (line 9). Finally, the complete set of
+results is returned (line 14).
+
+𝑖
+
+Leakage analysis. Replay execution guarantees by construction
+that after a number of replays 𝑅 = ⌈𝑙𝑜𝑔𝑚 (𝑛/𝑘)⌉ (with 𝑛 = |𝑂−|), any
+object 𝑜 ∈ 𝑂− was already processed as part of 𝑅 partitions, and that
+the intersection of all parts of these partitions containing 𝑜 is indeed
+equal to a set of objects containing {𝑜 } and of cardinality (at most)
+𝑘. Since all the successive results associated with 𝑜 for each of these
+parts was checked to be identical, information about 𝑜 can only leak
+into 𝑘 results. Fixing 𝑘 = 1 guarantees a minimum Object leakage
+(Def. 2) as in Adaptive. And as Adaptive, the Data set leakage (Def.1)
+is minimum due to Result reuse, ensuring the uniqueness of 𝑐𝑚𝑝 (𝑜)
+for any 𝑜 regardless of the number of computations including 𝑜.
+
+Performance considerations. Compared with Adaptive, Re-
+play involves an increased number of computations (for each object
+𝑜, 𝑐𝑚𝑝 (𝑜) is evaluated 𝑅 times instead of once). Even with minimum
+
+leakage factor 𝑘 = 1, the maximum number of Data tasks involved
+remains acceptable in practice, i.e., 𝑚 · ⌈𝑙𝑜𝑔𝑚 (|𝑂−|)⌉ Data tasks.
+
+5.3 Limitations of the Approach
+The security guarantees of our strategies are based on the hypoth-
+esis that the Core is able to evaluate the 𝑂𝜎 selection predicates
+of the App. This is a reasonable assumption if basic predicates are
+considered over some metadata associated with the objects (e.g.,
+temporal, file/object type or size, tags). However, because of the
+Core minimality, it is not reasonable to assume the support of more
+complex selection predicates within the Core (e.g., spatial search,
+content-based image retrieval). Advanced selection would require
+specific data indexing and should be implemented as Data tasks,
+which calls for revisiting the threat model and related solutions.
+
+Another limitation is that our study considers a single 𝑐𝑚𝑝 func-
+tion for a given App. For Apps requiring several computations, our
+leakage analysis still applies for each 𝑐𝑚𝑝, but the total leak can be
+accumulated across the set of functions. It is also the case if Apps
+collude. Also, the considered 𝑐𝑚𝑝 do not allow parameters from
+the App (e.g., 𝑐𝑚𝑝 is a similarity functions for time series or images
+having also an input parameter sent by the app). Parameters may
+introduce an additional attack channel allowing the attacker to
+increase the data leakage.
+
+This study does not discuss data updates. Personal historical
+data (mails, photos, energy consumption, trips) is append-only
+(with deletes) and is rarely modified. From the viewpoint of the
+proposed strategies, an object update can be seen as the deletion
+and reinsertion of the modified object. An at each reinsertion, the
+object is exposed to some leakage. Hence, with frequently updated
+and queried objects, new strategies may be envisioned.
+
+To reduce the potential data leakage, complementary security
+mechanisms can be employed for some Apps, e.g., imposing a query
+budget, limiting the 𝜎 predicates. Defining such restrictions and
+incorporating them into App manifests would definitely makes
+sense, but it is left as future work, as in this paper, we wanted to
+
+Data Leakage Mitigation of User-Defined Functions on Secure Personal Data Management Systems
+
+Conference’17, July 2017, Washington, DC, USA
+
+Data points number
+Objects number
+Object size (data points - bytes)
+Task for 𝑐𝑚𝑝
+Result size of 𝑐𝑚𝑝 (bytes)
+Task for 𝑎𝑔𝑔
+Result size of 𝑎𝑔𝑔 (bytes)
+
+Energy
+2 075 259
+34 587
+60 - 720
+Integral
+4
+Average
+4
+
+GPS
+24 876 978
+18 670
+1 332 - 31 968
+Length
+4
+Sum
+4
+
+Table 1: Considered Data and Query sets
+
+be generic w.r.t. the application types and studied the worst-case
+scenarios. Also, aggregate computations are generally basic and as
+such could be computed by the Core. The computation of 𝑎𝑔𝑔 by
+the Core introduces an additional trust assumption which could
+help to further reduce the potential data leakages.
+
+6 PERFORMANCE EVALUATION
+Our experimental evaluation studies the efficiency and scalability of
+the proposed execution strategies based on a PDMS implementation
+using Intel SGX, two real data sets and representative computations.
+
+6.1 Experimental Platform
+For all experiments, we use a server with an Intel Xeon E-2276G
+6-cores @3.8GHz supporting SGX 1-FLC. Out of the 64 GB of RAM
+available on the server, 128 MB are reserved for Intel SGX with
+93.5MB usable by enclaves. It runs Ubuntu 18.04 (kernel 4.15.0-142)
+with the SGX DCAP driver v1.41. This portrays the scenario where
+the PDMS would be deployed entirely (i.e. Core and Data tasks) on
+the Cloud. Then, to grasp the context of a PDMS running on a user
+device, we also measured performances on a personal computer
+having an Intel Core i5-9400H @2.5GHz 4-Cores also supporting
+SGX 1-FLC with 94MB usable by enclaves. The performances on
+this PC were similar to the ones on the server with an additional
+computational overtime of approximately 10% due to a slower CPU.
+We developped our own PDMS platform using Open Enclave
+SDK [30] v0.16.1 which aims at facilitating the development of
+applications for different TEEs. It currently supports Intel SGX
+and ARM TrustZone and we used the former in our experiments.
+Besides, the Core data management module is based on SQLite (v3).
+We presented this platform in [12].
+
+6.2 Data and Query Sets
+Data sets. We use two public data sets of personal data (see Table 1).
+The first [22] contains the electric power consumption of a house-
+hold minute by minute over a period of four years. Each object is a
+time series containing the consumption of one hour (i.e., 60 data
+points). The second [32] data set contains more than 18.000 GPS
+trajectories from 182 users using different transportation modes
+(e.g., car, bus, taxi, bike, walk) over more than five years. For scala-
+bility reasons, we consider the complete set as if it was generated
+by a single user. Each trajectory has different spatial and temporal
+length with 1332 GPS points for one trajectory on average. The
+Core stores each trajectory as a an object, making each GPS object
+44 times larger on average than the electricity objects. For both data
+sets, each object is associated with the corresponding date interval
+used by the Core to select the objects required for a computation.
+
+Query sets. We give App the right to request the execution of
+two UDFs, one for each data set. For the Energy data set, App is
+able to receive the average of the energy consumption of the user
+for any time interval(s) provided by App at execution time through
+𝜎. This corresponds to the Energy’ running example described in
+Section 1. For the GPS data set, App can request the sum of the
+length of GPS trajectories, also for any time interval(s). To carry
+those computations, appropriate Data tasks are used: two 𝑐𝑚𝑝 Data
+tasks computing either the integral of the energy consumption or
+the length of the GPS trajectories and two 𝑎𝑔𝑔 Data tasks computing
+either an average or a sum of integers. All Data tasks produce as
+output an integer of four bytes to preserve precision. Smaller result
+sizes can be considered depending on the required accuracy of the
+result, but this would have a negligible impact on performance and
+is therefore not considered in this section.
+
+Experimental approach. Our experimental approach consists
+in three steps. First, we measure the computation times of 𝑎𝑔𝑔 ◦𝑐𝑚𝑝
+using the Decomposed execution (see Section 4.3) with a maximum
+degree of decomposition (i.e., leakage factor 𝑘 = 1) over different
+selectivity (i.e., different 𝜎). Then, we evaluate and compare the
+trade-off between leakage and performances offered by the Adap-
+tive and the Replay strategies. Finally, we consider the performance
+of both strategies over a query workload. All reported times are the
+average of ten computations querying the same number of objects.
+
+6.3 Computation Scalability and Leakage
+In this study, we are interested in the trade-off between leakage
+prevention and performances of the Adaptive and Replay strategies.
+Particularly, we want to assess the capability of these strategies
+to reach the minimum leakage factor (𝑘 = 1) for a computation
+with limited impact on its performance. As we are not aware of any
+existing solution for the studied problem to compare it with (see
+also Section 7), we consider as baseline the Decomposed execution
+with minimum leakage factor and measure its performance first.
+
+Decomposed with minimum leakage. Figure 5a exposes the
+computation time with Decomposed execution set up with the min-
+imal leakage 𝑘 = 1 on an increasing numbers of objects from the
+Energy data set. As expected, its computation time is very high even
+with a relatively low number of objects (e.g., it exceeds 1 sec. with
+13 objects processed) and it increases linearly. Benefiting from the
+multi-core platform, we measure executions with an optimal num-
+ber of Data tasks launched in parallel (processed using 6 threads,
+the number of CPU cores of the machine). Note that even with
+more CPU cores available, in practice the number of simultane-
+ously running enclaves is limited with SGX depending on enclaves
+memory footprint [29, p.6]. Despite all our optimization efforts, the
+computation time remains too high. We obtained similar results
+with the GPS data set. Unsurprisingly, Decomposed execution is
+impractical when configured for minimum (or low) leakage factor.
+Costs breakdown. Figure 5b details the main execution costs
+of the Decomposed execution (with 𝑘 = 1) for a computation of
+5000 objects. Unsurprisingly, Data tasks creation and attestation
+represent more than 97% of the execution time. Indeed, on Intel SGX
+the creation of enclaves incurs a fixed cost depending notably on
+the number of code pages of the enclave [14]. This is approximately
+110ms in our tests. Moreover, the Core has to establish a secure TLS
+
+Conference’17, July 2017, Washington, DC, USA
+
+Robin Carpentier, Iulian Sandu Popa, and Nicolas Anciaux
+
+(a) Decomposed k=1 ś Energy
+
+(b) Decomposed k=1 breakdown ś Energy (c) Comparison on fixed # of objects ś Energy
+
+(d) Comparison on fixed # of objects ś GPS
+
+(e) Comparison on fixed time ś Energy
+
+(f) Workload 250 computations ś GPS
+
+Figure 5: Performance measurements using Energy and GPS data sets.
+
+channel with each Data task to authenticate it and securely send
+input data and retrieve results. This takes approximately 40ms per
+enclave in our tests. These costs are multiplied by the number of
+Data tasks (one per object in this strategy configuration) hence the
+high overhead. In comparison, the cost induced by the Core SQL
+Engine (to compute 𝑂𝜎 ), communications and computation of the
+user-defined functions (all executions of 𝑎𝑔𝑔 and 𝑐𝑚𝑝 functions)
+are marginal. We also note that these data related costs are 22
+times higher with the GPS data set compared to Energy, because
+the GPS objects are larger and thus incur higher data transfer and
+computation times. Given the cost decomposition, minimizing the
+number of Data tasks involved in the computation is paramount.
+Comparison of execution strategies. Figure 5c and Figure 5d
+compare the performances of Adaptive and Replay strategies de-
+pending on the value of 𝑘 for both data sets. Increasing the leakage
+factor 𝑘 leads to better performance for both strategies because
+fewer Data tasks are required, but it also increases the Object leak-
+age (increasing the leakage factor of one order of magnitude in-
+creases the Object leakage of one order of magnitude, see Section 4).
+We are hence interested in low to minimum leakage factor values.
+Two main conclusions can be raised. First, these figures attest to
+the good performance of Replay, with acceptable execution times
+around 1 second up to 500 objects and around 10 seconds with 5000
+(large) objects. Second, with a small leakage factor (𝑘 close to 1),
+the performance of Replay is around one order of magnitude better
+than that of Adaptive with both data sets. Indeed, the number of
+data tasks in the case of a small leakage factor is much lower with
+Replay (log function in a very high base of the number of objects
+per part, against a proportional number of the input size with Adap-
+tive). Moreover, although these curves focus on low leakage factors,
+
+we highlight the fact that the performance of Adaptive benefits
+from an increase in the leakage factor (privacy-performance trade-
+off), which may lead to preferring the Adaptive strategy to Replay,
+for example, when processing less sensitive objects, and especially
+when dealing with large objects. Indeed, the size of the objects has
+a positive impact on the performance of Adaptive compared to
+Replay, since the processing cost per object induces a penalty for
+Replay which requires processing each object several times.
+
+Figure 5e exposes the leakage concentration to be expected on a
+computation if no more than one (or five) seconds can be spared.
+Beyond 600 objects, the Adaptive strategy cannot handle a 𝑘 value
+lower than 20 under one second. The Replay strategy handles at
+most 4700 objects with a 𝑘 value lower than 20 under one second.
+Within a five second limit, the delivered 𝑘 value from the Adaptive
+strategy increases linearly, reaching 20 with only 3400 objects. In
+opposition, the Replay strategy can handle 30000 objects with the
+minimal leakage factor under five seconds. For the GPS data set
+(figure is omitted due to space limitations), the time constraint is
+more limiting: Adaptive cannot handle more than 1600 objects with
+a 𝑘 value lower than 20 under five seconds while Replay can handle
+up to 2400. Under a time-limit constraint, Replay is thus able to
+compute more objects with smaller 𝑘 than Adaptive.
+
+6.4 Execution Costs with Query Workloads
+Figure 5f shows the evolution of the computation time over a work-
+load of 250 queries on the GPS data set, with a minimum leakage
+factor (𝑘 = 1). The workload is generated so that each computation
+processes objects belonging to 10 randomly selected time intervals,
+ranging in size from 2 to 24 hours. ’Core only’ corresponds to an
+execution of the same function 𝑓 within the Core of the PDMS,
+
+1K2K3K4K5K5K10K15K20K25K30KComputa�on �me (sec.)Number of objects146Number of threads050100150200250300350EnergyGPSComputa�on �me (sec.)Enclavedestruc�onsSQL engine -Communica�ons -UDF computa�onEnclavea�esta�onsEnclave crea�ons012345678910135791113151719Computa�on �me (sec.)leakage factor kAdap�ve n=5000Adap�ve n=500Replay n=5000Replay n=50002468101214161820135791113151719Computa�on �me (sec.)leakage factor kAdap�ven=5000Replay n=5000Adap�ven=500Replay n=500135791113151719101001K10Kleakage factor kNumber of objectsAdap�ve 1sAdap�ve 5sReplay 1sReplay 5s00.511.522.533.5050100150200250Computa�on �me (sec.)Computa�on numberAdap�ve k=1Replay m=3Core onlyData Leakage Mitigation of User-Defined Functions on Secure Personal Data Management Systems
+
+Conference’17, July 2017, Washington, DC, USA
+
+without using any Data task. This represents the case where the
+security of the UDF code would have been fully verified, and could
+thus be added to the PDMS Trusted Computing Base (TCB). While
+this may not be a realistic method for ensuring genericity nor com-
+patible with the considered trust model (see Section 3.2), it allows
+establishing a lower bound in terms of performance and evalu-
+ating the overhead of Data tasks. Replay is again more than one
+order of magnitude more efficient than Adaptive for the first tens to
+hundreds queries. Then, the Result reuse strategy benefits to both
+strategies, and the gap with Adaptive is less significant. On a query
+workload, Replay is thus the best candidate to ensure minimum
+leakage while being close to the ideal ’Core only’ performance.
+
+7 RELATED WORK
+Our solutions are designed to control potential information leak-
+age through the results of successive evaluations of data-driven
+aggregate functions, whose code is controlled by the recipient of
+the results but executed at the DBMS side. We focus on the PDMS
+context, without excluding applications in other contexts, e.g., a
+traditional DBMS running untrusted UDF code. We hence discuss
+existing work related to PDMS, DBMS secured with TEE, tradi-
+tional DBMS addressing issues related to UDF security and finally
+we position our proposal in the domain of information flow control.
+Personal Data Management Systems. PDMSs (also called
+Personal Clouds, Personal Data Stores, PIMS) are hardware and/or
+software platforms enabling users to retrieve their personal data
+(e.g., banking, health, energy consumption, IoT sensors) and exploit
+them in their own environment.
+
+The user is considered the sole administrator of their PDMS,
+whether it is hosted remotely within a personal cloud [1ś4, 15],
+or locally on a personal device [13, 15, 16] śsolutions such as [15]
+considering both forms of useś. These solutions usually include
+support for advanced data processing (e.g., statistical processing,
+machine learning, on time series or images) by means of applica-
+tions installed on the user’s PDMS plateform [15, 16]. Data security
+and privacy (which are dominant features of the PDMS) are essen-
+tially based on code openness and community audit (by more expert
+PDMS users) to minimize the risk of misuse leading to data leakage.
+Automatic network control mechanisms may also help identifying
+suspicious data transfers [34, 37]. However, no guarantee exists
+regarding the amount of PDMS data that may be leaked to external
+parties through seemingly legitimate processed results.
+
+Other PDMS proposals like [6, 8] rely on specific secure hardware
+(secure microcontroller śor TPMś running a lighweight DBMS en-
+gine connected to a mass-storage flash module holding the personal
+database) as well as a minimal Trusted Computing Base (TCB) for
+the PDMS, leading to increased security guarantees, but with re-
+duced performance (due to the drastic limitations of the hardware
+considered) and no possibility to extend the security sphere to
+untrusted external processing code (which by definition, cannot
+be included in the TCB). Our approach also relies on secure hard-
+ware, but allows the TCB to be coupled with advanced non-secure
+processing modules to provide control over potential data leakage.
+DBMSs secured with TEEs. Many recent works [18, 26, 31,
+36, 44] adapt existing database versions to the constraints of TEEs,
+to enclose the DBMS engine and thus benefit from TEE security
+
+properties. For example, Azure SQL [31] allows for encrypted col-
+umn processing within an enclave, with the cryptographic keys
+owned client-side being passed to the enclave at runtime, to ensure
+data confidentiality. EnclaveDB [36] and EdgelessDB [18] embed
+a śsimplifiedś DBMS engine within an enclave and ensure data
+and query confidentiality, integrity and freshness. VeriDB provides
+verifiability ścorrectness and completenessś of database queries. Fi-
+nally, [26] introduces a Path ORAM protocol for SGX to avoid data
+leakage at query execution due to memory access pattern analysis.
+These proposals consider the DBMS code running in the enclaves
+to be trusted by the DBMS owner śor administratorś. Support for
+untrusted UDF/UADF-like functions is not explicitly mentioned,
+but would imply the same trust assumption for the UDF code. Our
+work, on the contrary, makes an assumption of untrusted third-
+party function code for the database owner, with solutions that
+apply to classical DBMS context once the P1 security property
+Enclaved Core/Data Tasks (see Section 2.2) can be ensured.
+
+Other proposals [24, 28] combine sandboxing and TEEs to se-
+cure data-oriented processing. For example, Ryoan[28] protects the
+confidentiality of, on the one hand, the source code (intellectual
+property) of different modules running on multiple sites, and on
+the other hand, users’ data processed by composition of the mod-
+ules. Despite similarities in the architectural approach, the focus
+of these works is not on controlling personal data leakage through
+successive executions and results transmitted to a third party.
+
+Secure UDFs in regular DBMSs. Standard DBMSs support the
+evaluation of third-party code via user-defined functions (UDF).
+Products such as Snowflake [5] or Google BigQuery [25] consider
+the case of "secure" or "authorized" UDFs, where users with UDF
+execution privilege do not have access rights to the input data.
+This context is much different from ours because the UDF code is
+trusted and verified by the administrators with the ability to disable
+optimizer options (e.g., no selection pushed down the execution
+tree to avoid revealing certain input data).
+
+Information flow analysis. A body of literature [33, 39, 41]
+exists in the context of information flow analysis to detect informa-
+tion leakage, but this work is essentially based on the assurance of
+a property of non-interference, which guarantees that if the inputs
+to a function 𝑓 are sensitive, no public output of that function can
+depend on those sensitive inputs. Non-interference is not applica-
+ble in our context, since it is legitimate śand an intrinsic goal of
+running 𝑓 ś for the querier to compute outputs of 𝑓 that depend
+on sensitive inputs. Our goal is therefore to quantify, control and
+limit the potential leakage, without resorting to function semantics.
+Recent work on code semantic anaylysis [43] considers the case
+of untrusted third-party applications running in a TEE. They in-
+troduce new definitions such as non-reversibility to capture other
+types of leakage, especially in the context of machine learning
+algorithms implemented in TEE enclaves. However, the proposal
+is application specific, it requires access to source code, and the
+verification code would itself have to be part of the trusted code
+base, which is considered impractical in our context.
+
+8 CONCLUSION
+This paper presents new solutions to mitigate data leakage from
+untrusted user-defined functions in the PDMS context, satisfying
+
+Conference’17, July 2017, Washington, DC, USA
+
+Robin Carpentier, Iulian Sandu Popa, and Nicolas Anciaux
+
+[24] David Goltzsche, Manuel Nieke, Thomas Knauth, and Rüdiger Kapitza. 2019. Ac-
+cTEE: A WebAssembly-Based Two-Way Sandbox for Trusted Resource Account-
+ing. In Proceedings of the 20th International Middleware Conference (Middleware
+’19). 123ś135.
+
+[25] Google. 2011. Google BigQuery - Authorized Functions. https://cloud.google.
+
+com/bigquery/docs/authorized-functions
+
+[26] Ziyang Han and Haibo Hu. 2021. ProDB: A memory-secure database using
+hardware enclave and practical oblivious RAM. Information Systems 96 (2021).
+[27] T. Hardjono, D.L. Shrier, and A. Pentland. 2019. Trusted Data, revised and expanded
+
+edition: A New Framework for Identity and Data Sharing. MIT Press.
+
+[28] Tyler Hunt, Zhiting Zhu, Yuanzhong Xu, Simon Peter, and Emmett Witchel. 2018.
+Ryoan: A distributed sandbox for untrusted computation on secret data. ACM
+Transactions on Computer Systems (TOCS) 35, 4 (2018), 1ś32.
+[29] Intel. 2021. Intel SGX for Linux OS v2.15 - Developer Reference.
+[30] Microsoft. 2017. Open Enclave SDK. https://openenclave.io
+[31] Microsoft. 2019.
+
+Azure SQL - Always encrypted with secure en-
+https://docs.microsoft.com/en-us/sql/relational-databases/security/
+
+claves.
+encryption/always-encrypted-enclaves
+
+[32] Microsoft Research Asia. 2016. GeoLife GPS Trajectories. https://www.microsoft.
+
+com/en-us/download/details.aspx?id=52367
+
+[33] Andrew C. Myers. 1999. JFlow: Practical Mostly-Static Information Flow Control.
+In Proceedings of the 26th ACM SIGPLAN-SIGACT Symposium on Principles of
+Programming Languages (POPL ’99). 228ś241.
+
+[34] E. Novak, P. T. Aung, and T. Do. 2020. VPN+ Towards Detection and Remedi-
+ation of Information Leakage on Smartphones. In 2020 21st IEEE International
+Conference on Mobile Data Management (MDM). 39ś48.
+
+[35] Sandro Pinto and Nuno Santos. 2019. Demystifying arm trustzone: A compre-
+
+hensive survey. ACM Computing Surveys (CSUR) 51, 6 (2019), 1ś36.
+
+[36] Christian Priebe, Kapil Vaswani, and Manuel Costa. 2018. EnclaveDB: A Secure
+Database Using SGX. In 2018 IEEE Symposium on Security and Privacy, SP 2018.
+264ś278.
+
+[37] Jingjing Ren, Ashwin Rao, Martina Lindorfer, Arnaud Legout, and David Choffnes.
+2016. ReCon: Revealing and Controlling PII Leaks in Mobile Network Traffic.
+In Proceedings of the 14th Annual International Conference on Mobile Systems,
+Applications, and Services (MobiSys ’16). 361ś374.
+
+[38] Indrajit Roy, Srinath T. V. Setty, Ann Kilzer, Vitaly Shmatikov, and Emmett
+Witchel. 2010. Airavat: Security and Privacy for MapReduce. In Proceedings of
+the 7th USENIX Symposium on Networked Systems Design and Implementation,
+NSDI 2010. 297ś312.
+
+[39] A. Sabelfeld and A.C. Myers. 2003. Language-based information-flow security.
+
+IEEE Journal on Selected Areas in Communications 21, 1 (2003), 5ś19.
+
+[40] A.V. Sambra, E. Mansour, S. Hawke, M. Zereba, N. Greco, A. Ghanem, D. Zagidulin,
+A. Aboulnaga, and T. Berners-Lee. 2016. Solid: A platform for decentralized social
+applications based on linked data.
+
+[41] Mingshen Sun, Tao Wei, and John C.S. Lui. 2016. TaintART: A Practical Multi-
+Level Information-Flow Tracking System for Android RunTime. In Proceedings
+of the 2016 ACM SIGSAC Conference on Computer and Communications Security
+(CCS ’16). 331ś342.
+
+[42] Samuel Weiser, Luca Mayr, Michael Schwarz, and Daniel Gruss. 2019. SGXJail:
+Defeating Enclave Malware via Confinement. In 22nd International Symposium
+on Research in Attacks, Intrusions and Defenses (RAID 2019). 353ś366.
+
+[43] Ruide Zhang, Ning Zhang, Assad Moini, Wenjing Lou, and Y Thomas Hou. 2020.
+PrivacyScope: Automatic Analysis of Private Data Leakage in TEE-Protected
+Applications. In 2020 IEEE 40th International Conference on Distributed Computing
+Systems (ICDCS). 34ś44.
+
+[44] Wenchao Zhou, Yifan Cai, Yanqing Peng, Sheng Wang, Ke Ma, and Feifei Li.
+2021. VeriDB: An SGX-Based Verifiable Database. In Proceedings of the 2021
+International Conference on Management of Data (SIGMOD/PODS ’21). 2182ś2194.
+
+multiple usage scenarios. Leveraging the emergence of TEEs, we
+propose security blocks, show the data leakage upper bound, and
+propose practical implementation strategies that guarantee minimal
+leakage with reasonable overhead. The solutions are validated on a
+prototype PDMS [12] using real data sets.
+
+Our solution applies to user-defined aggregate calculation func-
+tions useful in many use cases. Perspectives are related to the study
+of the limitations presented in section 5.3. Another exciting direc-
+tion is to extend the proposal to large sets of PDMS users wishing
+to collectively evaluate statistics with minimal leakage and an eq-
+uitable distribution of data leakage risk among contributors.
+
+REFERENCES
+[1] 2007. mydex. https://mydex.org/
+[2] 2009. Digi.me. https://digi.me
+[3] 2012. BitsAbout.me. https://bitsabout.me
+[4] 2017. Personium. https://personium.io/
+[5] 2019. Snowflake - Secure UDF. https://docs.snowflake.com/en/sql-reference/udf-
+
+secure.html
+
+[6] Tristan Allard, Nicolas Anciaux, Luc Bouganim, Yanli Guo, Lionel Le Folgoc,
+Benjamin Nguyen, Philippe Pucheral, Indrajit Ray, Indrakshi Ray, and Shaoyi
+Yin. 2010. Secure personal data servers: a vision paper. Proceedings of the VLDB
+Endowment 3, 1-2 (2010), 25ś35.
+
+[7] Nicolas Anciaux, Philippe Bonnet, Luc Bouganim, Benjamin Nguyen, Philippe
+Pucheral, Iulian Sandu Popa, and Guillaume Scerri. 2019. Personal data manage-
+ment systems: The security and functionality standpoint. Information Systems
+80 (2019), 13ś35.
+
+[8] Nicolas Anciaux, Philippe Bonnet, Luc Bouganim, Benjamin Nguyen, Iulian
+Sandu Popa, and Philippe Pucheral. 2013. Trusted Cells : A Sea Change for
+Personnal Data Services. In Proceedings of the 6th biennal Conference on Innovative
+Database Research (CIDR 2013).
+
+[9] Stefan Brenner, Michael Behlendorf, and Rüdiger Kapitza. 2018. Trusted Ex-
+ecution, and the Impact of Security on Performance. In Proceedings of the 3rd
+Workshop on System Software for Trusted Execution. 28ś33.
+
+[10] Robin Carpentier, Iulian Sandu Popa, and Nicolas Anciaux. 2021. Poster: Re-
+ducing Data Leakage on Personal Data Management Systems. In IEEE European
+Symposium on Security and Privacy, EuroS&P 2021. 716ś718.
+
+[11] Robin Carpentier, Iulian Sandu Popa, and Nicolas Anciaux. 2022. Local Personal
+Data Processing with Third Party Code and Bounded Leakage. In Proceedings of
+the 11th International Conference on Data Science, Technology and Applications,
+DATA 2022.
+
+[12] Robin Carpentier, Floris Thiant, Iulian Sandu Popa, Nicolas Anciaux, and Luc
+Bouganim. 2022. An Extensive and Secure Personal Data Management System
+Using SGX. In Proceedings of the 25th International Conference on Extending
+Database Technology, EDBT 2022. 2:570ś2:573.
+
+[13] Amir Chaudhry, Jon Crowcroft, Heidi Howard, Anil Madhavapeddy, Richard
+Mortier, Hamed Haddadi, and Derek McAuley. 2015. Personal Data: Thinking
+Inside the Box. Aarhus Series on Human Centered Computing 1, 1 (2015).
+[14] Victor Costan and Srinivas Devadas. 2016. Intel SGX Explained. IACR Cryptol.
+
+ePrint Arch. (2016), 86.
+
+[15] Cozy. 2012. Cozy Cloud. https://cozy.io/
+[16] Yves-Alexandre de Montjoye, Erez Shmueli, Samuel S. Wang, and Alex Sandy
+Pentland. 2014. openPDS: Protecting the Privacy of Metadata through SafeAn-
+swers. PLoS ONE 9, 7 (2014).
+
+[17] Cynthia Dwork. 2006. Differential Privacy. In Automata, Languages and Program-
+ming, 33rd International Colloquium, ICALP 2006, Proceedings, Part II, Vol. 4052.
+1ś12.
+
+[18] Edgeless Systems. 2021. EdgelessDB. https://www.edgeless.systems/products/
+
+edgelessdb/
+
+[19] Taher ElGamal. 1985. A public key cryptosystem and a signature scheme based
+IEEE transactions on Information Theory 31, 4 (1985),
+
+on discrete logarithms.
+469ś472.
+
+[20] European Council. 2016. Regulation EU 2016/679 of the European Parliament
+and of the Council. Official Journal of the European Union (OJ) 59, 1-88 (2016),
+294.
+
+[21] Craig Gentry. 2009. A Fully Homomorphic Encryption Scheme. Ph. D. Dissertation.
+[22] Georges Hebrail and Alice Berard. 2012. Individual household electric power
+https://archive.ics.uci.edu/ml/datasets/individual+
+
+consumption Data Set.
+household+electric+power+consumption
+
+[23] Anders T. Gjerdrum, Robert Pettersen, Håvard D. Johansen, and Dag Johansen.
+2017. Performance of Trusted Computing in Cloud Infrastructures with Intel
+SGX. In Proceedings of the 7th International Conference on Cloud Computing and
+Services Science, CLOSER 2017. 668ś675.
+
+

@@ -1,0 +1,1188 @@
+Human-in-the-Loop Feature Selection
+Alvaro H C Correia, Freddy Lecue
+
+To cite this version:
+
+Alvaro H C Correia, Freddy Lecue. Human-in-the-Loop Feature Selection. AAAI 2019 Conference -
+33th Association for the Advancement of Artificial Intelligence, Jan 2019, Honolulu, United States.
+￿hal-01934916￿
+
+HAL Id: hal-01934916
+
+https://inria.hal.science/hal-01934916
+
+Submitted on 28 Nov 2018
+
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of sci-
+entific research documents, whether they are pub-
+lished or not. The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+
+Human-in-the-Loop Feature Selection
+
+Alvaro H. C. Correia∗
+ENSTA ParisTech, Palaiseau, France
+Utrecht University, The Netherlands
+a.h.chaimcorreia@uu.nl
+
+Freddy Lecue∗
+CortAIx Thales, Montreal, Canada
+Inria, Sophia Antipolis, France
+freddy.lecue@inria.fr
+
+Abstract
+
+Feature selection is a crucial step in the conception of Ma-
+chine Learning models, which is often performed via data-
+driven approaches that overlook the possibility of tapping
+into the human decision-making of the model’s designers and
+users. We present a human-in-the-loop framework that inter-
+acts with domain experts by collecting their feedback regard-
+ing the variables (of few samples) they evaluate as the most
+relevant for the task at hand. Such information can be mod-
+eled via Reinforcement Learning to derive a per-example fea-
+ture selection method that tries to minimize the model’s loss
+function by focusing on the most pertinent variables from a
+human perspective. We report results on a proof-of-concept
+image classiﬁcation dataset and on a real-world risk classi-
+ﬁcation task in which the model successfully incorporated
+feedback from experts to improve its accuracy.
+
+Introduction
+Selecting a subset of the available features for a given Ma-
+chine Learning task, also known as feature selection, is a
+critical step that helps in the design of relevant, accurate and
+robust models (Guyon and Elisseeff 2003; Chandrashekar
+and Sahin 2014). Although ideally models should be capa-
+ble of identifying the most predictive features during train-
+ing, a large input space can reduce performance due to the
+“curse of dimensionality”: the amount of data required to ﬁt
+a reliable estimator increases exponentially with the number
+of variables. Therefore, a model based on a smaller number
+of features might produce better results while being faster
+and more cost-effective.
+
+A way of tackling this problem is to select features ac-
+cording to experts’ prior knowledge, but that is costly, time
+demanding and manual. Furthermore, often the users with
+the relevant understanding of the domain and task are not
+the ones designing the model. An alternative is to resort to
+methods that automatically rank and select features under
+some measure of relevance or importance. Even so, a limi-
+tation common to manual and automatic approaches alike is
+that they deﬁne a single feature subset to represent the entire
+dataset. When the amount of training data is small compared
+to the number of features, a single subset is unlikely to be
+able to describe all observations (Avdiyenko, Bertschinger,
+and Jost 2012).
+
+∗Work funded by Accenture Labs, Ireland for an internship.
+
+Towards this challenge, we present a per-example feature
+selection method by including the human-in-the-loop. We
+propose a framework where experts are asked to identify the
+most relevant features for a few examples. Reinforcement
+Learning (RL) allows us to use that feedback to explicitly
+model the probability of selecting each feature and derive a
+policy that produces a new feature subset for each observa-
+tion in the dataset. Each example is thus represented by a
+different set of features, which is the only input to a subse-
+quent learning algorithm (e.g., a classiﬁer or regressor). The
+feature selection policy is learned through policy gradient
+methods to minimize both (i) the loss function of the asso-
+ciated learning algorithm and (ii) the dissimilarity between
+the feature subsets chosen by the model and the users.
+
+Such an approach can not only improve the performance
+of the model but also render its decision-making more inter-
+pretable to human users. As the ﬁnal prediction relies only
+on the selected feature subset, which is individual to each
+example, one can interpret those variables as an explanation
+for the model’s output. Moreover, by mimicking human an-
+notation in selecting the most relevant features, the model
+can better reﬂect causal relationships in the experts’ minds.
+We frame our model as a stochastic computation graph
+(Schulman et al. 2015) and compare two different solvers:
+Score Function (SF) and Pathwise Derivative (PD) estima-
+tors. We validate our method in two scenarios: (i) a proof-
+of-concept image classiﬁcation task and (ii) a real-world
+project risk classiﬁcation task. In the latter, which is highly
+human-curated, our architecture improves the baseline ac-
+curacy by more than 50%. We also study the inﬂuence of
+different hyperparameters and factors of practical relevance,
+such as the required number of pieces of feedback and the
+presence of conﬂicting information from different experts.
+
+The next section reviews related work. Then, we present
+(i) the feature selection problem, (ii) our human-in-the-loop
+approach, (iii) the stochastic computation graph framework
+with the SF and PD solvers, and ﬁnally (iv) the experiments
+in the two tasks described above.
+
+Related Work
+The literature is rich in feature selection methods, and we re-
+fer to (Guyon and Elisseeff 2003) and (Chandrashekar and
+Sahin 2014) for excellent surveys. More precisely, we are
+concerned with variable elimination techniques, where only
+
+a subset of the available features is selected. These are tradi-
+tionally divided in ﬁlters (Tyagi and Mishra 2013), wrappers
+(Kohavi and John 1997) and embedded methods (Guyon and
+Elisseeff 2003). Filter methods consist of a preprocessing
+step where the top-k features are selected by ranking them
+against some score function, such as the mutual informa-
+tion between input and target variables. Conversely, wrapper
+methods rank feature subsets following some performance
+measure such as the accuracy in the training data. That re-
+quires retraining the model for each candidate subset, which
+can be computationally costly and time-consuming. Finally,
+embedded methods try to solve that problem by performing
+feature selection while training the learning algorithm.
+
+Our approach can be classiﬁed as an embedded method
+because we jointly train the feature selection and the learn-
+ing algorithm via gradient descent. However, it distinguishes
+itself from conventional ones because it selects a differ-
+ent subset of the features for each observation. Such a per-
+example approach can better describe the data (Avdiyenko,
+Bertschinger, and Jost 2012) and render the output more in-
+terpretable, as the selected variables can be understood as
+the “causes” that drive the model’s decision-making.
+
+Per-example feature selection has also been studied in
+(Avdiyenko, Bertschinger, and Jost 2012). They proposed a
+ﬁlter method based on the mutual information between fea-
+tures and target variables, conditioned on the speciﬁc val-
+ues of each example. The mutual information is then used
+as a score to rank the k most relevant features for each in-
+put. Their work contrasts with ours in two signiﬁcant ways:
+(i) their method is deterministic and completely data-driven,
+whereas ours include human feedback to provide insights
+that cannot be automatically inferred from small or com-
+plex datasets; (ii) they build a subset sequentially, while our
+method produces a candidate subset in a single step, with no
+need for an arbitrary stop criterion.
+
+Our model is also inspired by recent developments in
+attention mechanisms in deep learning (Mnih et al. 2014;
+Xu et al. 2015; Bengio, L´eonard, and Courville 2013;
+Bahdanau, Cho, and Bengio 2015). By attributing weights
+to the different hidden states in a neural network, attention
+mechanisms are also selecting the most relevant features to
+minimize the model’s cost function. Our contribution lies in
+the application of such attention mechanisms to human-in-
+the-loop architectures as a way to provide prior knowledge
+to the model on-the-ﬂy.
+
+Finally, our model also relates to probabilistic approaches
+to knowledge elicitation (Cano, Masegosa, and Moral 2011;
+House, Leman, and Han 2015; Daee et al. 2017). The work
+by Daee et al. is particularly relevant because they also query
+users about feature importance. However, they only model
+global feature relevance, whereas we propose a per-example
+feature selection method capable of eliciting the variables
+that drive the prediction for each observation.
+
+Feature Selection
+
+We assume a supervised learning scenario, where a para-
+metric model is trained to minimize some cost function
+C(x, y, θ), where x is the input, y is the target, and θ is the
+
+set of parameters deﬁning the model. For clarity, we refer to
+the model’s prediction as ˆy to contrast with the true value y.
+
+Framework
+We propose a framework where the annotators or the users
+not only provide the ground truth y but also select the most
+relevant features for some of the examples in the dataset.
+That is common practice when experts emphasize some
+characteristics of the data to drive the machine learning
+modeling (Raghavan, Madani, and Jones 2006). To model
+that annotation and perform feature selection (variable elim-
+ination) on a per-example basis, we introduce a mask a that
+is applied over the input vector x to ﬁlter out irrelevant fea-
+tures in each observation. Therefore, if an example is given
+by x ∈ Rd, where each dimension corresponds to a feature
+xj, then a is an indicator variable in {0, 1}d, such that:
+
+(cid:26) aj = 1, if xj is used for example x
+
+aj = 0, otherwise.
+
+(1)
+
+We denote the input to the learning algorithm by x(cid:48), which
+is now given by x(cid:48) = x (cid:12) a, where (cid:12) is the element-wise
+or Hadamard product. As the feature selection is performed
+on a per-example basis, a must be a function of the input
+x. However, if a is an indicator variable, we cannot apply
+gradient descent to minimize the loss C(x(cid:48), y, θ) because it
+is no longer differentiable with respect to the function that
+deﬁnes a. For that reason, we make variable a stochastic and
+model the probability of a conditioned on x. Given that a ∈
+{0, 1}d, we can associate each component aj to a Bernoulli
+distribution parametrized by ˆqj and obtain:
+
+π(a|x) =
+
+d
+(cid:89)
+
+j=1
+
+ˆqaj
+j (1 − ˆqj)(1−aj ).
+
+(2)
+
+Our objective is to concentrate the mass of the distribu-
+tion π(a|x) on values of a that minimize the loss function
+C(x(cid:48), y, θ). To achieve that, we will resort to RL and, in par-
+ticular, policy gradient methods (Sutton and Barto 2011).
+Hence, we will refer to π(a|x) as a policy, which should
+tell us the best a given the current input x. Keeping the RL
+jargon, the function that deﬁnes such a policy will be called
+an agent. The probability ˆqj of each feature being selected
+by this agent will be a function of x and approximated by
+a neural network with parameters ψ, where the last layer
+consists of a sigmoid function to squash the results into a
+probability space. The vector composed of all d parameters
+ˆqj is estimated in a single step by this neural network.
+
+ˆqψ = (ˆq1, ˆq2, ..., ˆqd) = h(x; ψ).
+
+(3)
+
+Note that we deﬁned a as an indicator variable to produce
+a variable elimination method: the features are either in the
+selected subset of variables or not. However, our framework
+can be easily extended to any number of states to represent
+the relative importance of each feature, which could also be
+seen as mid-ground between the soft and hard attention mod-
+els proposed in (Bengio et al. 2016). In that case, assuming
+K possible states, the policy π(a|x) can be rewritten in the
+following more general form:
+
+π(a|x) =
+
+d
+(cid:89)
+
+K
+(cid:89)
+
+ˆq[aj =k]
+jk
+
+,
+
+(4)
+
+j=1
+where ˆqjk is the probability of assigning state k to feature j
+and [aj = k] evaluates to 1 if aj = k, 0 otherwise.
+
+k=1
+
+Human-Like Feature Selection
+The framework described above can also be used to model
+the feature selection performed by humans. We will assume
+without loss of generality that the annotators’ feedback can
+be translated into a vector q ∈ [0, 1]d, where each element
+qj reﬂects the importance attributed to feature j. In that case,
+q is directly comparable to the model’s output ˆq, which can
+also be interpreted as the relevance of each feature. The intu-
+ition is that if qj or ˆqj is close to one, feature j is determinant
+to predict ˆy and is negligible otherwise.
+
+Therefore, to train the agent to mimic the feature selection
+done by the users, ﬁrst we need to deﬁne a similarity mea-
+sure between q and ˆq. The distance between q and ˆq is also
+a cost function, which we will refer to as Cf (x, q, ψ) in (5)
+to distinguish it from C(x(cid:48), y, θ). The Euclidean distance is a
+straightforward option of a distance measure, which results
+Cf (x, q, ψ) = Ex ||qi − ˆqi||2 = Ex ||qi − h(x; ψ)||2.
+The Mean Squared Error (MSE) between q and ˆq, as de-
+ﬁned above, is not the only possibility, and other dissimilar-
+ity functions might be pertinent depending on the applica-
+tion and type of feedback. For instance, an alternative is the
+cosine distance
+
+(5)
+
+Cf (x, q, ψ) = 1−
+
+q ˆq
+||q||2 ||ˆq||2
+
+= 1−
+
+q h(x; ψ)
+||q||2 ||h(x; ψ)||2
+
+. (6)
+
+With the cosine distance, we penalize the agent if the two
+vectors do not have the same orientation in space but ignore
+differences in magnitude.
+
+Once the similarity measure is deﬁned, we just have to
+add Cf (x, q, ψ) to the ﬁnal cost function to which we will
+refer as C in (7) to simplify the notation.
+
+(7)
+
+C = C(x, y, q, θ, ψ) = C(x(cid:48), y, θ) + λ Cf (x, q, ψ).
+That can be interpreted as the sum of two reward signals that
+encourage the agent to achieve a good performance at the
+machine learning task while mimicking human feature se-
+lection. In (7) λ is a hyperparameter that balances the trade-
+off between these two signals. Such sum of errors for differ-
+ent tasks is common practice in multi-task learning (Caruana
+1997) Note that the framework does not require human fea-
+ture selection data to be provided for all data. For examples
+with no available feedback, Cf (x, q, ψ) is set to zero.
+
+Stochastic Computation Graphs
+The mask a is stochastic and before making a prediction, we
+ﬁrst need to sample a from the policy deﬁned in (2). Hence,
+we can frame the whole model, including the feature selec-
+tion and the learning algorithm, as a stochastic computation
+graph (Schulman et al. 2015). That allows for a straightfor-
+ward comparison of possible solvers and clear representa-
+tions of the model as depicted in Figures 1 and 2.
+
+x
+
+a
+
+ψ
+
+x(cid:48)
+
+y
+
+C
+
+θ
+
+Figure 1: Stochastic graph for the score function estimator.
+As in (Schulman et al. 2015), square nodes are deterministic,
+whereas round ones are stochastic. Inputs and parameters are
+represented by their corresponding vector names.
+
+The challenge in a stochastic computation graph is that
+the standard backpropagation algorithm is no longer sufﬁ-
+cient because the cost C(x(cid:48), y, θ) is non-deterministic and
+non-differentiable with respect to the parameters ψ. In that
+case, we need some way of estimating ∇ψ Ea[ C ], the gra-
+dient of the expected loss function with respect to the policy
+parameters. To that end, we can resort to one of the follow-
+ing estimators to ﬁnd the optimal policy π(a|x): (i) the Score
+Function (SF) and (ii) the Pathwise Derivative (PD) estima-
+tors (Schulman et al. 2015).
+
+Score Function Estimator
+
+The Score Function estimator (SF), also known as the RE-
+INFORCE algorithm (Williams 1992), consists in rewriting
+(cid:104)
+C ∇ψlog (cid:0)π(a|x, ψ)(cid:1)(cid:105)
+∇ψ Ea[ C ] as Ea
+. Practically, it al-
+lows the complete model to be trained by gradient descent
+to minimize a surrogate cost function C(cid:48) deﬁned as follows:
+C(cid:48) = C log (cid:0)π(a|x, ψ)(cid:1) + C.
+
+(8)
+
+In many cases, it is desirable to favor a subset with a
+smaller number of features, even if that does not decrease C(cid:48).
+To encourage the desired sparsity in the mask a, we follow
+the approach used in (Bengio et al. 2016) and introduce a
+regularizer Ls, which penalizes the model if ˆqj is not sparse.
+
+Ls = E
+
+(cid:104)
+
+(||
+
+1
+d
+
+d
+(cid:88)
+
+j
+
+ˆqj) − φ||2
+
+(cid:105)
+
+,
+
+(9)
+
+where φ ∈ [0, 1] is an hyperparameter that speciﬁes the de-
+sired sparsity of activation. We also want ˆq to have high vari-
+ance across different examples to avoid always selecting the
+same subset of features. Hence, we add another regularizer
+to penalize low variance across examples in the same batch.
+
+Lv = −
+
+d
+(cid:88)
+
+j
+
+1
+m
+
+m
+(cid:88)
+
+(cid:16)
+
+i
+
+ˆqij −
+
+(cid:16) 1
+m
+
+m
+(cid:88)
+
+(cid:17)(cid:17)2
+
+,
+
+ˆqij
+
+i
+
+(10)
+
+where the index i refers to each example x and m is the batch
+size. The model is then trained to minimize C(cid:48) + λsLs +
+λvLv, where λs and λv are hyperparameters that balance
+the trade-off between the cost C(cid:48) and the desired sparsity
+and variance in the feature subset.
+
+Pathwise Derivative Estimator
+The second alternative is to use the Pathwise Derivative es-
+timator (PD), which is also known as the reparametrization
+trick and was made popular by variational autoencoders in-
+troduced in (Kingma and Welling 2014). We can sample
+from π(a|x) by ﬁrst sampling a latent variable z from a
+known ﬁxed probability distribution p(z) and transforming
+it using some function to recover a. In that case, the mask
+a is no longer sampled from a random variable because we
+introduce another stochastic node z to account for the ran-
+domness in the process. The corresponding graph for the
+pathwise derivative estimator is shown in Figure 2.
+
+ψ
+
+x
+
+a
+
+z
+
+x(cid:48)
+
+y
+
+C
+
+θ
+
+Figure 2: Stochastic graph for the pathwise derivative esti-
+mator. Here the mask a is no longer a stochastic node.
+
+In variational autoencoders, z is usually distributed ac-
+cording to a Gaussian distribution (Kingma and Welling
+2014; Kingma et al. 2016), but the reparametrization trick
+can be extended to categorical variables by sampling z from
+a Gumbel-softmax distribution (Jang, Gu, and Poole 2017;
+Maddison, Mnih, and Teh 2015). To use that distribution, we
+ﬁrst need to rewrite a as a one-hot vector to match the out-
+put of a softmax. Assuming K different possible states, ajk
+is the probability of assigning state k to feature j, which can
+be calculated as
+
+ajk =
+
+exp((log(ˆqjk) + gk)/τ )
+l=1 exp((log(ˆqjl) + gl)/τ )
+
+(cid:80)K
+
+for k in 1, ..., K,
+
+(11)
+where g0, g1, ..., gk, are samples from Gumbel(0,1) (Gum-
+bel 1954) and τ is a hyperparemeter that deﬁnes how close
+the distribution is from the argmax function. For τ > 0,
+equation (11) is smooth and differentiable, but for τ = 0
+it is simply an argmax function. Hence, during training τ is
+maintained positive, but we gradually decrease its value as
+the model approaches convergence. During test time, we do
+not need the cost function to be fully differentiable and τ is
+set to zero to recover an argmax function.
+
+Now the mask is a matrix a ∈ Rd×K and we need to
+reduce it to a vector of size d before multiplying it by the in-
+put x. One way to do so is to multiply a by a set of weights
+w ∈ RK, so that aw ∈ [0, 1]d. For instance, if we want to
+parametrize a Bernoulli distribution as in (2), aj would have
+two states and w would be [0, 1]T . Note that for τ > 0, a is
+no longer an indicator variable, but is continuous in the inter-
+val [0, 1]. That is a relaxation that renders the graph wholly
+differentiable during training, but we regain the original def-
+inition of a in (1) during test time when τ = 0.
+
+The advantage of the pathwise derivative estimator is that
+
+it does not require a surrogate cost function and we can up-
+date the whole model via gradient descent by minimizing
+(7). We also observed that the PD estimator does not require
+the same type of regularization as the SF estimator, which re-
+duces the number of hyperparameters that need ﬁne-tuning.
+However, it does introduce another hyperparameter for the
+temperature τ , so that the entropy in the Gumbel-softmax
+can be regulated during training.
+
+Experimental Results
+We validate our feature selection method on: (i) a proof-
+of-concept image classiﬁcation task for reproducibility and
+(ii) a real-world project risk classiﬁcation task. All experi-
+ments were developed on top of the Tensorﬂow python API
+(GoogleResearch 2015) and run on a single GPU Nvidia
+GEFORCE GTX 1080 Ti. The code for the image classi-
+ﬁcation task can be found at github.com/AlCorreia/
+Human-in-the-loop-Feature-Selection.
+
+Set-up: The architecture of our feature selection model is
+similar for both use cases, which shows the generality of our
+approach. The classiﬁer was a neural network with a feedfor-
+ward architecture and a hidden layer of 256 neurons. The last
+activation was a softmax to yield the negative log-likelihood
+used as loss function for the classiﬁcation task. The RL agent
+was also neural network-based with a single hidden layer of
+128 neurons. In both cases, the activation function between
+the layers was a rectiﬁed linear unit (ReLU). For the project
+risk classiﬁcation dataset, categorical features were embed-
+ded in a vector of size log2 n where n is the total number of
+categories. These embeddings were learned via backpropa-
+gation with the rest of the model.
+
+Runs: The model based on the PD estimator was trained
+for 100 epochs with batches of 876 projects (1000 im-
+ages), but the feedback was only provided during the last
+50 epochs. The SF estimator was trained the same way, but
+as it proved noisier, we also pretrained the network without
+any feature selection for 40 epochs. In each training phase,
+the whole model was updated via Adagrad (Duchi, Hazan,
+and Singer 2011) with initial learning rate of .5. The hyper-
+parameter λ in (7) was set to 1, so that minimizing the cost
+function and reproducing the feedback were equally impor-
+tant objectives. For the SF estimator, the regularization pa-
+rameters φ, λs and λv in (9) and (10) were set to .2, 1 and
+1, respectively. For the PD estimator, different values for the
+temperature parameter were tested, but for the results in Ta-
+ble 4 and 5, it was set to 10 and decayed by 4% every 100
+steps to slowly render the model more deterministic.
+
+Image Classiﬁcation Task
+Context: We tested our model on an augmented MNIST
+dataset (LeCun et al. 1998) composed of cluttered images as
+in (Mnih et al. 2014). We randomly positioned each digit in-
+side a larger frame and added four 8x8 sub patches of other
+digits to random locations of the image. For that task, the
+features x are not the raw pixels, but the output of a single
+convolutional layer (1x4x4x8), which discards the trivial so-
+lution of simply selecting non-zero pixels.
+
+To prove that the agent can select relevant features, the
+attention vector was equally applied over all the ﬁlters of the
+convolution to make the mask directly related to locations
+in the image. Thus, one can interpret whether the agent’s
+selection was pertinent by visually comparing it against the
+actual position of the digit.
+
+Feedback Computation: We simulated user feedback by
+ﬁtting a 2D Gaussian with the position of the center of the
+digit for the mean. All training data was generated on-the-
+ﬂy by repeating the above process. The test data was com-
+posed of a ﬁxed set of 5000 images produced in the same
+way. Figure 3 shows an example of a cluttered image and its
+corresponding feedback.
+
+(a)
+
+(b)
+
+Figure 3: Cluttered MNIST image and simulated feedback.
+
+Baseline: The baseline for the experiments is given by the
+neural network with the same architecture, but without any
+feature selection, i.e. all the features extracted by the convo-
+lutional layer are fed to the classiﬁer. That model was able
+to classify correctly 92.23% of the examples in the test set
+after 100 epochs with batches of 1000 examples.
+
+Selected Features: Figure 4 shows the evolution of the
+probabilities ˆq corresponding to Figure 3, during the train-
+ing of the model with the PD estimator. The model gradually
+learned to focus on a single region of the image, but ˆq only
+became sharp after the feedback was introduced.
+
+(a) Beginning (b) 25 epochs (c) 50 epochs
+
+(d) feedback
+
+Figure 4: Evolution of the probabilities vector ˆq during train-
+ing of the model with PD estimator and MSE feedback.
+
+Comparing Estimators
+Table 1 shows the results obtained with both estimators
+when applying the proposed feature selection method on a
+cluttered MNIST dataset with a frame of 60x60.
+
+Table 1: Estimators Impact on Accuracy (%).
+
+Feedback / Estimator
+Before Feedback
+Cosine Feedback
+MSE Feedback
+
+SF
+85.35
+92.30
+91.16
+
+PD
+85.70
+88.40
+89.61
+
+Both estimators produced similar results during the ﬁrst
+phase when the feature selection was based on the classiﬁ-
+cation cost only. Despite similar performances, the PD esti-
+mator has the advantage of not requiring pretraining nor any
+regularization or variance reduction parameters.
+
+In both cases the inclusion of the simulated feedback pro-
+duced a considerable improvement in the accuracy of the
+model. However, the SF estimator proved more efﬁcient in
+incorporating the human feature selection, outperforming
+the PD estimator by almost 5%. The difference can be at-
+tributed to the difﬁculty in ﬁne-tuning the hyperparameter
+τ for the PD estimator based on the Gumbel-softmax. Even
+though the temperature was decayed during training, τ was
+probably still too high to allow for an efﬁcient integration of
+the feedback. As indicated by the experiments presented in
+the next section, for τ around 1.0 the PD estimator produces
+similar results to those obtained with the SF here.
+
+Impact of Temperature on Accuracy
+The temperature τ is the only hyperparameter that needs to
+be ﬁne-tuned when solving the graph with the PD estima-
+tor. We ran the model with the same architecture described
+above, but with ﬁve different values for the temperature. Dif-
+ferently from the previous experiments, in this case the value
+of τ was kept constant during the whole training.
+
+Table 2: Temperature Impact on Accuracy (%).
+Temperature Value Before feedback After feedback
+0.25
+0.50
+1.0
+3.0
+10.0
+
+88.70
+89.76
+91.20
+88.90
+88.82
+
+84.77
+85.48
+86.5
+84.10
+84.77
+
+When τ is close to zero, the Gumbel-softmax approaches
+an argmax over the probabilities ˆqj, which means the agent
+only exploits and always picks the value for a that maxi-
+mizes the reward under its current policy. For τ > 0, aj
+becomes stochastic, which allows the agent to explore and
+observe the loss for intermediate values of a. However, if τ
+is high, equation (11) is close to an uniform distribution over
+its K categories and ajk is 1
+K for every k. Hence, assuming
+a ﬁxed set of weights w, the ﬁnal value for aj would remain
+constant and independent of the policy parameters ψ, pre-
+venting the agent from updating its policy effectively. That
+is reﬂected in the results presented in Table 2. A temperature
+value of 1.0 produced the most accurate model, presumably
+striking a balance between exploration and exploitation.
+
+From Bernoulli to Categorical Distribution
+We studied the inﬂuence of the number of states K on the PD
+estimator. The results in Table 3 show that the accuracy of
+the model decreases with the number of states. One can in-
+fer two different reasons for that: (i) as the number of states
+increases, the search problem grows in complexity and (ii)
+given that the MNIST data is itself binary, the beneﬁt of hav-
+ing multiple states does not compensate for the increase in
+complexity. However, in all cases the model beneﬁted from
+
+the feedback and achieved similar accuracy values to those
+presented Table 1. One can also conclude that the feedback
+is all the more valuable when the search space is large.
+
+Table 3: Number of States on Accuracy (%).
+MSE
+89.50
+89.61
+88.98
+85.40
+
+Before Feedback
+85.15
+83.82
+80.83
+74.24
+
+Cosine
+88.40
+88.70
+88.69
+86.62
+
+States
+2
+3
+10
+20
+
+Project Risk Classiﬁcation Task
+Business Context: We experimented our feature selection
+method on a Project Risk Classiﬁcation (PRC) dataset. 4
+years of project risk proﬁles of a leading service company,
+capturing 349, 324 projects across 97 features (19 categor-
+ical and 78 numerical) and classiﬁed among 5 categories
+(from high to no ﬁnancial risk) are captured.
+
+During the feedback collection phase, 114 business ex-
+perts contributed by informing on: (i) (recommended) class,
+(ii) important features, (iii) textual comments (manually
+used to ﬁlter out some cases) cf. Figure 5. A total of 613, 916
+pieces of feedback on 87, 657 active contracts (their classi-
+ﬁcation and important features) have been collected over a
+6-month pilot with an average of 7 pieces of feedback per
+project, and 45 per person/day. On average, the business ex-
+perts provided feedback on 11 (standard deviation of 3.9)
+variables per example. Naturally, some feedback is conﬂict-
+ing among users: 21.6% (resp. 12.8%) of the feedback con-
+ﬂict at class (resp. feature importance) level.
+
+Motivation: The PRC problem ﬁts our framework as (i)
+baseline approaches reach a (low) maximum accuracy of
+31.45% (random forest), (ii) project risk assessment is a
+highly human-curated task where experts can expose their
+knowledge by identifying relevant features, and (iii) com-
+pletely data-driven approaches would require large amounts
+of data given the sparsity inherent of this context.
+
+Feedback Computation: From now on, we will use the
+term feedback to refer to the feature-level annotation only,
+as we are mostly interested in feature selection. We limited
+the feedback to the binary impact of each feature because
+it facilitates the labeling task and better correlates with our
+variable elimination framework. Therefore, for each obser-
+vation i, a piece of feedback translates to a binary vector
+qi ∈ {0, 1}d, where qi,j = 1 iff feature j is relevant for ex-
+ample i. Each example i received feedback from an average
+of 7 users. Consequently, for all experiments except those on
+Table 7, each i appeared multiple times in the dataset with
+different qi’s. All those observations were treated indepen-
+dently and randomly selected during training.
+
+Validation: Accuracy is measured by comparing the pre-
+dicted risk class with the real-world observations of risk for
+completed projects. Training, testing and validation sets cor-
+respond to 60/20/20% of the projects, respectively, with
+each class equally distributed in the validation and test sets.
+
+Baseline: There are two baselines for the experiments: (i)
+a random forest trained with the same features, which at-
+tained accuracy of 31.45% and (ii) a neural network with
+the same architecture described above (cf. Technical Context
+set-up), but without any feature selection. The latter classi-
+ﬁes correctly 29.01% of the examples in the test set after 100
+epochs with batches of 876 examples.
+
+Selected Features: After training with the feedback, the
+model selected a relatively low number of features: 2 to 12
+(mean: 4.6, std: 1.5). Such a low number of selected features
+is desirable as it favors the interpretability of the model.
+
+Impact of Estimators on Accuracy
+Table 4 reports the accuracy obtained with SF and PD esti-
+mators when applying our method on the PRC dataset.
+
+Table 4: Accuracy (%) on PRC Test Set with Each Estimator.
+
+Feedback / Estimator
+Before Feedback
+Cosine Feedback
+MSE Feedback
+
+SF
+29.53
+82.49
+80.11
+
+PD
+29.99
+77.51
+78.44
+
+The results show a very similar pattern to the one ob-
+served in the image classiﬁcation dataset. Once more the SF
+was superior by 5%, but the PD was slightly more accurate
+before the introduction of feedback.
+
+Impact of Temperature on Accuracy
+We also varied the temperature τ for the PD estimator on
+the PRC dataset. The results presented in Table 5 support
+the same conclusions we reached on the image classiﬁcation
+task. A τ of 1.0 lead to a higher accuracy both before and af-
+ter the introduction of feedback, which suggests that would
+be a good default τ value for the PD estimator.
+
+Table 5: Temperatures on Accuracy on PRC (PD & MSE).
+Temperature Value Before feedback After feedback
+0.25
+0.50
+1.0
+3.0
+10.0
+
+77.82
+78.77
+81.87
+78.33
+78.07
+
+28.78
+30.02
+31.15
+27.98
+28.36
+
+Feedback Impact on Accuracy
+Qualitative Feedback Impact (1): Table 6 presents an
+analysis of the optimal moment to start injecting the feed-
+back into the model solved with the SF estimator. Even
+though pre-training the network without any feature selec-
+tion is beneﬁcial, feedback should be provided no later than
+40 epochs into the training phase to reach optimal results.
+
+Table 6: Feedback epoch on Accuracy on PRC (SF & MSE).
+
+Epoch(#) Accuracy(%)
+10
+20
+30
+40
+
+63.54
+71.66
+77.88
+80.11
+
+Epoch(#) Accuracy(%)
+50
+60
+70
+80
+
+78.54
+71.45
+60.87
+52.10
+
+Figure 5: User interface for Project Risk Classiﬁcation problem (human feedback collection inside dashed zone).
+
+Qualitative Feedback Impact (2): We run the same tests
+with 4, 8, 16 and 32 states cf. Table 7 to evaluate the in-
+ﬂuence of the number of states K on the performance of the
+PD estimator. To match these different numbers of states, we
+combined the input from multiple users into a single score
+per example, qi ∈ {0, 1
+16 , 1} ( 16 is the max. number of
+reviews per example). That score was adjusted proportion-
+ally to match the other versions with 2, 4, 8 and 32 states.
+
+16 , ... 15
+
+Table 7: Accuracy (%) on PRC Test Set with PD Estimator
+on Different Number of States.
+
+States
+2
+4
+8
+16
+32
+
+Before Feedback
+24.01
+29.53
+28.71
+26.39
+26.14
+
+Cosine
+72.99
+77.00
+79.21
+78.01
+76.17
+
+MSE
+73.11
+77.51
+79.44
+78.33
+76.24
+
+The accuracy of the model increases with the number of
+states up to K = 8 (outperforming results in Table 4) and
+then decreases. Although the search problem grows in com-
+plexity with the number of states, that seems to be com-
+pensated by the more ﬁne-grained feedback. However, for
+K > 8 the model starts to underperform, which indicates
+that at that point the number of pieces of feedback available
+is no longer enough to offset the larger search space. These
+results contrast with the ones shown in Table 3, as the more
+complex PRC dataset beneﬁts more from granular feedback.
+
+Quantitative Feedback Impact (1): As 12.8% of the
+feedback is conﬂicting among users, we evaluated the im-
+pact of such conﬂicts in Table 8. We varied this ratio by
+removing any conﬂicting feedback up to the point of not
+having any conﬂicts cf. case 0. We only removed pieces of
+feedback which had no common basis, qi,j (cid:54)= q(cid:48)
+i,j∀j. In-
+terestingly, the best result was obtained when including 6%
+of the conﬂicting feedback. Although counterintuitive, such
+feedback might relax the constraint on some features, free-
+ing the model to focus on minimizing the classiﬁcation error.
+
+Table 8: Conf. Feedback on Accuracy on PRC (SF & MSE).
+Conf. Feedback (%)
+12.8
+9
+6
+3
+0
+
+Accuracy (%)
+80.11
+84.56
+86.67
+78.89
+69.87
+
+Number (#)
+864,393
+607,776
+405,184
+202,592
+0
+
+Quantitative Feedback Impact (2): Table 9 reports the
+impact of the quantity of feedback, considering similar ratio
+of conﬂicting feedback as for Tables 4 and 5. The accuracy
+plateaus with 80% of feedback. Thus, an average of 5.6 com-
+ments per project is required to obtain 77.54% of accuracy,
+which above the goal set up by the project stakeholders.
+
+Table 9: Feedback Size on Accuracy on PRC (SF & MSE).
+Feedback Ratio(%) Accuracy(%)
+Feedback Size(#)
+0
+0
+50
+3,376,538
+80
+5,402,460
+90
+6,077,768
+100
+6,753,076
+
+29.53
+61.65
+77.54
+78.11
+80.11
+
+Lessons Learnt
+We learned a few important characteristics of the proposed
+human-in-the-loop architecture:
+1. We observed the SF estimator does not respond well to
+dropout (Srivastava et al. 2014). Conversely, the PD es-
+timator seems to beneﬁt from this type of regularization
+(we used a dropout rate of 0.8 for all PD experiments);
+2. The architecture used to model the agent is independent
+of the estimator. One can change between them during
+training to take advantage of both methods;
+
+3. The inﬂuence of the dissimilarity distance (MSE/cosine)
+was marginal here but might vary with the application.
+
+Feedback (Classification)Contributing FactorsFeedback (Feature Importance)Feedback (Comments)Importance of Features(the darker the more important)Values associated to features for contract 1302Comparison of features values Between contract 1302 and centroid of class “>5%”Features TypeFree comment sectionFeature selection for human Feedback on importance / Impact for classificationClassification feedback (Recommendation of a betterFit based on human judgement)Human FeedbackClassification ResultsLegendConclusion and Future Work
+We address the problem of human-in-the-loop per-example
+feature selection as a stochastic computation graph. It is a
+general approach that can be applied to a variety of machine
+learning tasks with little modiﬁcations, as demonstrated by
+the very distinct datasets we tackled in this paper. Direct ap-
+plications could be in the context of transfer learning (Chen
+et al. 2018). With the image classiﬁcation dataset, we visu-
+ally proved the model can identify the most relevant features
+of each example, even though in that simple task, that did
+not reﬂect in a gain in accuracy. With the PRC dataset, we
+showed that our model successfully employed real human
+feedback to produce a signiﬁcant improvement in accuracy,
+while also providing business-driven insights to the users.
+Most importantly, this new architecture enables a symbi-
+otic interaction with stakeholders as the feature selection not
+only can enhance the model performance but also inform the
+most relevant properties of each example to the users. Thus,
+this type of interaction might prove useful in further devel-
+opments of explainable artiﬁcial intelligence.
+
+We identify two main lines of research for future work.
+The ﬁrst is to extend the architecture to the full active learn-
+ing scenario, where the model asks the users about speciﬁc
+examples. The second is to model the dependence between
+the features explicitly via a prior distribution over the proba-
+bilities ˆq or a more complex RL policy. We framed the model
+as an RL problem precisely to support extensions of this sort.
+
+References
+Avdiyenko, L.; Bertschinger, N.; and Jost, J. 2012. Adaptive Se-
+quential Feature Selection for Pattern Classiﬁcation. In IJCCI In-
+ternational Joint Conference of Computational Intelligence, 474 –
+482.
+Bahdanau, D.; Cho, K.; and Bengio, Y. 2015. Neural Machine
+Translation By Jointly Learning To Align and Translate. Interna-
+tional Conference on Learning Representations 2015.
+Bengio, E.; Bacon, P.-l.; Pineau, J.; Precup, D.; Networks, K. N.;
+and Computing, C. 2016. Conditional computation in neural net-
+works for faster models. In International Conference on Learning
+Representations, Workshop Track, ICLR 2016.
+Bengio, Y.; L´eonard, N.; and Courville, A. 2013. Estimating
+or Propagating Gradients Through Stochastic Neurons for Condi-
+tional Computation. arXiv:1308.3432 1–12.
+Cano, A.; Masegosa, A. R.; and Moral, S. 2011. A method for in-
+tegrating expert knowledge when learning bayesian networks from
+data. IEEE Transactions on Systems, Man, and Cybernetics, Part
+B (Cybernetics) 41(5):1382–1394.
+Caruana, R.
+28(1):41–75.
+Chandrashekar, G., and Sahin, F. 2014. A survey on feature selec-
+tion methods. Computers and Electrical Engineering 40(1):16–28.
+Chen, J.; L´ecu´e, F.; Pan, J. Z.; Horrocks, I.; and Chen, H. 2018.
+In Principles of
+Knowledge-based transfer learning explanation.
+Knowledge Representation and Reasoning: Proceedings of the Six-
+teenth International Conference, KR 2018, Tempe, Arizona, 30 Oc-
+tober - 2 November 2018., 349–358.
+Daee, P.; Peltola, T.; Soare, M.; and Kaski, S. 2017. Knowl-
+edge elicitation via sequential probabilistic inference for high-
+dimensional prediction. Machine Learning 106(9):1599–1620.
+
+1997. Multitask learning. Machine Learning
+
+Duchi, J.; Hazan, E.; and Singer, Y. 2011. Adaptive Subgradient
+Methods for Online Learning and Stochastic Optimization. Journal
+of Machine Learning Research 12:2121–2159.
+GoogleResearch. 2015. TensorFlow: Large-scale machine learning
+on heterogeneous systems.
+Gumbel, E. J. 1954. Statistical theory of extreme values and some
+practical applications: a series of lectures. US Govt. Print. Ofﬁce.
+Guyon, I., and Elisseeff, A. 2003. An Introduction to Variable and
+Feature Selection. Journal of Machine Learning Research 3:1157–
+1182.
+House, L.; Leman, S.; and Han, C. 2015. Bayesian visual analytics:
+Bava. Statistical Analysis and Data Mining: The ASA Data Science
+Journal 8(1):1–13.
+Jang, E.; Gu, S.; and Poole, B. 2017. Categorical Reparameteriza-
+tion with Gumbel-Softmax. In International Conference on Learn-
+ing Representations, 1–13.
+Kingma, D. P., and Welling, M. 2014. Auto-Encoding Variational
+In Proceedings of the 2nd International Conference on
+Bayes.
+Learning Representations (ICLR).
+Kingma, D. P.; Salimans, T.; Jozefowicz, R.; Chen, X.; Sutskever,
+I.; and Welling, M. 2016. Improving Variational Inference with
+Inverse Autoregressive Flow. In Conference on Neural Information
+Processing Systems, number Nips.
+Kohavi, R., and John, G. H. 1997. Wrappers for feature subset
+selection. Artiﬁcial Intelligence 1-2(97):273–324.
+LeCun, Y.; Bottou, L.; Bengio, Y.; and Haffner, P. 1998. Gradient-
+Based Learning Applied to Document Recognition. Proceedings
+of the IEEE 11(86):2278–2324.
+Maddison, C. J.; Mnih, A.; and Teh, Y. W. 2015. The Concrete Dis-
+tribution: A Continuous Relaxation of Discrete Random Variables.
+In Advances in Neural Information Processing Systems, 3528—-
+3536.
+Mnih, V.; Heess, N.; Graves, A.; and Kavukcuoglu, K. 2014. Re-
+current Models of Visual Attention. In Advances in neural infor-
+mation processing systems, 2204–2212.
+Raghavan, H.; Madani, O.; and Jones, R. 2006. Active learning
+with feedback on features and instances. The Journal of Machine
+Learning 7:1655–1686.
+Schulman, J.; Heess, N.; Weber, T.; and Abbeel, P. 2015. Gradient
+Estimation Using Stochastic Computation Graphs. In Advances in
+Neural Information Processing Systems, 3528—-3536.
+Srivastava, N.; Hinton, G.; Krizhevsky, A.; Sutskever, I.; and
+Salakhutdinov, R. 2014. Dropout: A Simple Way to Prevent Neural
+Networks from Overﬁtting. Journal of Machine Learning Research
+15:1929–1958.
+Sutton, R. S., and Barto, A. G. 2011. Reinforcement Learning : An
+Introduction. MIT press Cambridge.
+Tyagi, V., and Mishra, A. 2013. A Survey on Different Feature
+International
+Selection Methods for Microarray Data Analysis.
+Journal of Computer Applications 67(16):975–8887.
+Williams, R. J. 1992. Simple Statistical Gradient-Following Al-
+gorithms for Connectionist Reinforcement Learning. In Machine
+learning, number 8, 229–256.
+Xu, K.; Courville, A.; Zemel, R. S.; and Bengio, Y. 2015. Show ,
+Attend and Tell : Neural Image Caption Generation with Visual At-
+tention. In International Conference on Machine Learning, 2048–
+2057.
+
+
