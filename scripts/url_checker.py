@@ -98,21 +98,20 @@ def checker_by_type(file_type):
     save_urls_to_csv(filtered_urls_with_files, output_file)
 
 # Run for 'xml' and 'txt' file types
-checker_by_type('xml')
-checker_by_type('txt')
+#checker_by_type('xml')
+#checker_by_type('txt')
 
-
-# Define the more detailed regex
-swh_regexp = re.compile(
-    r"swh:1:(cnt|dir|rel|rev|snp):[0-9a-f]{40}"
-    r"(;(origin|visit|anchor|path|lines)=\S+)*$"
-)
 
 def find_swhids_in_text(text):
     """
     Find all Software Heritage Identifiers (SWHIDs) in the given text using a detailed regex.
     """
-    return swh_regexp.findall(text)
+    # Define the detailed regex
+    swh_regexp = re.compile(
+        r"swh:1:(cnt|dir|rel|rev|snp):[0-9a-f]{40}"
+    )
+    # Use finditer to extract full matches
+    return [match.group(0) for match in swh_regexp.finditer(text)]
 
 
 def extract_swhids_from_files(input_dir, type):
@@ -134,7 +133,6 @@ def extract_swhids_from_files(input_dir, type):
                     swhids = find_swhids_in_text(text)
                     for swhid in swhids:
                         swhid_results.append({"file": filename, "swhid": swhid})
-                    swhid_results.append({"file": filename, "swhid": None})
             except Exception as e:
                 print(f"Error reading TXT {file_path}: {e}")
 
