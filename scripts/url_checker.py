@@ -32,7 +32,7 @@ def extract_urls_from_files(input_dir, file_extension):
             file_path = os.path.join(input_dir, filename)
             try:
                 with open(file_path, "r", encoding="utf-8") as file:
-                    text = file.read()
+                    text = file.read().replace('\r', '').replace('\n', '')
                     found_urls = url_pattern.findall(text)
                     for url in found_urls:
                         urls_with_files.append({'url': url, 'filename': filename})  # Track URL and file
@@ -98,16 +98,21 @@ def checker_by_type(file_type):
     save_urls_to_csv(filtered_urls_with_files, output_file)
 
 # Run for 'xml' and 'txt' file types
-#checker_by_type('xml')
-#checker_by_type('txt')
+checker_by_type('xml')
+checker_by_type('txt')
 
+
+# Define the more detailed regex
+swh_regexp = re.compile(
+    r"swh:1:(cnt|dir|rel|rev|snp):[0-9a-f]{40}"
+    r"(;(origin|visit|anchor|path|lines)=\S+)*$"
+)
 
 def find_swhids_in_text(text):
     """
-    Find all Software Heritage Identifiers (SWHIDs) in the given text using regex.
+    Find all Software Heritage Identifiers (SWHIDs) in the given text using a detailed regex.
     """
-    swhid_pattern = r"swh:\d+:[a-z]+:[0-9a-f]{40}(?:\+[a-z]+)?"
-    return re.findall(swhid_pattern, text)
+    return swh_regexp.findall(text)
 
 
 def extract_swhids_from_files(input_dir, type):
@@ -125,7 +130,7 @@ def extract_swhids_from_files(input_dir, type):
             # Process text files
             try:
                 with open(file_path, "r", encoding="utf-8") as file:
-                    text = file.read()
+                    text = file.read().replace('\r', '').replace('\n', '')
                     swhids = find_swhids_in_text(text)
                     for swhid in swhids:
                         swhid_results.append({"file": filename, "swhid": swhid})
