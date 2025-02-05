@@ -2,6 +2,9 @@ import csv
 import os
 import re
 import pandas as pd
+import requests
+from tqdm import tqdm
+from SWH_client_requests import url_swhid_finder
 
 def load_forges(csv_file):
     """
@@ -18,16 +21,14 @@ def load_forges(csv_file):
         return []
 
 def extract_urls_from_files(input_dir, file_extension):
-    """
-    Extract unique URLs from text files in the specified directory with a given extension.
-    Also track the filename for each URL.
-    """
+
+    output_csv = f"./result/urls_found_{file_extension}.csv"
     urls_with_files = []
     url_pattern = re.compile(
-        r'https?://(?:www\.)?[-\w@:%._\+~#=]{1,256}\.[a-zA-Z]{2,6}\b(?:[-\w@:%_\+.~#?&/=]*)'
+        r'https?://(?!www\.tei-c\.org/ns/1\.0\b)(?:www\.)?[-\w@:%._\+~#=]{1,256}\.[a-zA-Z]{2,6}\b(?:[-\w@:%_\+.~#?&/=]*)'
     )
 
-    for filename in os.listdir(input_dir):
+    for filename in os.listdir(input_dir)[:100]:
         if filename.lower().endswith(f".{file_extension}"):
             file_path = os.path.join(input_dir, filename)
             try:
@@ -35,30 +36,53 @@ def extract_urls_from_files(input_dir, file_extension):
                     text = file.read().replace('\r', '').replace('\n', '')
                     found_urls = url_pattern.findall(text)
                     for url in found_urls:
-                        urls_with_files.append({'url': url, 'filename': filename})  # Track URL and file
+                        if url not in urls_with_files:
+                            urls_with_files.append({'url': url, 'filename': filename.split(".")[0]})
             except Exception as e:
                 print(f"Failed to process {file_path}: {e}")
 
+    # Save the results to a CSV file
+    try:
+        with open(output_csv, mode="w", encoding="utf-8", newline="") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=["url", "filename"])
+            writer.writeheader()
+            writer.writerows(urls_with_files)
+    except Exception as e:
+        print(f"Failed to write CSV file: {e}")
+
     return urls_with_files
+
 
 def filter_urls_by_forges(urls_with_files, forges):
     """
     Filter URLs that belong to one of the specified forges and exclude:
       - Unwanted domains (e.g., "doi.org", "kermitt2/grobid").
       - URLs already present in the registered_urls list or set.
+
+    Additionally, count the number of links for each forge.
     """
-    filtered = [
-        url_file
-        for url_file in urls_with_files
+    forge_counts = {forge: 0 for forge in forges}  # Initialize a count dictionary for forges
+    filtered = []
+
+    for url_file in tqdm(urls_with_files):
+        url = url_file['url']
         if (
-            any(forge in url_file['url'] for forge in forges) and  # Check forge match
-            "doi.org" not in url_file['url'] and                  # Exclude unwanted domains
-            "kermitt2/grobid" not in url_file['url'] and         # Exclude specific URL pattern
-            "XMLSchema-instance" not in url_file['url'] and        # Exclude specific URL pattern
-            "xlink" not in url_file['url']         # Exclude specific URL pattern
-        )
-    ]
-    return filtered
+            any(forge in url for forge in forges) and  # Check forge match
+            (("doi.org" not in url) or ("zenodo" in url)) and # Exclude unwanted domains
+            "kermitt2/grobid" not in url and          # Exclude specific URL pattern
+            "XMLSchema-instance" not in url and       # Exclude specific URL pattern
+            "xlink" not in url                        # Exclude specific URL pattern
+        ):
+            url_value = url_swhid_finder(url)
+            url_file['response'] = url_value
+
+            # Increment the count for the forge the URL belongs to
+            filtered.append(url_file)
+            for forge in forges:
+                if forge in url:
+                    forge_counts[forge] += 1
+    return filtered, forge_counts
+
 
 
 def save_urls_to_csv(urls_with_files, output_file):
@@ -80,7 +104,7 @@ def checker_by_type(file_type):
     # Paths and settings
     csv_file = "./data/SH/SH_forge.csv"
     input_dir = f"data/{file_type}"
-    output_file = f'./result/url_forge_founded_{file_type}.csv'
+    output_file = f'./result/urls_forge_found_{file_type}.csv'
 
     # Load forge keywords
     forges = load_forges(csv_file)
@@ -92,14 +116,25 @@ def checker_by_type(file_type):
     urls_with_files = extract_urls_from_files(input_dir, file_type)
 
     # Filter URLs based on forges
-    filtered_urls_with_files = filter_urls_by_forges(urls_with_files, forges)
+    filtered_urls_with_files, forge_count = filter_urls_by_forges(urls_with_files, forges)
+
+    # Save data to CSV
+    with open(f"./result/forge_count_{file_type}.csv", "w", newline='', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        # Write the header
+        writer.writerow(["Forge", "Link Count"])
+        # Write the data rows
+        for forge, count in forge_count.items():
+            writer.writerow([forge, count])
+
+    print("Data written to forge_data.csv successfully.")
 
     # Save results to CSV
     save_urls_to_csv(filtered_urls_with_files, output_file)
 
 # Run for 'xml' and 'txt' file types
-#checker_by_type('xml')
-#checker_by_type('txt')
+checker_by_type('xml')
+checker_by_type('txt')
 
 
 def find_swhids_in_text(text):
@@ -108,8 +143,8 @@ def find_swhids_in_text(text):
     """
     # Define the detailed regex
     swh_regexp = re.compile(
-        r"swh:1:(cnt|dir|rel|rev|snp):[0-9a-f]{40}"
-    )
+    r"swh:1:(cnt|dir|rel|rev|snp):[0-9a-f]{40}"
+)
     # Use finditer to extract full matches
     return [match.group(0) for match in swh_regexp.finditer(text)]
 
@@ -123,7 +158,7 @@ def extract_swhids_from_files(input_dir, type):
     swhid_results = []
 
     # Iterate through all files in the directory
-    for filename in os.listdir(input_dir):
+    for filename in os.listdir(input_dir)[:100]:
         file_path = os.path.join(input_dir, filename)
         if filename.lower().endswith(f".{type}"):
             # Process text files
@@ -132,7 +167,7 @@ def extract_swhids_from_files(input_dir, type):
                     text = file.read().replace('\r', '').replace('\n', '')
                     swhids = find_swhids_in_text(text)
                     for swhid in swhids:
-                        swhid_results.append({"file": filename, "swhid": swhid})
+                        swhid_results.append({"file": filename.split(".")[0], "swhid": swhid})
             except Exception as e:
                 print(f"Error reading TXT {file_path}: {e}")
 
