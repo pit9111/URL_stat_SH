@@ -28,7 +28,7 @@ def extract_urls_from_files(input_dir, file_extension):
         r'https?://(?!www\.tei-c\.org/ns/1\.0\b)(?:www\.)?[-\w@:%._\+~#=]{1,256}\.[a-zA-Z]{2,6}\b(?:[-\w@:%_\+.~#?&/=]*)'
     )
 
-    for filename in os.listdir(input_dir)[:100]:
+    for filename in os.listdir(input_dir):
         if filename.lower().endswith(f".{file_extension}"):
             file_path = os.path.join(input_dir, filename)
             try:
@@ -158,7 +158,7 @@ def extract_swhids_from_files(input_dir, type):
     swhid_results = []
 
     # Iterate through all files in the directory
-    for filename in os.listdir(input_dir)[:100]:
+    for filename in os.listdir(input_dir):
         file_path = os.path.join(input_dir, filename)
         if filename.lower().endswith(f".{type}"):
             # Process text files

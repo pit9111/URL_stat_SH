@@ -1,5 +1,5 @@
 import requests
-import json
+import sys
 from requests.exceptions import RequestException, Timeout, ConnectionError
 
 # Load token from environment variable or file
@@ -13,12 +13,14 @@ def url_swhid_finder(url):
     url = "https://archive.softwareheritage.org/api/1/origin/" + url + "/get/"
     # Make the authenticated request
     try:
-        resp = requests.get(url, headers=headers, timeout=20)
+        resp = requests.get(url, headers=headers, timeout=5)
         found = resp.json()
-        print(found)
         try:
             if found['exception'] == "NotFoundExc":
                 return "Resource not found"
+            if found['exception'] == "Throttled":
+                print(f"AI timed out : {found['reason']}")
+                sys.exit(1)
         except KeyError:
             try:
                 if found['error'] == 'Resource not found':
