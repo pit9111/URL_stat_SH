@@ -28,7 +28,8 @@ def extract_urls_from_files(input_dir, file_extension):
         r'https?://(?!www\.tei-c\.org/ns/1\.0\b)(?:www\.)?[-\w@:%._\+~#=]{1,256}\.[a-zA-Z]{2,6}\b(?:[-\w@:%_\+.~#?&/=]*)'
     )
 
-    for filename in os.listdir(input_dir):
+    for filename in (pbar := tqdm(os.listdir(input_dir))):
+        pbar.set_description(f"Processing {file_extension} files: {filename}")
         if filename.lower().endswith(f".{file_extension}"):
             file_path = os.path.join(input_dir, filename)
             try:
@@ -64,7 +65,7 @@ def filter_urls_by_forges(urls_with_files, forges):
     forge_counts = {forge: 0 for forge in forges}  # Initialize a count dictionary for forges
     filtered = []
 
-    for url_file in tqdm(urls_with_files):
+    for url_file in urls_with_files:
         url = url_file['url']
         if (
             any(forge in url for forge in forges) and  # Check forge match
@@ -127,7 +128,7 @@ def checker_by_type(file_type):
         for forge, count in forge_count.items():
             writer.writerow([forge, count])
 
-    print("Data written to forge_data.csv successfully.")
+    print("Data written to forge_data.csv successfully. \n")
 
     # Save results to CSV
     save_urls_to_csv(filtered_urls_with_files, output_file)
@@ -158,7 +159,8 @@ def extract_swhids_from_files(input_dir, type):
     swhid_results = []
 
     # Iterate through all files in the directory
-    for filename in os.listdir(input_dir):
+    for filename in (pbar := tqdm(os.listdir(input_dir))):
+        pbar.set_description(f"SWHID finder in {type} files: {filename}")
         file_path = os.path.join(input_dir, filename)
         if filename.lower().endswith(f".{type}"):
             # Process text files
@@ -177,9 +179,9 @@ def extract_swhids_from_files(input_dir, type):
             writer = csv.DictWriter(csv_file, fieldnames=["file", "swhid"])
             writer.writeheader()
             writer.writerows(swhid_results)
-        print(f"SWHID extraction complete. Results saved to {output_csv}")
+        print(f"SWHID extraction complete. Results saved to {output_csv}\n")
     except Exception as e:
-        print(f"Error writing CSV {output_csv}: {e}")
+        print(f"Error writing CSV {output_csv}: {e}\n")
 
 
 # Example usage
